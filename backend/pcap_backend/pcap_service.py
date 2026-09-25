@@ -161,7 +161,7 @@ class PcapService:
         self._sorts: LruCache[tuple[str, str, bool], FrameIndex] = LruCache(
             max_cached_frames, lambda v: v.cost
         )
-        self._sort_columns: LruCache[str, list[str]] = LruCache(3)
+        self._sort_columns: LruCache[str, list[str]] = LruCache(2)
         self._details: LruCache[int, dict[str, Any]] = LruCache(detail_cache_size)
         self._field_index: LruCache[tuple[str, ...], dict[str, Any]] = LruCache(2)
         self._pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="svc")
@@ -580,7 +580,7 @@ class PcapService:
             loc = self._locate(f, fld)
             assert loc is not None
             rows, idx = loc
-            values = [r[idx] for r in rows.get_many(range(1, len(rows) + 1))]
+            values = rows.column(idx)
             self._sort_columns.put(fld, values)
         ctx.token.raise_if_cancelled()
         numeric = next((c.numeric for c in BASE_COLUMNS if c.field == fld), None)

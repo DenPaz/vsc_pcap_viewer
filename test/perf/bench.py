@@ -39,11 +39,20 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("capture", type=Path)
     parser.add_argument("--filter", default="udp.dstport == 53")
+    parser.add_argument(
+        "--no-tcp-analysis",
+        action="store_true",
+        help="pass -o tcp.analyze_sequence_numbers:FALSE (the synthetic capture replays "
+        "the same flows, which makes tshark's TCP analysis super-linear)",
+    )
     args = parser.parse_args()
 
     svc = PcapService()
     ctx = RequestContext()
-    info = timed("open (index pass)", lambda: svc.open({"path": str(args.capture)}, ctx))
+    prefs = {"tcp.analyze_sequence_numbers": False} if args.no_tcp_analysis else {}
+    info = timed(
+        "open (index pass)", lambda: svc.open({"path": str(args.capture), "prefs": prefs}, ctx)
+    )
     frames = info["frames"]
     print(f"  frames={frames:,} size={info['size'] / 1e6:.0f} MB warnings={info['warnings']}")
     timed("list_packets offset=0 limit=200", lambda: svc.list_packets({"limit": 200}, ctx))

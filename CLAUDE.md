@@ -97,6 +97,16 @@ user-facing description.
   initial `filterId`; every `list_packets` result carries the current one so
   the webview drops stale pages.
 
+## Performance notes (test/perf/bench.py, 1M synthetic packets, 146 MB)
+
+With `-o tcp.analyze_sequence_numbers:FALSE`: open 36 s, filter 26 s, page
+fetch < 1 ms, sort 0.6 s, detail of last frame 26 s, backend RSS 125 MB,
+tshark 225 MB. With TCP analysis on, the synthetic file (512 replayed flows)
+makes tshark super-linear (filter 165 s for 1M vs 4.5 s for 100k); real
+captures are not expected to behave like that. Sorting streams one column from
+the row store and sorts indices with a stable key list (no per-row tuples):
+this took the backend from 710 MB to 125 MB peak.
+
 ## Status
 
 Implemented: steps 1–3 of the brief (foundation, packet list with paging /

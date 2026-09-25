@@ -41,7 +41,7 @@ def test_row_store_pads_missing_frames(tmp_path: Path) -> None:
 def test_row_store_short_rows_are_padded(tmp_path: Path) -> None:
     store = _store(tmp_path, ["1"])
     assert store.get(1) == ["1", "", ""]
-    assert store.column("c") == [""]
+    assert store.column(2) == [""]
     store.close()
 
 
@@ -71,8 +71,10 @@ def test_sort_frames_numeric_and_text() -> None:
     values = ["10", "9", "", "100"]  # values for frames 1..4
     asc = sort_frames([1, 2, 3, 4], values, descending=False)
     assert asc.slice(0, 4) == [2, 1, 4, 3]  # empty sorts last
-    desc = sort_frames([1, 2, 4], values, descending=True)
-    assert desc.slice(0, 3) == [4, 1, 2]
+    desc = sort_frames([1, 2, 3, 4], values, descending=True)
+    assert desc.slice(0, 4) == [4, 1, 2, 3]  # empty still last
+    ties = sort_frames([1, 2, 3], ["5", "5", "1"], descending=True)
+    assert ties.slice(0, 3) == [1, 2, 3]  # ties keep ascending frame order
     text = sort_frames([1, 2, 3], ["b", "A", "a"], descending=False)
     assert text.slice(0, 3) == [2, 3, 1]  # case-insensitive, ties by frame number
 

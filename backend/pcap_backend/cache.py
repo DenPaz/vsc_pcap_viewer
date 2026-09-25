@@ -81,9 +81,8 @@ class RowStore:
                 rows.append(cells[:width])
         return rows
 
-    def column(self, field: str) -> list[str]:
-        """Read one column for every frame (used for sorting)."""
-        idx = self.fields.index(field)
+    def column(self, idx: int) -> list[str]:
+        """Read column ``idx`` for every frame, streaming the file (used for sorting)."""
         out: list[str] = []
         with self.path.open("rb") as fh:
             for raw in fh:
@@ -166,23 +165,33 @@ def sort_frames(
     descending: bool,
     numeric: bool | None = None,
 ) -> FrameIndex:
-    """Sort ``frames`` by ``column_values[frame - 1]``, tie-breaking on frame number.
+    """Sort ``frames`` by ``column_values[frame - 1]``.
 
-    When ``numeric`` is ``None`` the column is treated as numeric if every
-    non-empty value parses as a float. Empty values sort last in ascending order.
+    ``frames`` must be in ascending order (as filter results are): the sort is
+    stable, so ties keep ascending frame order in both directions. Empty values
+    always go last. When ``numeric`` is ``None`` the column is treated as
+    numeric if every non-empty value parses as a float. Avoids per-row tuples
+    to keep memory flat for millions of rows.
     """
-    values = [column_values[f - 1] if 0 < f <= len(column_values) else "" for f in frames]
+    n = len(column_values)
+    values = [column_values[f - 1] if 0 < f <= n else "" for f in frames]
+    filled = [i for i, v in enumerate(values) if v]
+    empty = [i for i, v in enumerate(values) if not v]
     if numeric is None:
-        numeric = all(_is_number(v) for v in values if v)
-    key: Callable[[int], tuple[object, ...]]
-    if numeric:
-        nums = [float(v) if v else float("inf") for v in values]
-        key = lambda i: (nums[i], frames[i])  # noqa: E731
-    else:
-        lowered = [v.casefold() for v in values]
-        key = lambda i: (lowered[i] == "", lowered[i], frames[i])  # noqa: E731
-    order = sorted(range(len(frames)), key=key, reverse=descending)
-    return FrameIndex.of(frames[i] for i in order)
+        numeric = all(_is_number(values[i]) for i in filled)
+    keys: list[float] | list[str] = (
+        [_to_float(v) for v in values] if numeric else [v.casefold() for v in values]
+    )
+    filled.sort(key=keys.__getitem__, reverse=descending)
+    del keys, values
+    return FrameIndex.of(frames[i] for i in (*filled, *empty))
+
+
+def _to_float(v: str) -> float:
+    try:
+        return float(v)
+    except ValueError:
+        return float("inf")
 
 
 def _is_number(v: str) -> bool:

@@ -93,9 +93,35 @@ Webview (HTML/JS)  --postMessage-->  Extension host (TypeScript)
 - Selecting a packet runs `tshark -c N -Y frame.number==N -T pdml` (and `-x`
   for the bytes), so tshark stops reading after that packet.
 
-Performance (1M synthetic packets, 146 MB, 4-core Linux VM, tshark 4.2): see
-`test/perf/bench.py` and the numbers recorded in the CLAUDE.md / PR notes.
-Indexing time is dominated by tshark's own dissection speed.
+### Performance
+
+Measured with `test/perf/bench.py` on 1,000,000 synthetic packets (146 MB,
+4-core Linux VM, tshark 4.2, `tcp.analyze_sequence_numbers` off):
+
+| Operation | Time |
+|---|---|
+| Open (index pass) | 36 s (tshark-bound; progress shown, cancellable) |
+| Fetch a 200-row page (any position) | < 1 ms |
+| 1000 random scroll pages | 0.09 s total |
+| Apply a filter | 26 s (one tshark pass; re-applying a cached filter is instant) |
+| Sort 1M rows by Length | 0.6 s |
+| Detail of frame 10 / frame 1,000,000 | 0.2 s / 26 s |
+| Peak memory: backend / tshark | 125 MB / 225 MB |
+
+Almost all of the time is tshark's own dissection. Wireshark preferences that
+make dissection cheaper can be set through `pcapViewer.prefs`, for example
+`{ "tcp.analyze_sequence_numbers": false }` (the synthetic benchmark capture
+replays the same flows, which makes this analysis 6x slower: 165 s instead of 26 s
+for the filter). Opening a packet near the end of a huge capture re-reads the
+file up to that packet so reassembly stays correct (see the roadmap below).
+
+## Roadmap
+
+Planned (see the project brief): filter autocomplete UI and saved filters,
+Follow TCP/UDP/TLS/HTTP stream, statistics (conversations, endpoints, protocol
+hierarchy, IO graph, expert info, capture properties), Lua dissector
+management commands and a Decode As UI, export (filtered pcapng, CSV/JSON,
+bytes), coloring rules, and a faster "quick view" of late packets in huge captures.
 
 ## Development
 
