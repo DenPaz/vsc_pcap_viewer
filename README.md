@@ -129,10 +129,13 @@ bytes), coloring rules, and a faster "quick view" of late packets in huge captur
 uv sync            # Python dev tools (pytest, ruff, mypy, scapy) in .venv
 npm install        # TypeScript toolchain
 npm run compile    # build the extension
-uv run pytest      # backend tests (tshark-dependent tests skip without tshark)
+uv run pytest      # backend tests + Gherkin acceptance scenarios (skip without tshark)
 npm run test:unit  # extension unit tests + webview tests (incl. headless Chromium)
 npm run test:extension   # VS Code smoke test (xvfb-run -a on headless Linux)
 ```
+
+The acceptance criteria are written as Gherkin scenarios in
+`test/backend/acceptance/features/` and run by pytest-bdd as part of `uv run pytest`.
 
 Press `F5` in VS Code ("Run Extension") to launch a development host with the
 `test/fixtures` folder open. See `CLAUDE.md` for architecture notes and design decisions.

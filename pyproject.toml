@@ -18,6 +18,7 @@ dev = [
     "ruff>=0.6",
     "mypy>=1.11",
     "scapy>=2.5",
+    "pytest-bdd>=8.1.0",
 ]
 
 [build-system]
@@ -31,7 +32,11 @@ packages = ["backend/pcap_backend"]
 testpaths = ["test/backend"]
 pythonpath = ["backend"]
 addopts = ["-ra", "--strict-markers"]
-markers = ["tshark: requires tshark/capinfos to be installed"]
+markers = [
+    "tshark: requires tshark/capinfos to be installed",
+    "lua: runs a Lua dissector (skipped as root: tshark disables Lua for root)",
+]
+bdd_features_base_dir = "test/backend/acceptance/features"
 
 [tool.ruff]
 line-length = 100

@@ -12,6 +12,7 @@ user-facing description.
 | Build extension | `npm run compile` (tsc → `out/`) |
 | Lint everything | `npm run lint && uv run ruff check && uv run ruff format --check && uv run mypy` |
 | Backend tests | `uv run pytest` (tshark tests skip if tshark is missing) |
+| Acceptance scenarios only | `uv run pytest test/backend/acceptance` (pytest-bdd, Gherkin in `features/`) |
 | TS unit + webview tests | `npm run test:unit` (mocha; includes the Chromium e2e test of the webview) |
 | VS Code smoke test | `npm run test:extension` (downloads VS Code; use `xvfb-run -a` on headless Linux) |
 | Regenerate fixtures | `uv run python test/fixtures/generate.py` |
@@ -33,7 +34,10 @@ user-facing description.
   (row store, frame index, LRU), `pdml.py` (PDML + hexdump parsing),
   `protocol.py` (error codes, request context), `cancellation.py`.
 - `backend/dissectors/example.lua` sample dissector (UDP/9999).
-- `test/backend` pytest, `test/extension/unit` mocha (Node), `test/extension/suite`
+- `test/backend` pytest; `test/backend/acceptance` pytest-bdd scenarios
+  (`features/*.feature` = brief's acceptance criteria against the backend,
+  steps in its `conftest.py`, feature tag `@tshark` → skip without tshark,
+  `@lua` → skip as root), `test/extension/unit` mocha (Node), `test/extension/suite`
   VS Code smoke test, `test/webview` mocha (lib + Chromium e2e), `test/fixtures`
   scapy-generated captures, `test/perf/bench.py`.
 
@@ -49,6 +53,16 @@ user-facing description.
 - Kill child processes on close: `BackendClient.stop()` closes stdin → backend
   cancels requests and kills tshark (`PROCESSES.kill_all`) → SIGTERM/SIGKILL
   (tree kill with `taskkill /T` on Windows) as fallbacks.
+
+## Writing acceptance scenarios
+
+Add scenarios to `test/backend/acceptance/features/*.feature` using existing
+steps where possible (`uv run pytest --collect-only test/backend/acceptance`
+lists them; step definitions are in `acceptance/conftest.py`). New steps go in
+that conftest. Keep step patterns specific: `parsers.parse` patterns such as
+`the filter is {result}` also match longer sentences, so prefer `parsers.re`
+with alternatives. Lists are written `a, b and c` and parsed by `items()`.
+UI behaviour stays in the Chromium test (`test/webview/e2e.test.js`).
 
 ## Design decisions (defaults chosen where the brief was open)
 
