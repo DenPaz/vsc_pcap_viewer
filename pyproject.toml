@@ -1,0 +1,60 @@
+[project]
+name = "pcap-viewer-backend"
+version = "0.1.0"
+description = "tshark-orchestrating JSON-RPC backend for the PCAP Viewer VS Code extension"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+# The backend is stdlib-only at runtime so the extension works with any
+# Python 3.10+ interpreter, without a virtualenv or `pip install`.
+dependencies = []
+
+[project.scripts]
+pcap-viewer-backend = "pcap_backend.server:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "scapy>=2.5",
+]
+
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["backend/pcap_backend"]
+
+[tool.pytest.ini_options]
+testpaths = ["test/backend"]
+pythonpath = ["backend"]
+addopts = ["-ra", "--strict-markers"]
+markers = ["tshark: requires tshark/capinfos to be installed"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = ["backend", "test/backend"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "S", "PTH", "PL"]
+ignore = [
+    "S603",    # subprocess without shell: we always pass argv lists, never shell=True
+    "PLR0913", # too many arguments
+    "PLR2004", # magic values
+    "PLR0911", # too many returns
+    "PLR0912", # too many branches
+    "PLR0917", # too many positional arguments
+    "S101",    # asserts are used for type narrowing
+]
+
+[tool.ruff.lint.per-file-ignores]
+"test/**" = ["S101", "PLR2004", "S108"]
+"test/fixtures/generate.py" = ["S311"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+files = ["backend/pcap_backend"]

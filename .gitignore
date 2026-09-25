@@ -1,0 +1,19 @@
+# Node / extension build
+node_modules/
+out/
+*.vsix
+.vscode-test/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# Large perf captures are generated locally, never committed
+test/fixtures/large*.pcap*
