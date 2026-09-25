@@ -1,0 +1,14 @@
+{
+  // Type-checks the webview's plain JavaScript (JSDoc annotated); emits nothing.
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "strict": false,
+    "skipLibCheck": true,
+    "types": []
+  },
+  "include": ["src/webview/**/*.js", "src/webview/**/*.d.ts"]
+}

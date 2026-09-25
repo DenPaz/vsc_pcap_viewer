@@ -126,7 +126,6 @@ def test_validate_filter_real_tshark() -> None:
     err = t.validate_filter("ip.src ==")
     assert err
     assert "tshark:" not in err
-    t.cleanup()
 
 
 @pytest.mark.tshark

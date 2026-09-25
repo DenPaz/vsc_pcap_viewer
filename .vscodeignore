@@ -1,0 +1,21 @@
+# Only ship the compiled extension, the webview assets and the backend package.
+.vscode/**
+.vscode-test/**
+.github/**
+.venv/**
+**/__pycache__/**
+**/*.map
+node_modules/**
+out/test/**
+src/**/*.ts
+!src/webview/**
+test/**
+**/.ruff_cache/**
+**/.mypy_cache/**
+**/.pytest_cache/**
+eslint.config.mjs
+tsconfig*.json
+pyproject.toml
+uv.lock
+.python-version
+CLAUDE.md

@@ -39,6 +39,7 @@ from .protocol import (
     str_list,
 )
 from .tshark import (
+    EMPTY_CAPTURE,
     DissectionOptions,
     StreamResult,
     ToolError,
@@ -146,6 +147,9 @@ class _View:
 class PcapService:
     def __init__(self, max_cached_frames: int = 5_000_000, detail_cache_size: int = 64) -> None:
         self._lock = threading.RLock()
+        # Serialises expensive derived-data builds (sort orders, extra columns) so
+        # concurrent page requests don't each redo the same tshark pass or sort.
+        self._build_lock = threading.RLock()
         self._tshark: Tshark | None = None
         self._file: _Open | None = None
         self._view: _View | None = None
@@ -179,12 +183,11 @@ class PcapService:
     def close(self, _params: dict[str, Any] | None = None, _ctx: Any = None) -> dict[str, Any]:
         with self._lock:
             self._close_file()
-            if self._tshark is not None:
-                self._tshark.cleanup()
         return {"ok": True}
 
     def shutdown(self) -> None:
         self.close()
+        EMPTY_CAPTURE.remove()
         self._pool.shutdown(wait=False, cancel_futures=True)
 
     def _close_file(self) -> None:
@@ -230,7 +233,9 @@ class PcapService:
             param(params, "prefs", dict, {}),
         )
         base_fields = {c.field for c in BASE_COLUMNS}
-        columns = [c for c in self._check_fields(str_list(params, "columns")) if c not in base_fields]
+        columns = [
+            c for c in self._check_fields(str_list(params, "columns")) if c not in base_fields
+        ]
         tshark = self._require_tshark().with_options(options)
 
         with self._lock:
@@ -259,6 +264,7 @@ class PcapService:
             self._view = _View(self._next_filter_id, "", everything, None, everything)
         result = info.to_json()
         result["columns"] = self._column_descriptors(columns)
+        result["filterId"] = self._view.filter_id
         return result
 
     def _column_descriptors(self, custom: Sequence[str]) -> list[dict[str, Any]]:
@@ -462,15 +468,26 @@ class PcapService:
     # ------------------------------------------------------------------ list
 
     def list_packets(self, params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
+        """Return rows ``[offset, offset + limit)`` of the current (filtered, sorted) view.
+
+        ``columns`` is the full list of custom column fields wanted after the
+        seven base columns (default: the ones given to ``open``). Fields not
+        indexed yet are extracted with one extra tshark pass, then cached.
+        """
         offset = param(params, "offset", int, 0)
         limit = param(params, "limit", int, 200)
         if offset < 0 or limit < 0:
             raise InvalidParamsError("offset and limit must be non-negative")
         limit = min(limit, MAX_PAGE)
-        extra_fields = self._check_fields(str_list(params, "columns"))
         sort = _parse_sort(params.get("sort"))
-
         f, view = self._require_view()
+        base_fields = {c.field for c in BASE_COLUMNS}
+        if "columns" in params:
+            extra_fields = [
+                c for c in self._check_fields(str_list(params, "columns")) if c not in base_fields
+            ]
+        else:
+            extra_fields = list(f.columns)
         self._ensure_columns(f, extra_fields, ctx)
         if sort != view.sort:
             ordered = self._sorted(f, view, sort, ctx) if sort else view.matched
@@ -483,20 +500,19 @@ class PcapService:
             view_ordered = view.ordered
 
         frames = view_ordered.slice(offset, limit)
+        n_base = len(BASE_COLUMNS)
         base_rows = f.base.rows.get_many(frames)
         extra_cols = [self._column_cells(f, fld, frames) for fld in extra_fields]
-        rows = []
-        for i, n in enumerate(frames):
-            cells = base_rows[i] + [col[i] for col in extra_cols]
-            rows.append({"number": n, "cells": cells})
+        rows = [
+            {"number": n, "cells": base_rows[i][:n_base] + [col[i] for col in extra_cols]}
+            for i, n in enumerate(frames)
+        ]
         return {
             "offset": offset,
             "rows": rows,
             "total": len(view_ordered),
             "filterId": view.filter_id,
-            "columns": [c.field for c in BASE_COLUMNS]
-            + [fld for fld in f.base.fields[len(BASE_COLUMNS) :]]
-            + extra_fields,
+            "columns": [c.field for c in BASE_COLUMNS] + extra_fields,
         }
 
     def find_frame(self, params: dict[str, Any], _ctx: RequestContext) -> dict[str, Any]:
@@ -512,6 +528,12 @@ class PcapService:
         return None
 
     def _ensure_columns(self, f: _Open, fields: Sequence[str], ctx: RequestContext) -> None:
+        if all(self._locate(f, fld) is not None for fld in fields):
+            return
+        with self._build_lock:
+            self._build_columns(f, fields, ctx)
+
+    def _build_columns(self, f: _Open, fields: Sequence[str], ctx: RequestContext) -> None:
         missing = [fld for fld in fields if self._locate(f, fld) is None]
         if not missing:
             return
@@ -536,6 +558,16 @@ class PcapService:
     ) -> FrameIndex:
         if sort is None:
             return view.matched
+        key = (view.expr, *sort)
+        cached = self._sorts.get(key)
+        if cached is not None:
+            return cached
+        with self._build_lock:
+            return self._build_sort(f, view, sort, ctx)
+
+    def _build_sort(
+        self, f: _Open, view: _View, sort: tuple[str, bool], ctx: RequestContext
+    ) -> FrameIndex:
         fld, desc = sort
         key = (view.expr, fld, desc)
         cached = self._sorts.get(key)

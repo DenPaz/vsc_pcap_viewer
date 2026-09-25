@@ -25,6 +25,7 @@ def test_open_reports_metadata(service: PcapService, fixtures: Path, ctx: Reques
     assert info["linkType"] == "ether"
     assert info["startTime"] == pytest.approx(1_700_000_000.0)
     assert info["warnings"] == []
+    assert service.list_packets({"offset": 0, "limit": 1}, ctx)["filterId"] == info["filterId"]
     assert [c["title"] for c in info["columns"]] == [
         "No.", "Time", "Source", "Destination", "Protocol", "Length", "Info",
     ]  # fmt: skip
@@ -103,9 +104,19 @@ def test_custom_columns(service: PcapService, fixtures: Path, ctx: RequestContex
     )
     assert [c["field"] for c in info["columns"]][-1] == "tcp.stream"
     assert any("no.such.field" in w for w in info["warnings"])
-    page = service.list_packets({"offset": 3, "limit": 1, "columns": ["http.host"]}, ctx)
-    assert page["columns"][-2:] == ["tcp.stream", "http.host"]
-    assert page["rows"][0]["cells"][-2:] == ["0", "example.com"]
+    # Default: the columns given to open().
+    page = service.list_packets({"offset": 3, "limit": 1}, ctx)
+    assert page["columns"][-1] == "tcp.stream"
+    assert page["rows"][0]["cells"][-1] == "0"
+    # Explicit list: exactly those custom columns, in order, extracted on demand.
+    page = service.list_packets(
+        {"offset": 3, "limit": 1, "columns": ["http.host", "tcp.stream", "frame.number"]}, ctx
+    )
+    assert page["columns"][-2:] == ["http.host", "tcp.stream"]
+    assert len(page["rows"][0]["cells"]) == 9
+    assert page["rows"][0]["cells"][-2:] == ["example.com", "0"]
+    page = service.list_packets({"offset": 3, "limit": 1, "columns": []}, ctx)
+    assert len(page["rows"][0]["cells"]) == 7
     with pytest.raises(InvalidParamsError):
         service.list_packets({"offset": 0, "limit": 1, "columns": ["bogus.field.x"]}, ctx)
     with pytest.raises(InvalidParamsError):
@@ -231,7 +242,7 @@ def test_superseded_filter(opened: PcapService, ctx: RequestContext) -> None:
     def first() -> None:
         try:
             opened.set_filter({"expr": "tcp"}, RequestContext())
-        except BaseException as exc:  # noqa: BLE001
+        except BaseException as exc:
             errors.append(exc)
 
     t = threading.Thread(target=first)
@@ -286,5 +297,11 @@ def test_parse_field_list() -> None:
     parsed = parse_field_list(text)
     assert parsed["protocols"] == [{"name": "ip", "desc": "Internet Protocol Version 4"}]
     assert parsed["fields"] == [
-        {"name": "ip.src", "desc": "Source Address", "type": "FT_IPv4", "proto": "ip", "blurb": "Source IP"}
+        {
+            "name": "ip.src",
+            "desc": "Source Address",
+            "type": "FT_IPv4",
+            "proto": "ip",
+            "blurb": "Source IP",
+        }
     ]

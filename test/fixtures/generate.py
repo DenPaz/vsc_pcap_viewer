@@ -20,7 +20,7 @@ from scapy.layers.dns import DNS, DNSQR, DNSRR
 from scapy.layers.inet import ICMP, IP, TCP, UDP
 from scapy.layers.l2 import ARP, Ether
 from scapy.packet import Packet, Raw
-from scapy.utils import PcapWriter, wrpcap, wrpcapng
+from scapy.utils import wrpcap, wrpcapng
 
 HERE = Path(__file__).resolve().parent
 BASE_TS = 1_700_000_000.0  # 2023-11-14T22:13:20Z
@@ -205,28 +205,37 @@ def mixed_packets() -> list[Packet]:
 
 
 def large_capture(count: int, dest: Path) -> None:
-    """Write a big synthetic capture for manual performance testing (not committed)."""
+    """Write a big synthetic capture for manual performance testing (not committed).
+
+    Builds a few hundred template packets with scapy, then writes pcap records
+    directly so that millions of packets take seconds rather than minutes.
+    """
     rng = random.Random(42)
-    # Stream to disk to keep memory flat.
-    with PcapWriter(str(dest), sync=False) as writer:
+    templates: list[bytes] = []
+    for i in range(512):
+        src = f"10.{rng.randrange(256)}.{rng.randrange(256)}.{rng.randrange(1, 255)}"
+        if i % 3 == 0:
+            pkt = (
+                Ether()
+                / IP(src=src, dst="10.0.0.1")
+                / UDP(sport=rng.randrange(1024, 65535), dport=53)
+                / DNS(id=i, qd=DNSQR(qname=f"host{i}.example.com"))
+            )
+        else:
+            pkt = (
+                Ether()
+                / IP(src=src, dst="10.0.0.1")
+                / TCP(sport=rng.randrange(1024, 65535), dport=80, flags="PA", seq=i)
+                / Raw(b"x" * rng.randrange(0, 200))
+            )
+        templates.append(bytes(pkt))
+    with dest.open("wb") as fh:
+        fh.write(struct.pack("<IHHiIII", 0xA1B2C3D4, 2, 4, 0, 0, 65535, 1))
         for i in range(count):
-            src = f"10.{rng.randrange(256)}.{rng.randrange(256)}.{rng.randrange(1, 255)}"
-            if i % 3 == 0:
-                pkt = (
-                    Ether()
-                    / IP(src=src, dst="10.0.0.1")
-                    / UDP(sport=rng.randrange(1024, 65535), dport=53)
-                    / DNS(id=i & 0xFFFF, qd=DNSQR(qname=f"host{i}.example.com"))
-                )
-            else:
-                pkt = (
-                    Ether()
-                    / IP(src=src, dst="10.0.0.1")
-                    / TCP(sport=rng.randrange(1024, 65535), dport=80, flags="PA", seq=i)
-                    / Raw(b"x" * rng.randrange(0, 200))
-                )
-            pkt.time = BASE_TS + i * 0.0001
-            writer.write(pkt)
+            data = templates[i % len(templates)]
+            sec, usec = divmod(int(BASE_TS) * 1_000_000 + i * 100, 1_000_000)
+            fh.write(struct.pack("<IIII", sec, usec, len(data), len(data)))
+            fh.write(data)
 
 
 def main() -> None:

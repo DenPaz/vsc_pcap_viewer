@@ -7,6 +7,7 @@ string.
 
 from __future__ import annotations
 
+import atexit
 import os
 import re
 import shutil
@@ -318,6 +319,33 @@ def stream_lines(
 _EMPTY_PCAP = bytes.fromhex("d4c3b2a1020004000000000000000000ffff000001000000")
 
 
+class _EmptyCapture:
+    """One shared empty capture file per process, removed at exit."""
+
+    def __init__(self) -> None:
+        self._path: Path | None = None
+        self._lock = threading.Lock()
+        atexit.register(self.remove)
+
+    def get(self) -> Path:
+        with self._lock:
+            if self._path is None or not self._path.exists():
+                fd, name = tempfile.mkstemp(prefix="pcapviewer-empty-", suffix=".pcap")
+                with os.fdopen(fd, "wb") as fh:
+                    fh.write(_EMPTY_PCAP)
+                self._path = Path(name)
+            return self._path
+
+    def remove(self) -> None:
+        with self._lock:
+            if self._path is not None:
+                self._path.unlink(missing_ok=True)
+                self._path = None
+
+
+EMPTY_CAPTURE = _EmptyCapture()
+
+
 class Tshark:
     """A located tshark binary plus the dissection options for one capture."""
 
@@ -330,8 +358,6 @@ class Tshark:
         self.path = path
         self.options = options or DissectionOptions()
         self.capinfos = capinfos
-        self._empty_pcap: Path | None = None
-        self._lock = threading.Lock()
 
     @classmethod
     def locate(
@@ -365,27 +391,12 @@ class Tshark:
         first = res.stdout.decode("utf-8", "replace").splitlines()
         return first[0].strip() if first else "unknown"
 
-    def empty_capture(self) -> Path:
-        with self._lock:
-            if self._empty_pcap is None or not self._empty_pcap.exists():
-                fd, name = tempfile.mkstemp(prefix="pcapviewer-empty-", suffix=".pcap")
-                with os.fdopen(fd, "wb") as fh:
-                    fh.write(_EMPTY_PCAP)
-                self._empty_pcap = Path(name)
-            return self._empty_pcap
-
     def validate_filter(self, expr: str, token: CancelToken | None = None) -> str | None:
         """Return ``None`` if ``expr`` compiles, else tshark's error message."""
         if not expr.strip():
             return None
-        res = run(self.argv("-Y", expr, capture=str(self.empty_capture())), token)
+        res = run(self.argv("-Y", expr, capture=str(EMPTY_CAPTURE.get())), token)
         if res.returncode == 0:
             return None
         msg = res.stderr.strip()
         return msg.removeprefix("tshark: ") if msg else f"invalid filter (exit {res.returncode})"
-
-    def cleanup(self) -> None:
-        with self._lock:
-            if self._empty_pcap is not None:
-                self._empty_pcap.unlink(missing_ok=True)
-                self._empty_pcap = None

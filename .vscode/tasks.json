@@ -1,0 +1,35 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "type": "npm",
+      "script": "compile",
+      "group": "build",
+      "problemMatcher": "$tsc",
+      "label": "npm: compile"
+    },
+    {
+      "type": "npm",
+      "script": "watch",
+      "isBackground": true,
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": "$tsc-watch",
+      "label": "npm: watch"
+    },
+    {
+      "label": "backend: pytest",
+      "type": "shell",
+      "command": "uv",
+      "args": ["run", "pytest"],
+      "group": "test",
+      "problemMatcher": []
+    },
+    {
+      "label": "lint: all",
+      "type": "shell",
+      "command": "npm run lint && uv run ruff check && uv run ruff format --check && uv run mypy",
+      "group": "test",
+      "problemMatcher": []
+    }
+  ]
+}
