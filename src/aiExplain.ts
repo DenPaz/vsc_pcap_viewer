@@ -68,6 +68,8 @@ export interface ExplainPacket {
   tree: TreeNode[];
   /** The packet's own bytes as hex (source 0), only used when bytes are allowed. */
   hex?: string;
+  /** A quick (approximate) dissection: only packets `approximateFrom`..`number` were dissected. */
+  approximateFrom?: number;
 }
 
 export interface ExplainInput {
@@ -223,6 +225,11 @@ function packetSection(p: ExplainPacket, input: ExplainInput, limits: ExplainLim
     maxLabel: limits.maxLabel,
     includeBytes: input.includeBytes,
   });
+  if (p.approximateFrom !== undefined) {
+    out.push(
+      `(Approximate dissection: only packets ${p.approximateFrom}-${p.number} were dissected, so reassembly, TCP analysis and conversation state from earlier packets can be missing.)`,
+    );
+  }
   out.push("Dissection:", ...lines);
   if (truncated) {
     out.push("[dissection cut short]");

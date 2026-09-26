@@ -16,9 +16,11 @@ process per open editor). All heavy lifting is delegated to tshark:
   list (CSV/JSON) straight from the row store.
 """
 
+import itertools
 import os
 import re
 import shutil
+import sys
 import tempfile
 import threading
 import time
@@ -70,6 +72,15 @@ EXPORT_CHUNK = 5000
 # line at 32767 characters). Bigger marked-packet exports run in chunks + mergecap.
 MAX_FILTER_ARG = 16_000
 NEIGHBOR_CHUNK = 2000
+# Quick detail: packets dissected before the one asked for (see _quick_detail).
+QUICK_WINDOW = 300
+MIN_QUICK_WINDOW = 2
+MAX_QUICK_WINDOW = 5000
+# FT_FRAMENUM fields by name, while the field catalogue is still loading.
+_FRAMENUM_HINT = re.compile(
+    r"\.(?:request_in|response_in|response_to|prev_request_in|next_request_in|reassembled_in"
+    r"|segment|fragment|acks_frame|duplicate_ack_frame|retransmitted_in|retransmission_of)$"
+)
 # Most frames one request may name or return (multi-selection: Shift+click ranges,
 # copy, export). 4 bytes each in the backend, ~8 in JSON.
 MAX_SELECTION = 1_000_000
@@ -95,6 +106,7 @@ BASE_COLUMNS: tuple[Column, ...] = (
     Column("length", "Length", "frame.len", "frame.len", numeric=True),
     Column("info", "Info", "_ws.col.info", "_ws.col.Info"),
 )
+_TIME_IDX = 1  # position of frame.time_relative in BASE_COLUMNS
 _LEN_IDX = 5  # position of frame.len in BASE_COLUMNS
 _TIME_FIELD = "frame.time_relative"
 # Time column sort keys that differ from capture order: the time format's deltas.
@@ -215,6 +227,10 @@ class PcapService:
         )
         self._sort_columns: LruCache[str, list[str]] = LruCache(2)
         self._details: LruCache[int, dict[str, Any]] = LruCache(detail_cache_size)
+        # Quick (approximate) details by (frame, window); see _quick_detail.
+        self._quick: LruCache[tuple[int, int], dict[str, Any]] = LruCache(16)
+        self._quick_seq = itertools.count()
+        self._catalog_warming = threading.Event()
         self._field_index: LruCache[tuple[str, ...], FieldCatalog] = LruCache(2)
         self._decode_as: LruCache[str, list[dict[str, str]]] = LruCache(32)
         # Coloring: rule index + 1 per frame (0 = no rule), from the latest set_coloring.
@@ -258,7 +274,7 @@ class PcapService:
         self._view = None
         self._colors = None
         self._marks = set()
-        for cache in (self._filters, self._sorts, self._sort_columns, self._details):
+        for cache in (self._filters, self._sorts, self._sort_columns, self._details, self._quick):
             cache.clear()
         if self._work_dir is not None:
             shutil.rmtree(self._work_dir, ignore_errors=True)
@@ -1014,36 +1030,130 @@ class PcapService:
     # ------------------------------------------------------------------ detail
 
     def packet_detail(self, params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
+        """Detail tree and byte sources of frame ``number``.
+
+        ``mode``: ``exact`` (default) dissects the capture up to the frame
+        (``-c N``), so its cost grows with N. ``quick`` dissects only the
+        ``window`` packets up to it (cut out with editcap): fast anywhere in
+        the file, but approximate (``approximate: true``, ``window: [first,
+        last]``), since state from earlier packets (reassembly, TCP analysis,
+        conversations) is missing. A quick request answers with the exact
+        detail when that is cached or the window starts at frame 1, and with
+        ``{"unavailable": reason}`` without editcap.
+        """
         number = param(params, "number", int)
+        mode = param(params, "mode", str, "exact")
+        if mode not in ("exact", "quick"):
+            raise InvalidParamsError("mode must be exact or quick")
         f = self._require_file()
         if not 1 <= number <= f.info.frames:
             raise InvalidParamsError(f"frame {number} out of range 1..{f.info.frames}")
         cached = self._details.get(number)
         if cached is not None:
             return cached
+        if mode == "quick":
+            window = param(params, "window", int, QUICK_WINDOW)
+            if not MIN_QUICK_WINDOW <= window <= MAX_QUICK_WINDOW:
+                raise InvalidParamsError(
+                    f"window must be {MIN_QUICK_WINDOW}..{MAX_QUICK_WINDOW} packets"
+                )
+            if number > window:
+                return self._quick_detail(f, number, window, ctx)
+        detail = {"number": number, **self._dissect(f.tshark, f.path, number, ctx)}
+        self._details.put(number, detail)
+        return detail
+
+    def _dissect(
+        self, tshark: Tshark, capture: Path, number: int, ctx: RequestContext
+    ) -> dict[str, Any]:
+        """PDML tree and ``-x`` byte sources of frame ``number`` of ``capture``."""
         select = ["-c", str(number), "-Y", f"frame.number=={number}"]
-        pdml_argv = f.tshark.argv(*select, "-T", "pdml", capture=str(f.path))
-        hex_argv = f.tshark.argv(*select, "-x", capture=str(f.path))
+        pdml_argv = tshark.argv(*select, "-T", "pdml", capture=str(capture))
+        hex_argv = tshark.argv(*select, "-x", capture=str(capture))
         hex_future = self._pool.submit(run, hex_argv, ctx.token)
         pdml_res = run(pdml_argv, ctx.token)
         hex_res = hex_future.result()
         if not pdml_res.stdout.strip():
-            raise f.tshark.error(
+            raise tshark.error(
                 pdml_res.stderr,
                 pdml_res.returncode,
                 f"tshark returned no detail for frame {number}",
             )
         sources = pdml.parse_hexdump(hex_res.stdout.decode("utf-8", "replace"))
         tree = pdml.parse_pdml(pdml_res.stdout, source_count=max(1, len(sources)))
-        warnings = _stderr_warnings(pdml_res.stderr)
-        detail = {
-            "number": number,
+        return {
             "tree": tree,
             "sources": [s.to_json() for s in sources],
-            "warnings": warnings,
+            "warnings": _stderr_warnings(pdml_res.stderr),
         }
-        self._details.put(number, detail)
+
+    def _quick_detail(
+        self, f: _Open, number: int, window: int, ctx: RequestContext
+    ) -> dict[str, Any]:
+        """Dissect only packets ``number - window + 1 .. number``: editcap copies
+        them into a small pcapng (it reads records without dissecting them),
+        and the tree is renumbered to the capture's frame numbers."""
+        key = (number, window)
+        cached = self._quick.get(key)
+        if cached is not None:
+            return cached
+        try:
+            editcap = find_tool("editcap", sibling_of=f.tshark.path)
+        except ToolNotFoundError:
+            return {"number": number, "unavailable": "editcap (part of Wireshark) was not found"}
+        assert self._work_dir is not None
+        first = number - window + 1
+        part = self._work_dir / f"quick-{number}-{next(self._quick_seq)}.pcapng"
+        try:
+            res = run(
+                [str(editcap), "-F", "pcapng", "-r", str(f.path), str(part), f"{first}-{number}"],
+                ctx.token,
+            )
+            if res.returncode != 0 or not part.exists():
+                raise ToolError(
+                    res.stderr or f"editcap exited with code {res.returncode}",
+                    res.stderr,
+                    res.returncode,
+                )
+            detail = self._dissect(f.tshark, part, window, ctx)
+        finally:
+            part.unlink(missing_ok=True)
+        pdml.renumber_tree(
+            detail["tree"],
+            offset=first - 1,
+            window=window,
+            is_framenum=self._framenum_check(ctx),
+            time_relative=f.base.rows.get(number)[_TIME_IDX] or None,
+        )
+        detail = {"number": number, **detail, "approximate": True, "window": [first, number]}
+        self._quick.put(key, detail)
         return detail
+
+    def _framenum_check(self, ctx: RequestContext) -> Callable[[str], bool]:
+        """Whether a field is FT_FRAMENUM: from the field catalogue when it is
+        loaded (the webview warms it after open), else known names, while the
+        catalogue loads in the background (a quick view must not wait for it)."""
+        tshark = self._file.tshark if self._file else self._require_tshark()
+        catalog = self._field_index.get(tshark.options.lua_scripts)
+        if catalog is None:
+            if not self._catalog_warming.is_set():
+                self._catalog_warming.set()
+                self._pool.submit(self._warm_catalog)
+            return lambda name: bool(_FRAMENUM_HINT.search(name))
+
+        def check(name: str) -> bool:
+            entry = catalog.lookup(name)
+            return entry is not None and entry.get("type") == "FT_FRAMENUM"
+
+        return check
+
+    def _warm_catalog(self) -> None:
+        try:
+            self._catalog(RequestContext())
+        except (RpcError, ToolError, OSError) as exc:  # a real request reports it
+            print(f"pcap-viewer: field catalogue not loaded: {exc}", file=sys.stderr)
+        finally:
+            self._catalog_warming.clear()
 
     # ------------------------------------------------------------------ follow stream
 

@@ -25,6 +25,9 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
   // The stand-in host's pcapViewer.columns (Apply as Column / Remove update it and send it back).
   let customCols = [{ field: "tcp.stream", title: "Stream" }];
   let layout = { order: [], hidden: [] };
+  // packet_detail requests the webview made, and a delay for exact ones (to see the quick view first).
+  const detailRequests = [];
+  let exactDetailDelayMs = 0;
   const cspViolations = [];
   const pageErrors = [];
 
@@ -74,6 +77,7 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
           columns: customCols,
           layout,
           timeFormat: "relative",
+          quickDetail: { after: 20000, window: 300 },
           filter: "",
           history: ["tcp.port == 80"],
           savedFilters,
@@ -109,6 +113,12 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
       } else if (["manageSavedFilters", "filterApplied", "selection", "follow", "decodeAs", "colorize", "exportBytes"].includes(msg.type)) {
         hostLog.push(msg);
       } else if (msg.type === "rpc") {
+        if (msg.method === "packet_detail") {
+          detailRequests.push(msg.params);
+          if (!msg.params.mode && exactDetailDelayMs) {
+            await new Promise((r) => setTimeout(r, exactDetailDelayMs));
+          }
+        }
         const pending = client.send(msg.method, msg.params, {
           timeoutMs: 0,
           onProgress: (p) => void post({ type: "progress", id: msg.id, phase: p.phase, fraction: p.fraction, frames: p.frames, matched: p.matched }),
@@ -791,6 +801,42 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     await page.click("#list-header > div[data-id='info']");
     await page.click("#list-header > div[data-id='info']"); // sort off
     await page.waitForFunction(() => document.getElementById("busy-bar")?.classList.contains("hidden"));
+  });
+
+  test("late packets: a quick view first, marked approximate, then the exact view replaces it", async () => {
+    // Reload the capture (as the host does): the backend's detail cache starts empty.
+    const reopen = async (quickDetail) => {
+      const info = await client.request("open", { path: path.join(ROOT, "test", "fixtures", "http.pcap"), columns: ["tcp.stream"] }, { timeoutMs: 0 });
+      await post({ type: "init", info, columns: customCols, layout, timeFormat: "relative", quickDetail, filter: "", history: [], savedFilters, elapsedMs: 1 });
+      await page.waitForFunction(() => document.querySelectorAll("#list-rows .list-row:not(.loading)").length === 11);
+    };
+    const note = () => page.evaluate(() => { const n = document.getElementById("detail-note"); return n?.classList.contains("hidden") ? "" : (n?.textContent ?? ""); });
+    const firstLabel = () => page.evaluate(() => document.querySelector("#detail-tree .node-row .label")?.textContent ?? "");
+    await reopen({ after: 5, window: 3 });
+    exactDetailDelayMs = 1500;
+    detailRequests.length = 0;
+    await rowEl(9).click();
+    await page.waitForFunction(() => !document.getElementById("detail-note")?.classList.contains("hidden"));
+    assert.match(await note(), /^Quick view: only packets 7–9 were dissected, so reassembly, TCP analysis .* Loading the exact view$/);
+    assert.match(await firstLabel(), /^Frame 9:/);
+    assert.deepEqual(detailRequests, [{ number: 9 }, { number: 9, mode: "quick", window: 3 }]);
+    await page.waitForFunction(() => document.getElementById("detail-note")?.classList.contains("hidden"), null, { timeout: 5000 });
+    assert.match(await firstLabel(), /^Frame 9:/, "the exact view replaced it");
+
+    // Early packets (up to pcapViewer.quickDetail.after) only get the exact view.
+    exactDetailDelayMs = 0;
+    detailRequests.length = 0;
+    await rowEl(4).click();
+    await page.waitForFunction(() => /^Frame 4:/.test(document.querySelector("#detail-tree .node-row .label")?.textContent ?? ""));
+    assert.deepEqual(detailRequests, [{ number: 4 }]);
+    // after = 0 turns quick views off.
+    await post({ type: "quickDetail", quickDetail: { after: 0, window: 3 } });
+    detailRequests.length = 0;
+    await rowEl(10).click();
+    await page.waitForFunction(() => /^Frame 10:/.test(document.querySelector("#detail-tree .node-row .label")?.textContent ?? ""));
+    assert.deepEqual(detailRequests, [{ number: 10 }]);
+    assert.equal(await note(), "");
+    await reopen({ after: 20000, window: 300 });
   });
 
   test("no script errors or CSP violations", () => {

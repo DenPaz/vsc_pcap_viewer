@@ -7,7 +7,7 @@ import { registerExportCommands } from "./commands/export";
 import { registerNavigationCommands } from "./commands/navigation";
 import { registerFilterCommands } from "./commands/filter";
 import { registerSavedFilterCommands } from "./commands/savedFilters";
-import { COLORING_KEYS, RELOAD_KEYS, SECTION, readSettings } from "./config";
+import { COLORING_KEYS, RELOAD_KEYS, SECTION, readQuickDetail, readSettings } from "./config";
 import { FilterAssistant } from "./ai";
 import { registerAiCommands } from "./commands/ai";
 import { PcapEditorProvider } from "./pcapEditor";
@@ -51,6 +51,11 @@ export function activate(context: vscode.ExtensionContext): PcapViewerApi {
       if (e.affectsConfiguration(`${SECTION}.timeFormat`)) {
         for (const s of p.allSessions) {
           s.setTimeFormat(readSettings(s.uri).timeFormat);
+        }
+      }
+      if (e.affectsConfiguration(`${SECTION}.quickDetail`)) {
+        for (const s of p.allSessions) {
+          s.setQuickDetail(readQuickDetail(s.uri));
         }
       }
       if (e.affectsConfiguration(`${SECTION}.savedFilters`)) {

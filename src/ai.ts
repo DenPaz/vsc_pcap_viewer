@@ -14,6 +14,7 @@ import * as vscode from "vscode";
 import type { BackendClient } from "./backendClient";
 import { SECTION } from "./config";
 import { EXPLAIN_LIMITS, ExplainPacket, TreeNode, buildExplainPrompt, extractFilters } from "./aiExplain";
+import type { QuickDetail } from "./settingsModel";
 import { ChatTurn, FieldInfo, FilterSuggestion, Rejected, extractKeywords, suggestFilters } from "./aiFilter";
 
 export interface SuggestOutcome {
@@ -38,6 +39,8 @@ export interface ExplainRequest {
   titleOf: Record<string, string>;
   customFields: string[];
   includeBytes: boolean;
+  /** Late packets use the quick (approximate) detail, like the viewer (pcapViewer.quickDetail). */
+  quickDetail: QuickDetail;
 }
 
 /** Where the answer goes while it streams (chat response, or an editor). */
@@ -223,11 +226,22 @@ export class FilterAssistant implements vscode.Disposable {
     try {
       sink.progress(`Reading packet${included.length === 1 ? "" : "s"} ${included.join(", ")}…`);
       type Rows = { rows: { number: number; cells: string[] }[]; columns: string[] };
-      type Detail = { tree: TreeNode[]; sources: { name: string; hex: string }[] };
+      type Detail = { tree: TreeNode[]; sources: { name: string; hex: string }[]; approximate?: boolean; window?: [number, number] };
+      const q = req.quickDetail;
+      const detailParams = (number: number) =>
+        q.after > 0 && number > q.after && number > q.window ? { number, mode: "quick", window: q.window } : { number };
       const [rows, details] = await untilCancelled(
         Promise.all([
           backend.request<Rows>("list_packets", { frames: included, inView: false, columns: req.customFields, timeFormat: "relative" }, { timeoutMs: 0 }),
-          Promise.all(included.map((number) => backend.request<Detail>("packet_detail", { number }, { timeoutMs: 0 }).catch(() => undefined))),
+          Promise.all(
+            included.map((number) =>
+              backend
+                .request<Detail>("packet_detail", detailParams(number), { timeoutMs: 0 })
+                // No editcap: a quick request answers {unavailable}; use the exact detail then.
+                .then((d) => (d.tree ? d : backend.request<Detail>("packet_detail", { number }, { timeoutMs: 0 })))
+                .catch(() => undefined),
+            ),
+          ),
         ]),
         token,
       );
@@ -235,8 +249,14 @@ export class FilterAssistant implements vscode.Disposable {
       included.forEach((number, i) => {
         const detail = details[i];
         const row = rows.rows.find((r) => r.number === number);
-        if (detail && row) {
-          packets.push({ number, cells: row.cells, tree: detail.tree, hex: req.includeBytes ? detail.sources[0]?.hex : undefined });
+        if (detail?.tree && row) {
+          packets.push({
+            number,
+            cells: row.cells,
+            tree: detail.tree,
+            hex: req.includeBytes ? detail.sources[0]?.hex : undefined,
+            approximateFrom: detail.approximate && detail.window ? detail.window[0] : undefined,
+          });
         }
       });
       if (!packets.length) {

@@ -73,6 +73,8 @@ def main() -> None:
         lambda: svc.list_packets({"limit": 200, "sort": {"field": "frame.len", "desc": True}}, ctx),
     )
     timed("packet_detail frame 10", lambda: svc.packet_detail({"number": 10}, ctx))
+    quick = {"number": frames - 1, "mode": "quick", "window": 300}
+    timed("packet_detail quick view, frame N-1", lambda: svc.packet_detail(quick, ctx))
     timed("packet_detail last frame", lambda: svc.packet_detail({"number": frames}, ctx))
     print(
         f"peak RSS backend: {rss_mb(resource.RUSAGE_SELF):.0f} MB, "

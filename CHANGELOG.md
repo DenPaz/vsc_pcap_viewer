@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Quick view of late packets: from packet 20,000 on (`pcapViewer.quickDetail.after`),
+  the details show in about 0.3 s instead of up to ~20 s per million packets:
+  only the 300 packets before it (`pcapViewer.quickDetail.window`) are
+  dissected (cut out with editcap), marked *Quick view*, until the exact view
+  replaces it. Ask Copilot uses it for late packets too.
 - *Ask Copilot About This Packet…* (and *…About N Selected Packets…*) in the
   packet list, and `@pcap /explain <frames> [question]` in chat: the language
   model explains the packets, with *Go to packet* and *Apply filter* buttons.

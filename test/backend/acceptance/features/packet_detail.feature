@@ -19,6 +19,17 @@ Feature: Packet detail and bytes
     And the "http" protocol is in the byte source "Reassembled TCP"
     And the "http" protocol bytes start with "HTTP/1.1 200 OK"
 
+  Scenario: A quick view dissects only a window of packets before the selected one
+    When I request the quick view of packet 11 with a window of 10 packets
+    Then the detail is approximate, dissected from packet 2
+    And the field "frame.number" shows "11"
+    And the field "tcp.analysis.acks_frame" shows "10"
+
+  Scenario: A quick view loses references to packets before its window
+    When I request the quick view of packet 7 with a window of 2 packets
+    Then the detail is approximate, dissected from packet 6
+    And the tree has no field "http.request_in"
+
   Scenario: Selecting a packet outside the capture fails
     When I select packet 12
     Then the request fails with "out of range"

@@ -868,6 +868,19 @@
           "minimum": 10000,
           "markdownDescription": "Budget (in frame numbers) for cached filter results and sort orders in the backend. Each entry costs 4 bytes."
         },
+        "pcapViewer.quickDetail.after": {
+          "type": "integer",
+          "default": 20000,
+          "minimum": 0,
+          "markdownDescription": "Showing a packet's details dissects the capture from the start up to that packet, so late packets in big captures take long (seconds per 100,000 packets). From this frame number on, a quick view comes first: only the `#pcapViewer.quickDetail.window#` packets before it are dissected (cut out with editcap), then the exact view replaces it. The quick view is marked approximate: reassembly, TCP analysis and conversation details that depend on earlier packets can be missing. `0` turns it off."
+        },
+        "pcapViewer.quickDetail.window": {
+          "type": "integer",
+          "default": 300,
+          "minimum": 2,
+          "maximum": 5000,
+          "markdownDescription": "How many packets (up to and including the selected one) the quick view of `#pcapViewer.quickDetail.after#` dissects. More packets give more context (e.g. longer TCP reassembly) and take a little longer."
+        },
         "pcapViewer.requestTimeoutSeconds": {
           "type": "integer",
           "default": 60,

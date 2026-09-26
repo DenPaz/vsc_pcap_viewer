@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { ColoringRule, ColumnLayout, ColumnSetting, SavedFilter, TimeFormat, configTargetFor, normalizeColoringRules, normalizeColumnLayout, normalizeColumns, normalizeSavedFilters, normalizeTimeFormat, resolveLuaScripts } from "./settingsModel";
+import { ColoringRule, ColumnLayout, ColumnSetting, QuickDetail, SavedFilter, TimeFormat, configTargetFor, normalizeColoringRules, normalizeColumnLayout, normalizeColumns, normalizeSavedFilters, normalizeTimeFormat, resolveLuaScripts } from "./settingsModel";
 
 export const SECTION = "pcapViewer";
 
@@ -18,6 +18,16 @@ export interface Settings {
   coloringRules: ColoringRule[];
   maxCachedFrames: number;
   requestTimeoutMs: number;
+  quickDetail: QuickDetail;
+}
+
+export function readQuickDetail(scope?: vscode.Uri): QuickDetail {
+  const cfg = vscode.workspace.getConfiguration(SECTION, scope);
+  const num = (key: string, fallback: number, min: number, max: number) => {
+    const v = cfg.get<number>(key, fallback);
+    return Number.isFinite(v) ? Math.min(max, Math.max(min, Math.round(v))) : fallback;
+  };
+  return { after: num("quickDetail.after", 20_000, 0, Number.MAX_SAFE_INTEGER), window: num("quickDetail.window", 300, 2, 5000) };
 }
 
 export function readSettings(scope?: vscode.Uri): Settings {
@@ -39,6 +49,7 @@ export function readSettings(scope?: vscode.Uri): Settings {
     coloringRules: normalizeColoringRules(cfg.get<unknown>("coloringRules", [])),
     maxCachedFrames: cfg.get<number>("maxCachedFrames", 5_000_000),
     requestTimeoutMs: cfg.get<number>("requestTimeoutSeconds", 60) * 1000,
+    quickDetail: readQuickDetail(scope),
   };
 }
 

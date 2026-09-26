@@ -2,7 +2,7 @@
  * Message protocol between the extension host and the webview
  * (src/webview/main.js). Keep both sides in sync.
  */
-import type { ColumnLayout, ColumnSetting, SavedFilter, TimeFormat } from "./settingsModel";
+import type { ColumnLayout, ColumnSetting, QuickDetail, SavedFilter, TimeFormat } from "./settingsModel";
 
 export interface ColumnDescriptor {
   id: string;
@@ -103,6 +103,7 @@ export type HostToWebview =
       columns: ColumnSetting[];
       layout: ColumnLayout;
       timeFormat: TimeFormat;
+      quickDetail: QuickDetail;
       filter: string;
       history: string[];
       savedFilters: SavedFilter[];
@@ -117,6 +118,7 @@ export type HostToWebview =
   | { type: "goto"; number: number }
   | { type: "columns"; columns: ColumnSetting[]; layout: ColumnLayout }
   | { type: "timeFormat"; format: TimeFormat }
+  | { type: "quickDetail"; quickDetail: QuickDetail }
   | { type: "command"; command: ViewerCommand }
   | { type: "history"; history: string[] }
   | { type: "savedFilters"; savedFilters: SavedFilter[] }

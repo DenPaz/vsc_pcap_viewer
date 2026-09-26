@@ -445,6 +445,22 @@ button.icon:hover {
 
 /* ------------------------------------------------------------------ detail tree */
 
+/* Quick (approximate) view of a late packet, until the exact one replaces it. */
+#detail-note {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 4px 8px;
+  font-size: 0.9em;
+  color: var(--vscode-editorWarning-foreground, var(--vscode-foreground));
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  border-bottom: 1px solid var(--border);
+}
+
+#detail-note.loading::after {
+  content: " …";
+}
+
 #detail-tree {
   font-family: var(--mono);
   font-size: var(--mono-size);

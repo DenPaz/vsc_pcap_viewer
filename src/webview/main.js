@@ -61,6 +61,8 @@
     detail: $("detail"),
     tree: $("detail-tree"),
     treePlaceholder: $("detail-placeholder"),
+    detailPane: $("detail"),
+    detailNote: $("detail-note"),
     bytesTabs: $("bytes-tabs"),
     bytesView: $("bytes-view"),
     statusLeft: $("status-left"),
@@ -134,6 +136,9 @@
     /** @type {{order: string[], hidden: string[]}} */ layout: { order: [], hidden: [] },
     /** Time column format (pcapViewer.timeFormat) and time reference frame (Ctrl+T). */
     timeFormat: "relative",
+    /** Quick (approximate) detail from frame `after` on (0 = never), dissecting `window` packets (pcapViewer.quickDetail). */
+    quickDetail: { after: 20000, window: 300 },
+    /** @type {number | null} */ quickRequest: null,
     /** @type {number | null} */ timeRef: null,
     markCount: 0,
     /** Back/forward history over jumps (links, go to, find, marks, conversation). */
@@ -232,6 +237,9 @@
         updateStatus();
         refreshRows();
         break;
+      case "quickDetail":
+        state.quickDetail = msg.quickDetail;
+        break;
       case "command":
         runCommand(msg.command);
         break;
@@ -267,6 +275,7 @@
     state.customColumns = lib.acceptedColumns(msg.columns, msg.info.columns.slice(7));
     state.layout = msg.layout || { order: [], hidden: [] };
     state.timeFormat = msg.timeFormat || "relative";
+    state.quickDetail = msg.quickDetail || state.quickDetail;
     state.timeRef = null;
     state.markCount = 0;
     state.nav = { back: [], forward: [] };
@@ -1067,19 +1076,51 @@
   // ------------------------------------------------------------------ detail tree
 
   /** @param {number} frame */
+  /**
+   * Show a packet's detail. The exact detail dissects the capture up to the
+   * packet (cost grows with its number), so for late packets a quick view
+   * (only pcapViewer.quickDetail.window packets dissected) is shown first,
+   * marked approximate, until the exact one replaces it.
+   * @param {number} frame
+   */
   async function loadDetail(frame) {
-    if (state.detailRequest !== null) {
-      cancelRpc(state.detailRequest);
+    for (const id of [state.detailRequest, state.quickRequest]) {
+      if (id !== null) {
+        cancelRpc(id);
+      }
     }
-    if (state.detail && state.detail.number === frame) {
+    state.quickRequest = null;
+    if (state.detail && state.detail.number === frame && !state.detail.approximate) {
       return;
     }
+    showDetailNote("", false); // the note belonged to the previous packet
     const req = rpc("packet_detail", { number: frame });
     state.detailRequest = req.id;
+    let exactShown = false;
     el.treePlaceholder.textContent = `Loading packet ${frame}…`;
     el.treePlaceholder.classList.remove("hidden");
+    const q = state.quickDetail;
+    if (q.after > 0 && frame > q.after && frame > q.window) {
+      const quick = rpc("packet_detail", { number: frame, mode: "quick", window: q.window });
+      state.quickRequest = quick.id;
+      quick.promise.then(
+        (detail) => {
+          if (state.selectedFrame === frame && !exactShown && !detail.unavailable) {
+            showDetail(detail);
+          }
+        },
+        () => {
+          /* the exact detail still comes */
+        },
+      );
+    }
     try {
       const detail = await req.promise;
+      exactShown = true;
+      if (state.quickRequest !== null) {
+        cancelRpc(state.quickRequest);
+        state.quickRequest = null;
+      }
       if (state.selectedFrame !== frame) {
         return;
       }
@@ -1087,14 +1128,32 @@
     } catch (err) {
       const e = /** @type {any} */ (err);
       if (e?.code !== CANCELLED && state.selectedFrame === frame) {
-        el.tree.replaceChildren();
-        el.treePlaceholder.textContent = `Could not dissect packet ${frame}: ${e?.message ?? e}`;
+        if (state.detail?.number === frame && state.detail.approximate) {
+          // Keep the quick view, but say the exact one failed.
+          showDetailNote(`${quickNote(state.detail)} The exact view failed: ${e?.message ?? e}`, false);
+        } else {
+          el.tree.replaceChildren();
+          el.treePlaceholder.textContent = `Could not dissect packet ${frame}: ${e?.message ?? e}`;
+        }
       }
     } finally {
       if (state.detailRequest === req.id) {
         state.detailRequest = null;
       }
     }
+  }
+
+  /** @param {any} detail a quick (approximate) detail */
+  function quickNote(detail) {
+    const [first] = detail.window;
+    return `Quick view: only packets ${first.toLocaleString()}–${detail.number.toLocaleString()} were dissected, so reassembly, TCP analysis and conversation details that depend on earlier packets can be missing.`;
+  }
+
+  /** @param {string} text @param {boolean} loading */
+  function showDetailNote(text, loading) {
+    el.detailNote.textContent = text;
+    el.detailNote.classList.toggle("loading", loading);
+    el.detailNote.classList.toggle("hidden", !text);
   }
 
   /**
@@ -1122,6 +1181,7 @@
     state.detail = null;
     state.selectedNodeId = null;
     nodeIndex.clear();
+    showDetailNote("", false);
     el.tree.replaceChildren();
     el.treePlaceholder.textContent = "Select a packet to see its details.";
     el.treePlaceholder.classList.remove("hidden");
@@ -1141,7 +1201,11 @@
   function showDetail(detail) {
     const previous = state.selectedNodeId !== null ? nodeIndex.get(state.selectedNodeId) : undefined;
     const previousKey = previous ? lib.nodeKey(previous.path) : null;
+    // The exact view replacing the quick one: keep the reader where they were.
+    const sameFrame = state.detail?.number === detail.number;
+    const scrollTop = el.detailPane.scrollTop;
     state.detail = detail;
+    showDetailNote(detail.approximate ? `${quickNote(detail)} Loading the exact view` : "", !!detail.approximate);
     state.selectedNodeId = null;
     nodeIndex.clear();
     el.treePlaceholder.classList.add("hidden");
@@ -1158,10 +1222,13 @@
     if (previousKey) {
       for (const entry of nodeIndex.values()) {
         if (lib.nodeKey(entry.path) === previousKey) {
-          selectNode(entry.node.id, { scroll: true });
+          selectNode(entry.node.id, { scroll: !sameFrame });
           break;
         }
       }
+    }
+    if (sameFrame) {
+      el.detailPane.scrollTop = scrollTop;
     }
   }
 

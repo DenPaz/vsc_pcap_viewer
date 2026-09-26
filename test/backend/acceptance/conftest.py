@@ -352,6 +352,38 @@ def _bytes_of(world: World, node: dict[str, Any]) -> bytes:
     return data[node["pos"] : node["pos"] + node["size"]]
 
 
+@when(
+    parsers.re(
+        r"I request the quick view of packet (?P<number>\d+) "
+        r"with a window of (?P<window>\d+) packets$"
+    )
+)
+def quick_view(world: World, number: str, window: str) -> None:
+    params = {"number": int(number), "mode": "quick", "window": int(window)}
+    world.detail = world.call(world.service.packet_detail, params)
+
+
+@then(parsers.re(r"the detail is approximate, dissected from packet (?P<first>\d+)$"))
+def detail_approximate(world: World, first: str) -> None:
+    assert world.detail is not None
+    assert world.detail.get("approximate") is True
+    assert world.detail["window"] == [int(first), world.detail["number"]]
+
+
+@then(parsers.re(r'the field "(?P<name>[^"]+)" shows "(?P<value>[^"]*)"$'))
+def field_shows(world: World, name: str, value: str) -> None:
+    assert world.detail is not None
+    node = _find(world.detail["tree"], name)
+    assert node is not None, name
+    assert node.get("show") == value
+
+
+@then(parsers.re(r'the tree has no field "(?P<name>[^"]+)"$'))
+def no_field(world: World, name: str) -> None:
+    assert world.detail is not None
+    assert _find(world.detail["tree"], name) is None
+
+
 @then(parsers.parse("the protocol tree is {protocols}"))
 def protocol_tree(world: World, protocols: str) -> None:
     assert world.error is None, world.error
