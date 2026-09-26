@@ -48,6 +48,8 @@ class World:
     detail: dict[str, Any] | None = None
     validation: dict[str, Any] | None = None
     suggestions: dict[str, Any] | None = None
+    followed: dict[str, Any] | None = None
+    table: dict[str, Any] | None = None
     error: Exception | None = None
 
     def call(self, fn: Any, params: dict[str, Any]) -> Any:
@@ -418,3 +420,152 @@ def truncated(world: World) -> None:
 def rejected_columns(world: World, columns: str) -> None:
     assert world.page is not None
     assert world.page["rejectedColumns"] == items(columns)
+
+
+# ---------------------------------------------------------------------- follow stream
+
+
+@when(parsers.parse('I follow the "{proto}" stream of packet {frame:d}'))
+def follow_from_packet(world: World, proto: str, frame: int) -> None:
+    world.followed = world.call(world.service.follow_stream, {"proto": proto, "frame": frame})
+
+
+@when(parsers.parse('I follow "{proto}" stream number {stream:d}'))
+def follow_by_number(world: World, proto: str, stream: int) -> None:
+    world.followed = world.call(world.service.follow_stream, {"proto": proto, "stream": stream})
+
+
+def _followed(world: World) -> dict[str, Any]:
+    assert world.error is None, world.error
+    assert world.followed is not None
+    return world.followed
+
+
+def _direction_bytes(world: World, direction: int) -> bytes:
+    segments = _followed(world)["segments"]
+    return b"".join(bytes.fromhex(s["hex"]) for s in segments if s["dir"] == direction)
+
+
+@then(parsers.parse('the followed stream is number {stream:d} between "{a}" and "{b}"'))
+def followed_stream_is(world: World, stream: int, a: str, b: str) -> None:
+    followed = _followed(world)
+    assert followed["stream"] == stream
+    assert followed["nodes"] == [a, b]
+
+
+@then(parsers.parse("the client sent {c2s:d} bytes and the server sent {s2c:d} bytes"))
+def follow_byte_counts(world: World, c2s: int, s2c: int) -> None:
+    assert _followed(world)["bytes"] == [c2s, s2c]
+    assert len(_direction_bytes(world, 0)) == c2s
+    assert len(_direction_bytes(world, 1)) == s2c
+
+
+@then(parsers.re(r'the (?P<side>client|server) data starts with "(?P<text>[^"]+)"$'))
+def follow_data_starts(world: World, side: str, text: str) -> None:
+    assert _direction_bytes(world, 0 if side == "client" else 1).startswith(text.encode())
+
+
+@then(parsers.parse('the stream filter is "{flt}"'))
+def follow_filter(world: World, flt: str) -> None:
+    assert _followed(world)["filter"] == flt
+
+
+@then("the followed stream is empty")
+def follow_empty(world: World) -> None:
+    assert _followed(world)["segments"] == []
+
+
+@then(parsers.parse('the follow hint mentions "{text}"'))
+def follow_hint(world: World, text: str) -> None:
+    assert text in _followed(world).get("hint", "")
+
+
+# ---------------------------------------------------------------------- statistics
+
+
+@when(
+    parsers.re(
+        r'I request the "(?P<kind>\w+)" statistics'
+        r'(?: for "(?P<typ>\w+)")?'
+        r"(?: with interval (?P<interval>[\d.]+))?"
+        r'(?: limited to "(?P<flt>[^"]*)")?$'
+    )
+)
+def request_stats(
+    world: World, kind: str, typ: str | None, interval: str | None, flt: str | None
+) -> None:
+    params: dict[str, Any] = {"kind": kind}
+    if typ:
+        params["type"] = typ
+    if interval:
+        params["interval"] = float(interval)
+    if flt is not None:
+        params["filter"] = flt
+    world.table = world.call(world.service.stats, params)
+
+
+def _table(world: World) -> dict[str, Any]:
+    assert world.error is None, world.error
+    assert world.table is not None
+    return world.table
+
+
+def _stats_cell(world: World, row: dict[str, Any], label: str) -> Any:
+    labels = [c["label"] for c in _table(world)["columns"]]
+    return row["cells"][labels.index(label)]
+
+
+@then(parsers.re(r"the statistics have (?P<count>\d+) rows?$"))
+def stats_row_count(world: World, count: str) -> None:
+    assert len(_table(world)["rows"]) == int(count)
+
+
+@then(parsers.re(r"row (?P<n>\d+) has (?P<pairs>.+)$"))
+def stats_row_has(world: World, n: str, pairs: str) -> None:
+    row = _table(world)["rows"][int(n) - 1]
+    for label, value in re.findall(r'"([^"]+)" (?:"([^"]*)"|\d+)', pairs):
+        expected: Any = value
+        if not value:  # numeric: re-read the number after the label
+            m = re.search(rf'"{re.escape(label)}" (\d+)', pairs)
+            assert m
+            expected = int(m.group(1))
+        assert _stats_cell(world, row, label) == expected, (label, row)
+
+
+@then(parsers.parse('row {n:d} filters on "{flt}"'))
+def stats_row_filter(world: World, n: int, flt: str) -> None:
+    assert _table(world)["rows"][n - 1].get("filter") == flt
+
+
+@then(parsers.parse('the statistics include "{proto}" at depth {depth:d} with {packets:d} packets'))
+def phs_includes(world: World, proto: str, depth: int, packets: int) -> None:
+    rows = [r for r in _table(world)["rows"] if r["cells"][0] == proto]
+    assert rows, proto
+    assert rows[0]["depth"] == depth
+    assert _stats_cell(world, rows[0], "Packets") == packets
+
+
+@then(parsers.parse('every row has {value:d} "{label}"'))
+def every_row_has(world: World, value: int, label: str) -> None:
+    assert all(_stats_cell(world, r, label) == value for r in _table(world)["rows"])
+
+
+@then(
+    parsers.parse(
+        'the expert row "{summary}" has severity "{severity}", count {count:d} and frames {frames}'
+    )
+)
+def expert_row(world: World, summary: str, severity: str, count: int, frames: str) -> None:
+    rows = [r for r in _table(world)["rows"] if _stats_cell(world, r, "Summary") == summary]
+    assert rows, summary
+    row = rows[0]
+    assert _stats_cell(world, row, "Severity") == severity
+    assert _stats_cell(world, row, "Count") == count
+    assert row["frames"] == numbers(frames)
+    assert row["frame"] == numbers(frames)[0]
+
+
+@then(parsers.parse('the property "{key}" is "{value}"'))
+def property_is(world: World, key: str, value: str) -> None:
+    rows = {r["cells"][0]: r["cells"][1] for r in _table(world)["rows"]}
+    assert rows.get(key) == value, rows
