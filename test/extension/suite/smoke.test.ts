@@ -26,6 +26,20 @@ async function waitFor<T>(fn: () => T | undefined, timeoutMs = 30_000): Promise<
   }
 }
 
+async function waitForAsync<T>(fn: () => Promise<T | undefined>, timeoutMs = 30_000): Promise<T> {
+  const start = Date.now();
+  for (;;) {
+    const value = await fn();
+    if (value !== undefined) {
+      return value;
+    }
+    if (Date.now() - start > timeoutMs) {
+      throw new Error("timed out waiting for condition");
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+}
+
 suite("PCAP Viewer smoke test", () => {
   test("opens a capture and the backend responds", async () => {
     const ext = vscode.extensions.all.find((e) => e.packageJSON.name === "pcap-viewer");
@@ -46,8 +60,27 @@ suite("PCAP Viewer smoke test", () => {
     const detail = await backend.request<{ tree: unknown[] }>("packet_detail", { number: 4 });
     assert.ok(detail.tree.length > 0);
 
+    // The default coloring rules are applied in the background after open.
+    const colored = await waitForAsync(async () => {
+      const rows = await backend.request<{ rows: { color?: number }[]; coloringId: number }>("list_packets", { offset: 0, limit: 11 });
+      return rows.coloringId > 0 ? rows : undefined;
+    });
+    assert.ok(colored.rows.every((r) => typeof r.color === "number"), "every packet of http.pcap matches a default rule");
+
     const commands = await vscode.commands.getCommands(true);
-    for (const id of ["pcapViewer.reloadDissectors", "pcapViewer.newLuaDissector", "pcapViewer.openDissectorsFolder", "pcapViewer.decodeAs", "pcapViewer.manageDecodeAs"]) {
+    for (const id of [
+      "pcapViewer.reloadDissectors",
+      "pcapViewer.newLuaDissector",
+      "pcapViewer.openDissectorsFolder",
+      "pcapViewer.decodeAs",
+      "pcapViewer.manageDecodeAs",
+      "pcapViewer.exportFiltered",
+      "pcapViewer.exportPacketList",
+      "pcapViewer.exportPacketBytes",
+      "pcapViewer.colorizeWithFilter",
+      "pcapViewer.toggleColoring",
+      "pcapViewer.manageColoringRules",
+    ]) {
       assert.ok(commands.includes(id), `${id} is registered`);
     }
 

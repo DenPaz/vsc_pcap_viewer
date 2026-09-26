@@ -161,6 +161,74 @@ export function resolveDissectorsFolder(folder: string | undefined, baseDir: str
   return path.normalize(path.isAbsolute(expanded) ? expanded : baseDir ? path.join(baseDir, expanded) : expanded);
 }
 
+/** A packet coloring rule as sent to the backend (`pcapViewer.coloringRules`). */
+export interface ColoringRule {
+  name: string;
+  filter: string;
+  foreground: string;
+  background: string;
+}
+
+const COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+export const MAX_COLORING_RULES = 255;
+
+export function isColor(value: unknown): value is string {
+  return typeof value === "string" && COLOR_RE.test(value);
+}
+
+/**
+ * Enabled rules with a filter, in priority order (at most 255). Colors are
+ * passed through as given; the backend reports malformed ones per rule.
+ */
+export function normalizeColoringRules(raw: unknown): ColoringRule[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const out: ColoringRule[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object" || (item as { enabled?: unknown }).enabled === false) {
+      continue;
+    }
+    const { name, filter, foreground, background } = item as Record<string, unknown>;
+    if (typeof filter !== "string" || !filter.trim()) {
+      continue;
+    }
+    out.push({
+      name: typeof name === "string" && name.trim() ? name.trim() : filter.trim(),
+      filter: filter.trim(),
+      foreground: typeof foreground === "string" ? foreground : "#000000",
+      background: typeof background === "string" ? background : "#ffffff",
+    });
+  }
+  return out.slice(0, MAX_COLORING_RULES);
+}
+
+/** Colors offered by "Colorize with Filter" (Wireshark's conversation colors). */
+export const COLORIZE_PALETTE: readonly { label: string; background: string }[] = [
+  { label: "Red", background: "#ffc0c0" },
+  { label: "Pink", background: "#ffc0ff" },
+  { label: "Mauve", background: "#e0c0e0" },
+  { label: "Blue", background: "#c0c0ff" },
+  { label: "Teal", background: "#c0e0e0" },
+  { label: "Cyan", background: "#c0ffff" },
+  { label: "Green", background: "#c0ffc0" },
+  { label: "Yellow", background: "#ffffc0" },
+  { label: "Olive", background: "#e0e0c0" },
+  { label: "Grey", background: "#e0e0e0" },
+];
+export const COLORIZE_FOREGROUND = "#12272e";
+
+/** Put a new rule first (it wins over the existing ones), keeping the raw entries as they are. */
+export function prependColoringRule(rules: unknown, rule: ColoringRule): unknown[] {
+  return [rule, ...(Array.isArray(rules) ? rules : [])];
+}
+
+/** Suggested export file next to the capture: `dir/stem-suffix.ext`. */
+export function exportFileName(capturePath: string, suffix: string, ext: string): string {
+  const parsed = path.parse(capturePath);
+  return path.join(parsed.dir, `${parsed.name}-${suffix}.${ext}`);
+}
+
 export type ConfigTarget = "workspaceFolder" | "workspace" | "global";
 
 /**

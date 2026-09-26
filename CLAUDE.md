@@ -43,7 +43,8 @@ user-facing description.
 - `src/extension.ts` activation, config-change handling. `src/pcapEditor.ts`
   custom editor + one `PcapEditorSession` per panel. `src/backendClient.ts`
   JSON-RPC client (no `vscode` import: unit-testable). `src/settingsModel.ts`
-  pure settings helpers. `src/commands/` command implementations.
+  pure settings helpers. `src/commands/` command implementations
+  (`export.ts`, `coloring.ts`, `dissectors.ts`, …).
 - `src/webview/` plain JS/CSS/HTML (no build step). `lib.js` = pure helpers
   shared with Node tests; `main.js` = UI. Type-checked via JSDoc +
   `tsconfig.webview.json`.
@@ -55,7 +56,9 @@ user-facing description.
   (methods), `tshark.py` (discovery/argv/process helpers), `cache.py`
   (row store, frame index, LRU), `pdml.py` (PDML + hexdump parsing),
   `stats.py` (`-z` report and follow parsers), `fields.py` (field catalogue),
-  `protocol.py` (error codes, request context), `cancellation.py`.
+  `coloring.py` (coloring rules → `colorfilters`), `export.py` (destination
+  checks, atomic output, CSV/JSON writers), `protocol.py` (error codes,
+  request context), `cancellation.py`.
 - `backend/dissectors/example.lua` sample dissector (UDP/9999).
 - `test/backend` pytest; `test/backend/acceptance` pytest-bdd scenarios
   (`features/*.feature` = brief's acceptance criteria against the backend,
@@ -181,6 +184,30 @@ UI behaviour stays in the Chromium test (`test/webview/e2e.test.js`).
   print "Valid layer types are:" or "Valid protocols for layer type X are:"
   lists (parsed by `parse_decode_as_choices`, cached). An unknown layer gets
   the layer list back, which is detected and rejected.
+- **Coloring rules** are evaluated by tshark (`--color`, field
+  `frame.coloring_rule.name`, first match wins), which only reads them from
+  `colorfilters` in the personal config folder. Each `set_coloring` pass sets
+  `WIRESHARK_CONFIG_DIR` to a temp folder holding the generated file plus
+  copies of the user's other personal config files (found via `tshark -G
+  folders`), so dissection matches the other passes. Rules are named by index
+  (the file format can't quote names; filters with `@` are rejected), tshark's
+  "Could not compile" stderr is mapped back to rule indexes. The result is one
+  byte per frame (`array('B')`, max 255 rules); `list_packets` rows carry
+  `color` plus the page's `coloringId`, and the webview only uses colors whose
+  `coloringId` matches its palette (it's part of the page cache key). The pass
+  runs in the background after open (an extra tshark pass, tradeoff: simpler
+  than folding it into the index pass, and rule edits never re-index). The
+  selected row keeps the theme's selection colors. Defaults in package.json
+  are checked against tshark by `test_default_coloring_rules_compile`; note
+  tshark 4.2 rejects space-separated sets (`{3 4}`), so they avoid sets.
+- **Export**: captures via `tshark [-Y f] -F pcapng|pcap -w tmp` (`-P -T
+  fields -e frame.number` gives progress when filtering; without a filter
+  nothing is dissected). Default filter = the current view's; `""` = all.
+  CSV/JSON come from the row store in the view's current order (no tshark).
+  Every export writes `.<name>.<pid>.part` and `replace()`s it at the end, and
+  a destination that is the open capture is refused (tshark would truncate
+  its input). CSV cells that look like formulas get a `'` prefix (packet text
+  is untrusted); JSON is keyed by column id with numbers for numeric columns.
 - **Protocol**: JSON-RPC 2.0 framing (`"jsonrpc": "2.0"`), LSP-style
   cancellation code -32800; app codes in `backend/pcap_backend/protocol.py`
   and mirrored in `src/backendClient.ts` (`ErrorCodes`). `open` returns the
@@ -199,7 +226,7 @@ this took the backend from 710 MB to 125 MB peak.
 
 ## Status
 
-Implemented: steps 1–6 of the brief (foundation, packet list with paging /
+Implemented: steps 1–7 of the brief (foundation, packet list with paging /
 virtualization / sorting / custom columns, detail tree + hex with two-way
 highlighting, display filters with validation, autocomplete, history, saved
 filters, apply-as-filter, follow TCP/UDP/TLS/HTTP stream, and statistics
@@ -209,4 +236,7 @@ capture properties).
 Also step 6: Lua dissector commands (new from template, reload with error
 check, open folder, reload offer on save) and a Decode As UI plus rule manager.
 
-Not yet: export, coloring rules, quick view for late packets in huge files.
+Step 7: coloring rules (defaults, Colorize with Filter, toggle), export
+(pcapng/pcap, CSV/JSON packet list, packet bytes), CHANGELOG, packaging.
+
+Not yet (beyond the brief): quick view for late packets in huge files.

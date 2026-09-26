@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { ColumnSetting, SavedFilter, configTargetFor, normalizeColumns, normalizeSavedFilters, resolveLuaScripts } from "./settingsModel";
+import { ColoringRule, ColumnSetting, SavedFilter, configTargetFor, normalizeColoringRules, normalizeColumns, normalizeSavedFilters, resolveLuaScripts } from "./settingsModel";
 
 export const SECTION = "pcapViewer";
 
@@ -12,6 +12,8 @@ export interface Settings {
   prefs: Record<string, string | number | boolean>;
   columns: ColumnSetting[];
   savedFilters: SavedFilter[];
+  colorize: boolean;
+  coloringRules: ColoringRule[];
   maxCachedFrames: number;
   requestTimeoutMs: number;
 }
@@ -29,6 +31,8 @@ export function readSettings(scope?: vscode.Uri): Settings {
     prefs: cfg.get<Record<string, string | number | boolean>>("prefs", {}),
     columns: normalizeColumns(cfg.get<unknown>("columns", [])),
     savedFilters: normalizeSavedFilters(cfg.get<unknown>("savedFilters", [])),
+    colorize: cfg.get<boolean>("colorize", true),
+    coloringRules: normalizeColoringRules(cfg.get<unknown>("coloringRules", [])),
     maxCachedFrames: cfg.get<number>("maxCachedFrames", 5_000_000),
     requestTimeoutMs: cfg.get<number>("requestTimeoutSeconds", 60) * 1000,
   };
@@ -44,6 +48,9 @@ export const RELOAD_KEYS = [
   "prefs",
   "maxCachedFrames",
 ].map((k) => `${SECTION}.${k}`);
+
+/** Settings that only change packet colors (no re-indexing needed). */
+export const COLORING_KEYS = ["colorize", "coloringRules"].map((k) => `${SECTION}.${k}`);
 
 /**
  * Folder that relative setting paths resolve against: the workspace folder

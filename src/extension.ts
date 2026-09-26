@@ -1,10 +1,12 @@
 import * as vscode from "vscode";
 import { registerAnalysisCommands } from "./commands/analysis";
+import { registerColoringCommands } from "./commands/coloring";
 import { registerColumnCommands } from "./commands/columns";
 import { registerDissectorCommands } from "./commands/dissectors";
+import { registerExportCommands } from "./commands/export";
 import { registerFilterCommands } from "./commands/filter";
 import { registerSavedFilterCommands } from "./commands/savedFilters";
-import { RELOAD_KEYS, SECTION, readSettings } from "./config";
+import { COLORING_KEYS, RELOAD_KEYS, SECTION, readSettings } from "./config";
 import { PcapEditorProvider } from "./pcapEditor";
 
 let provider: PcapEditorProvider | undefined;
@@ -25,6 +27,8 @@ export function activate(context: vscode.ExtensionContext): PcapViewerApi {
   registerSavedFilterCommands(context, p);
   registerAnalysisCommands(context, p);
   registerDissectorCommands(context, p, log);
+  registerExportCommands(context, p);
+  registerColoringCommands(context, p);
   context.subscriptions.push(
     vscode.commands.registerCommand("pcapViewer.showLog", () => log.show()),
     vscode.workspace.onDidChangeConfiguration(async (e) => {
@@ -41,6 +45,12 @@ export function activate(context: vscode.ExtensionContext): PcapViewerApi {
         const saved = readSettings().savedFilters;
         for (const s of p.allSessions) {
           s.setSavedFilters(saved);
+        }
+      }
+      if (COLORING_KEYS.some((k) => e.affectsConfiguration(k))) {
+        // Colors are re-evaluated in the background; no re-indexing needed.
+        for (const s of p.allSessions) {
+          void s.applyColoring();
         }
       }
       if (RELOAD_KEYS.some((k) => e.affectsConfiguration(k)) && p.allSessions.length) {

@@ -1,6 +1,6 @@
 import * as assert from "node:assert/strict";
 import * as path from "node:path";
-import { configTargetFor, normalizeColumns, normalizeSavedFilters, pushHistory, resolveLuaScripts, upsertSavedFilter } from "../../../src/settingsModel";
+import { COLORIZE_PALETTE, configTargetFor, exportFileName, isColor, normalizeColoringRules, normalizeColumns, prependColoringRule, normalizeSavedFilters, pushHistory, resolveLuaScripts, upsertSavedFilter } from "../../../src/settingsModel";
 
 suite("settingsModel", () => {
   test("normalizeColumns accepts strings and objects, drops junk", () => {
@@ -74,5 +74,35 @@ suite("settingsModel", () => {
     assert.equal(configTargetFor({ workspaceValue: [] }, true), "workspace");
     assert.equal(configTargetFor({}, true), "global");
     assert.equal(configTargetFor(undefined, false), "global");
+  });
+
+  test("normalizeColoringRules keeps enabled rules with a filter, in order", () => {
+    const rules = normalizeColoringRules([
+      { name: "HTTP", filter: " http ", foreground: "#000000", background: "#e4ffc7" },
+      { name: "Off", filter: "tcp", enabled: false },
+      { name: "No filter", filter: "  " },
+      "udp",
+      { filter: "dns" },
+    ]);
+    assert.deepEqual(rules, [
+      { name: "HTTP", filter: "http", foreground: "#000000", background: "#e4ffc7" },
+      { name: "dns", filter: "dns", foreground: "#000000", background: "#ffffff" },
+    ]);
+    assert.deepEqual(normalizeColoringRules({}), []);
+    assert.equal(normalizeColoringRules(Array.from({ length: 300 }, (_, i) => ({ filter: `frame.number == ${i}` }))).length, 255);
+  });
+
+  test("prependColoringRule puts the new rule first and keeps raw entries", () => {
+    const rule = { name: "x", filter: "ip.addr == 10.0.0.1", foreground: "#12272e", background: "#ffc0c0" };
+    const existing = [{ name: "Off", filter: "tcp", enabled: false }];
+    assert.deepEqual(prependColoringRule(existing, rule), [rule, existing[0]]);
+    assert.deepEqual(prependColoringRule(undefined, rule), [rule]);
+    assert.ok(COLORIZE_PALETTE.every((c) => isColor(c.background)));
+    assert.ok(!isColor("red") && isColor("#A0b0C0"));
+  });
+
+  test("exportFileName suggests a file next to the capture", () => {
+    assert.equal(exportFileName(path.join("dir", "trace.pcapng"), "filtered", "pcapng"), path.join("dir", "trace-filtered.pcapng"));
+    assert.equal(exportFileName(path.join("dir", "a.b.pcap"), "frame4", "bin"), path.join("dir", "a.b-frame4.bin"));
   });
 });

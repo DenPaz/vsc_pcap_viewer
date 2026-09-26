@@ -66,7 +66,7 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
         hostLog.push(msg);
         savedFilters = [...savedFilters, { name: `Saved ${savedFilters.length}`, filter: msg.expr }];
         await post({ type: "savedFilters", savedFilters });
-      } else if (["manageSavedFilters", "filterApplied", "selection", "follow", "decodeAs"].includes(msg.type)) {
+      } else if (["manageSavedFilters", "filterApplied", "selection", "follow", "decodeAs", "colorize", "exportBytes"].includes(msg.type)) {
         hostLog.push(msg);
       } else if (msg.type === "rpc") {
         const pending = client.send(msg.method, msg.params, { timeoutMs: 0 });
@@ -287,6 +287,33 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     await page.click("#list-rows .list-row >> nth=3", { button: "right" });
     await page.click("#context-menu .item:has-text('Decode As')");
     assert.deepEqual(hostLog.at(-1), { type: "decodeAs", frame: 4 });
+  });
+
+  test("coloring rules color the rows; Colorize and Export Bytes reach the host", async () => {
+    // Frame 4 is still selected from the previous test.
+    const rules = [
+      { name: "HTTP", filter: "http", foreground: "#12272e", background: "#e4ffc7" },
+      { name: "TCP", filter: "tcp", foreground: "#000000", background: "#e7e6ff" },
+    ];
+    const res = await client.request("set_coloring", { rules: rules.map(({ filter, foreground, background }) => ({ filter, foreground, background })) }, { timeoutMs: 0 });
+    await post({ type: "coloring", coloringId: res.coloringId, rules: rules.map(({ name, foreground, background }) => ({ name, foreground, background })) });
+    await page.waitForFunction(() => document.querySelector("#list-rows .list-row")?.classList.contains("colored"));
+    const rows = await page.$$eval("#list-rows .list-row", (els) =>
+      els.map((r) => ({ frame: r.children[0].textContent, selected: r.classList.contains("selected"), bg: r.style.backgroundColor })),
+    );
+    assert.equal(rows[0].bg, "rgb(231, 230, 255)"); // TCP handshake: rule 2
+    assert.equal(rows[6].bg, "rgb(228, 255, 199)"); // frame 7, HTTP response: rule 1
+    assert.deepEqual(rows[3], { frame: "4", selected: true, bg: "" }); // selection colors win
+
+    await page.click("#detail-tree .node-row:has-text('Source Address')", { button: "right" });
+    await page.click("#context-menu .item:has-text('Colorize with Filter')");
+    assert.deepEqual(hostLog.at(-1), { type: "colorize", filter: "ip.src == 192.168.1.10" });
+    await page.click("#list-rows .list-row >> nth=3", { button: "right" });
+    await page.click("#context-menu .item:has-text('Export Packet Bytes')");
+    assert.deepEqual(hostLog.at(-1), { type: "exportBytes", frame: 4 });
+
+    await post({ type: "coloring", coloringId: 0, rules: [] }); // coloring turned off
+    await page.waitForFunction(() => !document.querySelector("#list-rows .list-row.colored"));
   });
 
   test("no script errors or CSP violations", () => {

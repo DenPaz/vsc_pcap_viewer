@@ -156,6 +156,36 @@
         "category": "PCAP"
       },
       {
+        "command": "pcapViewer.exportFiltered",
+        "title": "Export Specified Packets\u2026",
+        "category": "PCAP"
+      },
+      {
+        "command": "pcapViewer.exportPacketList",
+        "title": "Export Packet List as CSV/JSON\u2026",
+        "category": "PCAP"
+      },
+      {
+        "command": "pcapViewer.exportPacketBytes",
+        "title": "Export Packet Bytes\u2026",
+        "category": "PCAP"
+      },
+      {
+        "command": "pcapViewer.colorizeWithFilter",
+        "title": "Colorize with Filter\u2026",
+        "category": "PCAP"
+      },
+      {
+        "command": "pcapViewer.toggleColoring",
+        "title": "Toggle Packet Coloring",
+        "category": "PCAP"
+      },
+      {
+        "command": "pcapViewer.manageColoringRules",
+        "title": "Manage Coloring Rules",
+        "category": "PCAP"
+      },
+      {
         "command": "pcapViewer.reload",
         "title": "Reload Capture",
         "category": "PCAP"
@@ -234,6 +264,26 @@
         },
         {
           "command": "pcapViewer.decodeAs",
+          "when": "activeCustomEditorId == pcapViewer.editor || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
+        },
+        {
+          "command": "pcapViewer.exportFiltered",
+          "when": "activeCustomEditorId == pcapViewer.editor || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
+        },
+        {
+          "command": "pcapViewer.exportPacketList",
+          "when": "activeCustomEditorId == pcapViewer.editor || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
+        },
+        {
+          "command": "pcapViewer.exportPacketBytes",
+          "when": "activeCustomEditorId == pcapViewer.editor || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
+        },
+        {
+          "command": "pcapViewer.colorizeWithFilter",
+          "when": "activeCustomEditorId == pcapViewer.editor || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
+        },
+        {
+          "command": "pcapViewer.toggleColoring",
           "when": "activeCustomEditorId == pcapViewer.editor || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
         }
       ]
@@ -351,6 +401,135 @@
           },
           "default": [],
           "markdownDescription": "Named display filters, e.g. `{ \"name\": \"Web\", \"filter\": \"http || tls\" }`. Shown in the filter bar's \u2605 menu and *PCAP: Saved Display Filters*. Set in user settings for all captures or in workspace settings to share with a project."
+        },
+        "pcapViewer.colorize": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "markdownDescription": "Color the packet list with `#pcapViewer.coloringRules#` (*PCAP: Toggle Packet Coloring*)."
+        },
+        "pcapViewer.coloringRules": {
+          "type": "array",
+          "scope": "resource",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "filter": {
+                "type": "string",
+                "description": "Display filter"
+              },
+              "foreground": {
+                "type": "string",
+                "pattern": "^#[0-9a-fA-F]{6}$",
+                "patternErrorMessage": "Use a #rrggbb color",
+                "description": "Text color"
+              },
+              "background": {
+                "type": "string",
+                "pattern": "^#[0-9a-fA-F]{6}$",
+                "patternErrorMessage": "Use a #rrggbb color",
+                "description": "Row color"
+              },
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              }
+            },
+            "required": [
+              "name",
+              "filter"
+            ]
+          },
+          "default": [
+            {
+              "name": "Bad TCP",
+              "filter": "tcp.analysis.flags && !tcp.analysis.window_update && !tcp.analysis.keep_alive && !tcp.analysis.keep_alive_ack",
+              "foreground": "#f78787",
+              "background": "#12272e"
+            },
+            {
+              "name": "Checksum Errors",
+              "filter": "eth.fcs.status == \"Bad\" || ip.checksum.status == \"Bad\" || tcp.checksum.status == \"Bad\" || udp.checksum.status == \"Bad\" || sctp.checksum.status == \"Bad\"",
+              "foreground": "#f78787",
+              "background": "#12272e"
+            },
+            {
+              "name": "TCP RST",
+              "filter": "tcp.flags.reset == 1",
+              "foreground": "#fffc9c",
+              "background": "#a40000"
+            },
+            {
+              "name": "ICMP errors",
+              "filter": "icmp.type == 3 || icmp.type == 4 || icmp.type == 5 || icmp.type == 11 || (icmpv6.type >= 1 && icmpv6.type <= 4)",
+              "foreground": "#b7f774",
+              "background": "#12272e"
+            },
+            {
+              "name": "ARP",
+              "filter": "arp",
+              "foreground": "#12272e",
+              "background": "#faf0d7"
+            },
+            {
+              "name": "ICMP",
+              "filter": "icmp || icmpv6",
+              "foreground": "#12272e",
+              "background": "#fce0ff"
+            },
+            {
+              "name": "TCP SYN/FIN",
+              "filter": "tcp.flags & 0x02 || tcp.flags.fin == 1",
+              "foreground": "#12272e",
+              "background": "#a0a0a0"
+            },
+            {
+              "name": "HTTP",
+              "filter": "http || tcp.port == 80 || http2",
+              "foreground": "#12272e",
+              "background": "#e4ffc7"
+            },
+            {
+              "name": "DNS",
+              "filter": "dns || mdns || llmnr",
+              "foreground": "#12272e",
+              "background": "#c8e2ff"
+            },
+            {
+              "name": "SMB",
+              "filter": "smb || nbss || nbns || netbios",
+              "foreground": "#12272e",
+              "background": "#feffd0"
+            },
+            {
+              "name": "Routing",
+              "filter": "hsrp || eigrp || ospf || bgp || cdp || vrrp || carp || gvrp || igmp || ismp",
+              "foreground": "#12272e",
+              "background": "#fff3d6"
+            },
+            {
+              "name": "TCP",
+              "filter": "tcp",
+              "foreground": "#12272e",
+              "background": "#e7e6ff"
+            },
+            {
+              "name": "UDP",
+              "filter": "udp",
+              "foreground": "#12272e",
+              "background": "#daeeff"
+            },
+            {
+              "name": "Broadcast",
+              "filter": "eth[0] & 1",
+              "foreground": "#babdb6",
+              "background": "#ffffff"
+            }
+          ],
+          "markdownDescription": "Packet list coloring rules, like Wireshark's *View \u203a Coloring Rules*: the **first** rule whose display filter matches colors the packet. Colors are `#rrggbb`; set `\"enabled\": false` to keep a rule without using it. *Colorize with Filter\u2026* in the detail tree's context menu adds a rule at the top."
         },
         "pcapViewer.maxCachedFrames": {
           "type": "integer",

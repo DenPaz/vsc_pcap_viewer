@@ -66,7 +66,8 @@
 
   /**
    * @typedef {{id: string, title: string, field: string, numeric?: boolean, custom?: boolean}} Column
-   * @typedef {{number: number, cells: string[]}} Row
+   * @typedef {{number: number, cells: string[], color?: number, cid?: number}} Row
+   * @typedef {{name: string, foreground: string, background: string}} ColorRule
    */
   const state = {
     ready: false,
@@ -95,6 +96,8 @@
     /** @type {number | null} */ filterRequest: null,
     validateSeq: 0,
     /** @type {number | null} */ elapsedMs: null,
+    /** Palette for rows whose list_packets result had this coloringId. */
+    /** @type {{id: number, rules: ColorRule[]} | null} */ coloring: null,
   };
 
   // ------------------------------------------------------------------ rpc
@@ -185,6 +188,10 @@
         if (suggest.mode === "saved") {
           showSavedMenu();
         }
+        break;
+      case "coloring":
+        state.coloring = msg.rules.length ? { id: msg.coloringId, rules: msg.rules } : null;
+        refreshRows();
         break;
     }
   });
@@ -381,7 +388,23 @@
   // ------------------------------------------------------------------ view / paging
 
   function computeViewKey() {
-    return [state.filterId, state.sort ? `${state.sort.field}:${state.sort.desc}` : "", state.customColumns.map((c) => c.field).join(",")].join("|");
+    return [
+      state.filterId,
+      state.sort ? `${state.sort.field}:${state.sort.desc}` : "",
+      state.customColumns.map((c) => c.field).join(","),
+      state.coloring?.id ?? 0,
+    ].join("|");
+  }
+
+  /** Refetch the visible rows in place (same order and scroll position), e.g. after new colors. */
+  function refreshRows() {
+    for (const id of state.inflightPages.values()) {
+      cancelRpc(id);
+    }
+    state.inflightPages.clear();
+    state.pages.clear();
+    state.viewKey = computeViewKey();
+    render();
   }
 
   /** Drop cached pages (filter, sort or columns changed) and re-render. */
@@ -462,6 +485,11 @@
       rowEl.classList.toggle("loading", !row);
       rowEl.classList.toggle("selected", index === state.selectedIndex);
       rowEl.setAttribute("aria-selected", String(index === state.selectedIndex));
+      // Coloring rule colors, except on the selected row (it keeps the theme's selection colors).
+      const rule = index !== state.selectedIndex ? lib.rowColors(row, state.coloring) : null;
+      rowEl.classList.toggle("colored", !!rule);
+      rowEl.style.backgroundColor = rule ? rule.background : "";
+      rowEl.style.color = rule ? rule.foreground : "";
       for (let c = 0; c < cols.length; c++) {
         const cell = /** @type {HTMLElement} */ (rowEl.children[c]);
         let text = row ? row.cells[c] ?? "" : c === 0 ? "…" : "";
@@ -501,6 +529,9 @@
           if (res.rejectedColumns?.length) {
             dropColumns(res.rejectedColumns);
             return;
+          }
+          for (const row of res.rows) {
+            row.cid = res.coloringId;
           }
           state.pages.set(key, res.rows);
           if (res.total !== state.total) {
@@ -1069,6 +1100,7 @@
       ["Follow HTTP Stream", /HTTP/.test(protocol) ? follow("http") : null],
       ["-", null],
       ["Decode As…", () => vscode.postMessage({ type: "decodeAs", frame: row.number })],
+      ["Export Packet Bytes…", () => vscode.postMessage({ type: "exportBytes", frame: row.number })],
       ["-", null],
       ["Copy Summary", () => copy(row.cells.join("\t"))],
       ["Copy Frame Number", () => copy(String(row.number))],
@@ -1094,6 +1126,7 @@
       ["…and Selected", filter && current ? () => applyFromTree(lib.combineFilter(current, filter, "and"), true) : null],
       ["…or Selected", filter && current ? () => applyFromTree(lib.combineFilter(current, filter, "or"), true) : null],
       ["…and not Selected", filter ? () => applyFromTree(lib.combineFilter(current, filter, "not"), true) : null],
+      ["Colorize with Filter…", filter ? () => vscode.postMessage({ type: "colorize", filter }) : null],
       ["-", null],
       ["Copy Value", node.show !== undefined ? () => copy(node.show) : null],
       ["Copy Line", () => copy(node.label)],

@@ -274,3 +274,17 @@ suite("webview lib: follow stream and statistics helpers", () => {
     assert.deepEqual(lib.niceTicks(0.9), [0, 0.5, 1]);
   });
 });
+
+suite("webview lib: coloring", () => {
+  const coloring = { id: 3, rules: [{ foreground: "#000000", background: "#e4ffc7" }, { foreground: "red", background: "#ffffff" }] };
+
+  test("rowColors uses the rule of the current coloring only", () => {
+    assert.deepEqual(lib.rowColors({ color: 0, cid: 3 }, coloring), coloring.rules[0]);
+    assert.equal(lib.rowColors({ color: 0, cid: 2 }, coloring), null); // stale page
+    assert.equal(lib.rowColors({ cid: 3 }, coloring), null); // no rule matched
+    assert.equal(lib.rowColors({ color: 5, cid: 3 }, coloring), null);
+    assert.equal(lib.rowColors({ color: 1, cid: 3 }, coloring), null); // invalid color
+    assert.equal(lib.rowColors({ color: 0, cid: 3 }, null), null);
+    assert.equal(lib.rowColors(undefined, coloring), null);
+  });
+});
