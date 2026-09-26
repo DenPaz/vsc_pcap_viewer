@@ -8,7 +8,13 @@ from typing import Any
 import pytest
 
 from pcap_backend.cancellation import CancelledError
-from pcap_backend.pcap_service import PcapService, parse_capinfos, parse_field_list
+from pcap_backend.pcap_service import (
+    PcapService,
+    parse_capinfos,
+    parse_decode_as_choices,
+    parse_field_list,
+    script_in_lua_message,
+)
 from pcap_backend.protocol import FilterError, InvalidParamsError, NotOpenError, RequestContext
 from pcap_backend.tshark import PROCESSES, ConfigError
 
@@ -315,3 +321,32 @@ def test_parse_field_list() -> None:
             "blurb": "Source IP",
         }
     ]
+
+
+def test_parse_decode_as_choices() -> None:
+    stderr = (
+        'tshark: Unknown protocol -- "x"\n'
+        'tshark: Valid protocols for layer type "tcp.port" are:\n'
+        "\t5co_rap (FiveCo RAP Register Access Protocol)\n"
+        "\thttp (Hypertext Transfer Protocol)\r\n"
+        "not a choice\n"
+    )
+    assert parse_decode_as_choices(stderr) == [
+        {"name": "5co_rap", "desc": "FiveCo RAP Register Access Protocol"},
+        {"name": "http", "desc": "Hypertext Transfer Protocol"},
+    ]
+
+
+def test_script_in_lua_message_handles_shortened_paths() -> None:
+    scripts = ["/home/me/proj/dissectors/very/long/path/to/broken.lua", "/home/me/other.lua"]
+    msg = "Lua: syntax error: ...proj/dissectors/very/long/path/to/broken.lua:2: ')' expected"
+    assert script_in_lua_message(scripts, msg) == scripts[0]
+    assert (
+        script_in_lua_message(scripts, "Lua: Error during loading:\n/home/me/other.lua:1: boom")
+        == scripts[1]
+    )
+    assert script_in_lua_message(scripts, "Lua: something without a path") is None
+    # An ambiguous tail matches nothing rather than the wrong script.
+    assert script_in_lua_message(["/a/x.lua", "/b/x.lua"], "Lua: ...x.lua:1: e") is None
+    win = [r"C:\\Users\\me\\diss\\proto.lua"]
+    assert script_in_lua_message(win, r"Lua: syntax error: ...me\\diss\\proto.lua:3: e") == win[0]
