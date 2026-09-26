@@ -18,6 +18,9 @@ user-facing description.
 | Regenerate fixtures | `uv run python test/fixtures/generate.py` |
 | Perf check | `uv run python test/fixtures/generate.py --large 1000000 test/fixtures/large-1m.pcap && uv run python -u test/perf/bench.py test/fixtures/large-1m.pcap` |
 | Package | `pnpm run package` (vsce, `--no-dependencies`) |
+| Update dev deps | `make update` (`ncu -u` within `.ncurc.cjs`, `pnpm install`, `uv lock --upgrade`, `uv sync`) |
+
+The `Makefile` wraps all of these (`make` lists the targets; `make check` = lint + tests).
 
 ## Toolchain
 
