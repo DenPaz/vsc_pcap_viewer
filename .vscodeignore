@@ -9,6 +9,7 @@ node_modules/**
 out/test/**
 src/**/*.ts
 !src/webview/**
+src/webview/**/*.d.ts
 test/**
 **/.ruff_cache/**
 **/.mypy_cache/**

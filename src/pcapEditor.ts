@@ -3,12 +3,14 @@ import * as fs from "node:fs";
 import * as vscode from "vscode";
 import { BackendClient, ErrorCodes, RpcError, findPython } from "./backendClient";
 import { Settings, readSettings } from "./config";
-import { HostToWebview, OpenResult, WEBVIEW_RPC_METHODS, WebviewToHost } from "./messages";
+import { ColoringResult, HostToWebview, OpenResult, WEBVIEW_RPC_METHODS, WebviewToHost } from "./messages";
 import { saveFilterInteractive, showSavedFilters } from "./commands/savedFilters";
 import { FollowPanel } from "./panels/followPanel";
 import { ColumnSetting, SavedFilter, pushHistory } from "./settingsModel";
 
 const HISTORY_KEY = "pcapViewer.filterHistory";
+/** Coloring problems already shown in a notification (each is reported once per window). */
+const reportedColoringErrors = new Set<string>();
 
 class PcapDocument implements vscode.CustomDocument {
   constructor(readonly uri: vscode.Uri) {}
@@ -102,6 +104,7 @@ export class PcapEditorSession {
   private readonly disposables: vscode.Disposable[] = [];
   private disposed = false;
   private loadSeq = 0;
+  private coloring?: { id: number; client: BackendClient };
   private readonly ready: Promise<void>;
 
   constructor(
@@ -212,6 +215,7 @@ export class PcapEditorSession {
         savedFilters: settings.savedFilters,
         elapsedMs: Date.now() - started,
       });
+      void this.applyColoring();
     } catch (err) {
       if (seq !== this.loadSeq || this.disposed) {
         return;
@@ -317,6 +321,12 @@ export class PcapEditorSession {
       case "decodeAs":
         await vscode.commands.executeCommand("pcapViewer.decodeAs", msg.frame);
         return;
+      case "colorize":
+        await vscode.commands.executeCommand("pcapViewer.colorizeWithFilter", msg.filter);
+        return;
+      case "exportBytes":
+        await vscode.commands.executeCommand("pcapViewer.exportPacketBytes", msg.frame);
+        return;
       case "copy":
         await vscode.env.clipboard.writeText(String(msg.text));
         vscode.window.setStatusBarMessage("Copied to clipboard", 2000);
@@ -356,6 +366,70 @@ export class PcapEditorSession {
     } finally {
       this.inflight.delete(id);
     }
+  }
+
+  // ------------------------------------------------------------------ coloring
+
+  /**
+   * Evaluate the coloring rules in the backend (one tshark pass, in the
+   * background) and send the palette to the webview once rows carry colors.
+   * A newer call cancels a running one.
+   */
+  async applyColoring(): Promise<void> {
+    const client = this.client;
+    if (!client?.running || !this.info) {
+      return;
+    }
+    if (this.coloring?.client === client) {
+      client.cancel(this.coloring.id);
+    }
+    const settings = readSettings(this.uri);
+    const rules = settings.colorize ? settings.coloringRules : [];
+    const pending = client.send<ColoringResult>(
+      "set_coloring",
+      { rules: rules.map((r) => ({ filter: r.filter, foreground: r.foreground, background: r.background })) },
+      { timeoutMs: 0 },
+    );
+    const coloring = { id: pending.id, client };
+    this.coloring = coloring;
+    let result: ColoringResult;
+    try {
+      result = await (rules.length
+        ? vscode.window.withProgress({ location: vscode.ProgressLocation.Window, title: "Colorizing packets" }, () => pending.promise)
+        : pending.promise);
+    } catch (err) {
+      if (!(err instanceof RpcError && err.cancelled) && this.client === client) {
+        this.log.warn(`${this.uri.fsPath}: coloring failed: ${describeError(err)}`);
+      }
+      return;
+    } finally {
+      if (this.coloring === coloring) {
+        this.coloring = undefined;
+      }
+    }
+    if (this.client !== client || this.disposed) {
+      return;
+    }
+    const problems = Object.entries(result.errors).map(([i, message]) => `Coloring rule "${rules[Number(i)]?.name ?? i}" skipped: ${message}`);
+    for (const p of problems) {
+      this.log.warn(p);
+    }
+    const fresh = problems.filter((p) => !reportedColoringErrors.has(p));
+    if (fresh.length) {
+      fresh.forEach((p) => reportedColoringErrors.add(p));
+      void vscode.window.showWarningMessage(`PCAP Viewer: ${fresh[0]}${fresh.length > 1 ? ` (+${fresh.length - 1} more)` : ""}`, "Edit Rules", "Show Log").then((choice) => {
+        if (choice === "Edit Rules") {
+          void vscode.commands.executeCommand("pcapViewer.manageColoringRules");
+        } else if (choice === "Show Log") {
+          this.log.show();
+        }
+      });
+    }
+    this.post({
+      type: "coloring",
+      coloringId: result.coloringId,
+      rules: rules.map((r) => ({ name: r.name, foreground: r.foreground, background: r.background })),
+    });
   }
 
   // ------------------------------------------------------------------ commands
@@ -423,6 +497,7 @@ export class PcapEditorSession {
     const client = this.client;
     this.client = undefined;
     this.info = undefined;
+    this.coloring = undefined;
     this.inflight.clear();
     if (client) {
       await client.dispose();

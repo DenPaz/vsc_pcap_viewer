@@ -287,15 +287,19 @@ def run(
 
 
 def stream_lines(
-    argv: Sequence[str], result: StreamResult, token: CancelToken | None = None
+    argv: Sequence[str],
+    result: StreamResult,
+    token: CancelToken | None = None,
+    env: Mapping[str, str] | None = None,
 ) -> Iterator[bytes]:
     """Yield stdout lines (with trailing newline stripped) as the process runs.
 
     ``result`` receives the exit code and stderr when the generator finishes.
-    Closing the generator early kills the process.
+    Closing the generator early kills the process. ``env`` replaces the
+    environment when given.
     """
     token = token or CancelToken()
-    proc = _popen(argv)
+    proc = _popen(argv, env)
     PROCESSES.add(proc)
     collector = _StderrCollector(proc)
     collector.start()
@@ -355,6 +359,9 @@ class _EmptyCapture:
 
 
 EMPTY_CAPTURE = _EmptyCapture()
+
+_FOLDERS: dict[Path, str] = {}
+_FOLDERS_LOCK = threading.Lock()
 
 
 class Tshark:
@@ -417,6 +424,16 @@ class Tshark:
                 res = run([str(self.path), "-G", "fields"], token, env=env)
                 outputs.append(res.stdout.decode("utf-8", "replace"))
         return "\n".join(outputs)
+
+    def folders(self, token: CancelToken | None = None) -> str:
+        """``tshark -G folders`` output (configuration and plugin locations), cached."""
+        with _FOLDERS_LOCK:
+            cached = _FOLDERS.get(self.path)
+        if cached is None:
+            cached = run([str(self.path), "-G", "folders"], token).stdout.decode("utf-8", "replace")
+            with _FOLDERS_LOCK:
+                _FOLDERS[self.path] = cached
+        return cached
 
     def version(self) -> str:
         res = run([str(self.path), "--version"])

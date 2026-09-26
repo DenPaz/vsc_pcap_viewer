@@ -567,6 +567,23 @@
     return `${u === 0 ? v : v.toFixed(1)} ${units[u]}`;
   }
 
+  const COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+
+  /**
+   * Colors for a packet-list row: the coloring rule its `color` index names,
+   * if the row came from the current coloring (`cid`) and both colors are valid.
+   * @param {{color?: number, cid?: number} | undefined} row
+   * @param {{id: number, rules: {foreground: string, background: string}[]} | null} coloring
+   * @returns {{foreground: string, background: string} | null}
+   */
+  function rowColors(row, coloring) {
+    if (!row || !coloring || row.cid !== coloring.id || typeof row.color !== "number") {
+      return null;
+    }
+    const rule = coloring.rules[row.color];
+    return rule && COLOR_RE.test(rule.foreground) && COLOR_RE.test(rule.background) ? rule : null;
+  }
+
   const api = {
     MAX_SCROLL_HEIGHT,
     computeWindow,
@@ -595,6 +612,7 @@
     formatOffset,
     formatRelativeTime,
     formatBytes,
+    rowColors,
   };
 
   if (typeof module === "object" && module.exports) {

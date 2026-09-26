@@ -385,6 +385,11 @@ button.icon:hover {
   background: var(--vscode-list-hoverBackground);
 }
 
+/* Coloring rules set the row colors inline; hover darkens them instead. */
+#list-rows .list-row.colored:hover {
+  filter: brightness(0.92);
+}
+
 #list-rows .list-row.selected {
   color: var(--vscode-list-inactiveSelectionForeground, inherit);
   background: var(--vscode-list-inactiveSelectionBackground);

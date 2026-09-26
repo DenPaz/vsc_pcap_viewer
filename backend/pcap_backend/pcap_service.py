@@ -10,8 +10,13 @@ process per open editor). All heavy lifting is delegated to tshark:
 * ``packet_detail`` runs ``-T pdml`` and ``-x`` for one frame, reading only up
   to that frame (``-c N``) so dissection state from earlier packets (TCP
   reassembly etc.) is still correct.
+* ``set_coloring`` runs one ``--color`` pass and keeps a one-byte rule index
+  per frame; ``list_packets`` rows then carry their ``color``.
+* ``export`` writes filtered captures with tshark (``-Y … -w``) and the packet
+  list (CSV/JSON) straight from the row store.
 """
 
+import os
 import re
 import shutil
 import tempfile
@@ -24,9 +29,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import pdml, stats
+from . import coloring, pdml, stats
 from .cache import FrameIndex, LruCache, RowStore, sort_frames
 from .cancellation import CancelledError, CancelToken
+from .export import (
+    CAPTURE_FORMATS,
+    EXPORT_KINDS,
+    LIST_FORMATS,
+    PacketListWriter,
+    atomic_output,
+    check_destination,
+)
 from .fields import FieldCatalog, parse_field_list
 from .protocol import (
     FilterError,
@@ -48,6 +61,7 @@ from .tshark import (
 )
 
 MAX_PAGE = 5000
+EXPORT_CHUNK = 5000
 PROGRESS_INTERVAL_S = 0.2
 
 
@@ -166,6 +180,10 @@ class PcapService:
         self._details: LruCache[int, dict[str, Any]] = LruCache(detail_cache_size)
         self._field_index: LruCache[tuple[str, ...], FieldCatalog] = LruCache(2)
         self._decode_as: LruCache[str, list[dict[str, str]]] = LruCache(32)
+        # Coloring: rule index + 1 per frame (0 = no rule), from the latest set_coloring.
+        self._colors: array[int] | None = None
+        self._coloring_id = 0
+        self._coloring_seq = 0
         self._pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="svc")
 
     # ------------------------------------------------------------------ lifecycle
@@ -199,6 +217,7 @@ class PcapService:
                 s.rows.close()
         self._file = None
         self._view = None
+        self._colors = None
         for cache in (self._filters, self._sorts, self._sort_columns, self._details):
             cache.clear()
         if self._work_dir is not None:
@@ -514,15 +533,24 @@ class PcapService:
         n_base = len(BASE_COLUMNS)
         base_rows = f.base.rows.get_many(frames)
         extra_cols = [self._column_cells(f, fld, frames) for fld in extra_fields]
-        rows = [
+        rows: list[dict[str, Any]] = [
             {"number": n, "cells": base_rows[i][:n_base] + [col[i] for col in extra_cols]}
             for i, n in enumerate(frames)
         ]
+        with self._lock:
+            colors, coloring_id = self._colors, self._coloring_id
+        if colors is not None:
+            for row in rows:
+                n = row["number"]
+                if 0 < n < len(colors) and colors[n]:
+                    row["color"] = colors[n] - 1
         return {
             "offset": offset,
             "rows": rows,
             "total": len(view_ordered),
             "filterId": view.filter_id,
+            # Row "color" values index the rules of this set_coloring call (0 = none).
+            "coloringId": coloring_id if colors is not None else 0,
             "columns": [c.field for c in BASE_COLUMNS] + extra_fields,
             # Unknown to tshark: their cells are blank; the UI should drop them.
             "rejectedColumns": rejected,
@@ -778,6 +806,205 @@ class PcapService:
 
     # ------------------------------------------------------------------ fields
 
+    # ------------------------------------------------------------------ coloring
+
+    def set_coloring(self, params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
+        """Evaluate coloring rules (first match wins) for every frame in one pass.
+
+        ``rules``: ``[{filter, foreground?, background?}]`` in priority order; an
+        empty list turns coloring off. Returns ``coloringId`` (echoed by
+        ``list_packets``) and per-rule ``errors`` (index → message) for rules
+        that were skipped because they don't compile or are malformed.
+        """
+        raw = params.get("rules") or []
+        if not isinstance(raw, list):
+            raise InvalidParamsError("parameter 'rules' must be a list")
+        f = self._require_file()
+        with self._lock:
+            self._coloring_seq += 1
+            seq = self._coloring_seq
+        rules = [coloring.parse_rule(r) for r in raw[: coloring.MAX_RULES]]
+        errors = {i: r for i, r in enumerate(rules) if isinstance(r, str)}
+        errors.update({i: "too many coloring rules" for i in range(coloring.MAX_RULES, len(raw))})
+        valid = sum(isinstance(r, coloring.ColorRule) for r in rules)
+        colors: array[int] | None = None
+        colored = 0
+        if valid:
+            colors = array("B", bytes(f.info.frames + 1))
+            result = StreamResult()
+            argv = f.tshark.argv(
+                "--color", "-T", "fields", "-e", "frame.number", "-e", "frame.coloring_rule.name",
+                capture=str(f.path),
+            )  # fmt: skip
+            personal = coloring.personal_config_dir(f.tshark.folders(ctx.token))
+            total = max(1, f.info.frames)
+            last_emit = 0.0
+            with tempfile.TemporaryDirectory(prefix="pcapviewer-colors-") as tmp:
+                coloring.prepare_config_dir(Path(tmp), rules, personal)
+                env = {**os.environ, "WIRESHARK_CONFIG_DIR": tmp}
+                for line in stream_lines(argv, result, ctx.token, env=env):
+                    number, _, rule = line.partition(b"\t")
+                    try:
+                        n, idx = int(number), int(rule)
+                    except ValueError:
+                        continue
+                    if 0 < n < len(colors) and 0 <= idx < len(rules):
+                        colors[n] = idx + 1
+                        colored += 1
+                    now = time.monotonic()
+                    if now - last_emit >= PROGRESS_INTERVAL_S:
+                        last_emit = now
+                        ctx.progress({"phase": "color", "fraction": min(0.99, n / total)})
+            if result.returncode not in (0, None) and result.lines == 0:
+                raise ToolError(
+                    result.stderr or "tshark coloring pass failed", result.stderr, result.returncode
+                )
+            errors.update(coloring.parse_compile_errors(result.stderr))
+        with self._lock:
+            if seq != self._coloring_seq:
+                raise CancelledError("superseded by newer coloring rules")
+            if self._file is not f:
+                raise NotOpenError()
+            self._coloring_id += 1
+            self._colors = colors
+            coloring_id = self._coloring_id
+        return {
+            "coloringId": coloring_id,
+            "colored": colored,
+            "errors": {str(i): msg for i, msg in sorted(errors.items())},
+        }
+
+    # ------------------------------------------------------------------ export
+
+    def export(self, params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
+        """Write an export file at ``dest`` (absolute path, never the open capture).
+
+        ``kind``:
+
+        * ``pcapng`` / ``pcap``: packets matching ``filter`` (default: the current
+          display filter; ``""`` for all packets), written by tshark.
+        * ``csv`` / ``json``: the packet list of the current view, in its current
+          order, with the base columns plus ``columns`` (custom fields; titles in
+          the parallel ``titles`` list).
+        * ``bytes``: the raw bytes of frame ``number`` (data ``source`` index,
+          default 0: the frame itself).
+
+        The file only appears once complete; cancelling leaves nothing behind.
+        """
+        kind = param(params, "kind", str)
+        if kind not in EXPORT_KINDS:
+            raise InvalidParamsError(f"kind must be one of {', '.join(EXPORT_KINDS)}")
+        f = self._require_file()
+        dest = check_destination(param(params, "dest", str), f.path)
+        if kind in CAPTURE_FORMATS:
+            result = self._export_capture(f, kind, dest, params, ctx)
+        elif kind in LIST_FORMATS:
+            result = self._export_list(f, kind, dest, params, ctx)
+        else:
+            result = self._export_bytes(dest, params, ctx)
+        result.update({"ok": True, "path": str(dest), "size": dest.stat().st_size})
+        return result
+
+    def _export_capture(
+        self, f: _Open, fmt: str, dest: Path, params: dict[str, Any], ctx: RequestContext
+    ) -> dict[str, Any]:
+        if "filter" in params:
+            flt = param(params, "filter", str, "").strip()
+        else:
+            flt = self._require_view()[1].expr
+        packets = 0
+        with atomic_output(dest) as tmp:
+            if flt:
+                error = f.tshark.validate_filter(flt, ctx.token)
+                if error:
+                    raise FilterError(error, {"expr": flt})
+                # -P prints each written packet's number: that is our progress.
+                argv = f.tshark.argv(
+                    "-Y", flt, "-F", fmt, "-w", str(tmp),
+                    "-P", "-T", "fields", "-e", "frame.number",
+                    capture=str(f.path),
+                )  # fmt: skip
+            else:
+                # Every packet: nothing to dissect, tshark just copies records.
+                argv = f.tshark.argv("-F", fmt, "-w", str(tmp), capture=str(f.path), dissect=False)
+            result = StreamResult()
+            total = max(1, f.info.frames)
+            last_emit = 0.0
+            ctx.progress({"phase": "export", "fraction": None})
+            for line in stream_lines(argv, result, ctx.token):
+                try:
+                    n = int(line)
+                except ValueError:
+                    continue
+                packets += 1
+                now = time.monotonic()
+                if now - last_emit >= PROGRESS_INTERVAL_S:
+                    last_emit = now
+                    ctx.progress({"phase": "export", "fraction": min(0.99, n / total)})
+            truncated = any(h in result.stderr for h in _TRUNCATION_HINTS)
+            if result.returncode not in (0, None) and not (truncated and tmp.exists()):
+                raise ToolError(
+                    result.stderr or f"tshark exited with code {result.returncode}",
+                    result.stderr,
+                    result.returncode,
+                )
+            if not tmp.exists():
+                raise ToolError(result.stderr or "tshark wrote no output file", result.stderr)
+        return {
+            "packets": packets if flt else f.info.frames,
+            "filter": flt,
+            "warnings": _stderr_warnings(result.stderr),
+        }
+
+    def _export_list(
+        self, f: _Open, fmt: str, dest: Path, params: dict[str, Any], ctx: RequestContext
+    ) -> dict[str, Any]:
+        _f, view = self._require_view()
+        base_fields = {c.field for c in BASE_COLUMNS}
+        requested = str_list(params, "columns") if "columns" in params else list(f.columns)
+        titles = str_list(params, "titles")
+        title_of = {
+            fld: (titles[i] if i < len(titles) and titles[i].strip() else fld)
+            for i, fld in enumerate(requested)
+        }
+        custom = [c for c in self._check_fields(requested) if c not in base_fields]
+        self._ensure_columns(f, custom, ctx)
+        custom = [c for c in custom if c not in f.rejected]
+        headers = [c.title for c in BASE_COLUMNS] + [title_of.get(c, c) for c in custom]
+        keys = [c.id for c in BASE_COLUMNS] + custom
+        numeric = [c.numeric for c in BASE_COLUMNS] + [False] * len(custom)
+        ordered = view.ordered
+        total = len(ordered)
+        n_base = len(BASE_COLUMNS)
+        with atomic_output(dest) as tmp, tmp.open("w", encoding="utf-8", newline="") as fh:
+            writer = PacketListWriter(fh, fmt, headers, keys, numeric)
+            for offset in range(0, total, EXPORT_CHUNK):
+                ctx.token.raise_if_cancelled()
+                frames = ordered.slice(offset, EXPORT_CHUNK)
+                base_rows = f.base.rows.get_many(frames)
+                extra = [self._column_cells(f, fld, frames) for fld in custom]
+                writer.write(
+                    base_rows[i][:n_base] + [col[i] for col in extra] for i in range(len(frames))
+                )
+                ctx.progress(
+                    {"phase": "export", "fraction": min(0.99, (offset + len(frames)) / total)}
+                )
+            writer.close()
+        return {"packets": total, "filter": view.expr, "columns": keys}
+
+    def _export_bytes(
+        self, dest: Path, params: dict[str, Any], ctx: RequestContext
+    ) -> dict[str, Any]:
+        number = param(params, "number", int)
+        source = param(params, "source", int, 0)
+        sources = self.packet_detail({"number": number}, ctx)["sources"]
+        if not 0 <= source < len(sources):
+            raise InvalidParamsError(f"frame {number} has no data source {source}")
+        data = bytes.fromhex(sources[source]["hex"])
+        with atomic_output(dest) as tmp:
+            tmp.write_bytes(data)
+        return {"number": number, "source": sources[source]["name"], "bytes": len(data)}
+
     # ------------------------------------------------------------------ dissectors
 
     def check_dissectors(self, params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
@@ -985,6 +1212,8 @@ def rpc_methods(service: PcapService) -> dict[str, Callable[[dict[str, Any], Req
         "stats": service.stats,
         "check_dissectors": service.check_dissectors,
         "decode_as_options": service.decode_as_options,
+        "set_coloring": service.set_coloring,
+        "export": service.export,
         "close": service.close,
     }
 

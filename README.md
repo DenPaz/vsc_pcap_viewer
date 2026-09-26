@@ -4,7 +4,7 @@ Open `.pcap` / `.pcapng` captures directly in VS Code with a Wireshark-like
 packet list, protocol tree and hex view. All dissection and filtering is done
 by **tshark** (Wireshark's command-line tool), so results match Wireshark exactly.
 
-> Status: early development (v0.1). Offline analysis only; live capture is out of scope.
+> Status: v0.1, feature-complete against the project brief. Offline analysis only; live capture is out of scope.
 
 ## Features
 
@@ -28,7 +28,22 @@ by **tshark** (Wireshark's command-line tool), so results match Wireshark exactl
   **two-way highlighting** (select a field to see its bytes; click a byte to
   find its field), including reassembled data (e.g. HTTP over several TCP segments).
 - Tree context menu: *Apply as Filter*, *Prepare as Filter*, *…and/or/and not
-  Selected*, *Copy Value / Line / Field Name / as Filter / Bytes*.
+  Selected*, *Colorize with Filter…*, *Copy Value / Line / Field Name / as Filter / Bytes*.
+- **Coloring rules** like Wireshark's: the first matching rule colors a packet.
+  A default set (bad TCP, checksum errors, TCP RST, ICMP errors, ARP, ICMP,
+  SYN/FIN, HTTP, DNS, SMB, routing, TCP, UDP, broadcast) comes with the
+  extension. Rules live in `pcapViewer.coloringRules`, so they can be edited,
+  disabled (`"enabled": false`) or shared per workspace. *Colorize with Filter…*
+  adds a rule on top, *PCAP: Toggle Packet Coloring* turns coloring off.
+  Changing rules recolors open captures in the background without re-indexing.
+- **Export**: *PCAP: Export Specified Packets…* writes the displayed packets,
+  all packets or the selected packet to a new **pcapng** or **pcap** file.
+  *PCAP: Export Packet List as CSV/JSON…* saves the displayed rows (current
+  filter and sort order, including custom columns). *PCAP: Export Packet
+  Bytes…* (also in the packet list's right-click menu) saves a packet's raw
+  bytes or its reassembled data. The follow-stream panel saves stream data.
+  Exports appear only once complete, so cancelling leaves no partial file,
+  and the open capture can never be overwritten.
 - **Follow TCP / UDP / TLS / HTTP stream** from the selected packet (right-click
   a packet or use the command palette). The stream opens in a panel with the
   two directions coloured and labelled. You can show one direction only, switch
@@ -82,6 +97,11 @@ Open any `.pcap`, `.pcapng` or `.cap` file. It opens in the PCAP Viewer by defau
 | PCAP: New Lua Dissector… | | Create a dissector from a template in the dissectors folder |
 | PCAP: Open Dissectors Folder | | Reveal (or set up) `pcapViewer.dissectorsFolder` |
 | PCAP: Decode As… / Manage Decode As Rules | | Add or remove `-d` rules (stored in settings) |
+| PCAP: Export Specified Packets… | | Displayed / all / selected packets to pcapng or pcap |
+| PCAP: Export Packet List as CSV/JSON… | | The displayed rows with their columns |
+| PCAP: Export Packet Bytes… | | Raw bytes of the selected packet (or a reassembled source) |
+| PCAP: Colorize with Filter… | | Add a coloring rule (also in the detail tree's right-click menu) |
+| PCAP: Toggle Packet Coloring / Manage Coloring Rules | | Turn coloring on or off / edit `pcapViewer.coloringRules` |
 | PCAP: Show Log | | Backend and tshark messages (Lua errors, warnings) |
 
 Keyboard: in the list use ↑/↓/PgUp/PgDn/Home/End, `Enter`/`→` to move to the
@@ -100,6 +120,8 @@ filter bar restores the applied filter.
 | `pcapViewer.prefs` | Preference overrides, e.g. `{ "tcp.desegment_tcp_streams": false }` |
 | `pcapViewer.columns` | Extra columns: `"tcp.stream"` or `{ "field": "http.host", "title": "Host" }` |
 | `pcapViewer.savedFilters` | Named filters: `{ "name": "Web", "filter": "http \|\| tls" }` |
+| `pcapViewer.coloringRules` | Coloring rules, first match wins: `{ "name": "DNS", "filter": "dns", "foreground": "#12272e", "background": "#c8e2ff" }` |
+| `pcapViewer.colorize` | Color the packet list (default `true`) |
 | `pcapViewer.maxCachedFrames` | Backend cache budget for filter results / sort orders |
 | `pcapViewer.requestTimeoutSeconds` | Timeout for quick requests (long ones are cancellable instead) |
 
@@ -125,6 +147,13 @@ Webview (HTML/JS)  --postMessage-->  Extension host (TypeScript)
   and caches the matching frame numbers (4 bytes per match).
 - Selecting a packet runs `tshark -c N -Y frame.number==N -T pdml` (and `-x`
   for the bytes), so tshark stops reading after that packet.
+- Coloring runs one `tshark --color` pass in the background and keeps one
+  byte per packet (the matching rule). tshark reads coloring rules only from
+  its configuration folder, so the pass points `WIRESHARK_CONFIG_DIR` at a
+  temporary folder with the generated rules and copies of your other
+  Wireshark settings.
+- Exporting packets runs `tshark -Y <filter> -w <file>`; the packet list and
+  packet bytes are written from the backend's own index and detail cache.
 
 ### Performance
 
@@ -150,8 +179,9 @@ file up to that packet so reassembly stays correct (see the roadmap below).
 
 ## Roadmap
 
-Planned (see the project brief): export (filtered pcapng, CSV/JSON,
-bytes), coloring rules, and a faster "quick view" of late packets in huge captures.
+Every item of the project brief is implemented. Possible next steps: a faster
+"quick view" of late packets in huge captures (without reassembly context),
+exporting full dissections (PDML/JSON), and a visual editor for coloring rules.
 
 ## Running locally (Linux)
 
@@ -263,6 +293,8 @@ See `CLAUDE.md` for architecture notes and design decisions.
 - Packet contents are untrusted: the webview inserts them only as text (never
   `innerHTML`) and runs under a strict Content-Security-Policy with a per-load nonce.
 - The webview can only call a fixed allow-list of backend methods.
+- CSV exports prefix cells that a spreadsheet would run as a formula (`=`,
+  `+`, `@`, `-`…) with `'`, since packet text is attacker-controlled.
 
 ## License and Wireshark
 

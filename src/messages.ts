@@ -48,6 +48,8 @@ export type WebviewToHost =
   | { type: "decodeAs"; frame: number }
   | { type: "follow"; proto: "tcp" | "udp" | "tls" | "http"; frame: number }
   | { type: "manageSavedFilters" }
+  | { type: "colorize"; filter: string }
+  | { type: "exportBytes"; frame: number }
   | { type: "copy"; text: string }
   | { type: "showLog" };
 
@@ -72,4 +74,14 @@ export type HostToWebview =
   | { type: "goto"; number: number }
   | { type: "columns"; columns: ColumnSetting[] }
   | { type: "history"; history: string[] }
-  | { type: "savedFilters"; savedFilters: SavedFilter[] };
+  | { type: "savedFilters"; savedFilters: SavedFilter[] }
+  /** Row `color` values of list_packets results with this `coloringId` index `rules`. */
+  | { type: "coloring"; coloringId: number; rules: { name: string; foreground: string; background: string }[] };
+
+/** Result of the backend's set_coloring. */
+export interface ColoringResult {
+  coloringId: number;
+  colored: number;
+  /** Rule index → why the rule was skipped. */
+  errors: Record<string, string>;
+}
