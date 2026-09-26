@@ -6,6 +6,9 @@ import * as assert from "node:assert/strict";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import type { PcapViewerApi } from "../../../src/extension";
+// Same module instances as the extension's (both load out/src/panels/*.js).
+import { FollowPanel } from "../../../src/panels/followPanel";
+import { StatsPanel } from "../../../src/panels/statsPanel";
 
 const FIXTURES = path.resolve(__dirname, "../../../../test/fixtures");
 
@@ -43,7 +46,16 @@ suite("PCAP Viewer smoke test", () => {
     const detail = await backend.request<{ tree: unknown[] }>("packet_detail", { number: 4 });
     assert.ok(detail.tree.length > 0);
 
-    // Closing the editor must stop the backend process.
+    // Follow stream and statistics panels talk to the same backend.
+    await vscode.commands.executeCommand("pcapViewer.followTcpStream", 4);
+    const follow = await waitFor(() => [...FollowPanel.panels][0]?.current);
+    assert.equal(follow.stream, 0);
+    assert.deepEqual(follow.bytes, [90, 491]);
+    session.reveal();
+    await vscode.commands.executeCommand("pcapViewer.statistics.conversations");
+    await waitFor(() => (StatsPanel.all.some((p) => p.kind === "conversations") ? true : undefined));
+
+    // Closing the editor must stop the backend process (and close its panels).
     await vscode.commands.executeCommand("workbench.action.closeAllEditors");
     await waitFor(() => (backend.running ? undefined : true), 10_000);
   });

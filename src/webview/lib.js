@@ -426,6 +426,109 @@
     return configured.filter((c) => ok.has(c.field));
   }
 
+  // ---------------------------------------------------------------- follow stream
+
+  /**
+   * Payload as text the way Wireshark's "ASCII" view shows it: printable
+   * characters, tabs and newlines kept (CR before LF dropped), everything
+   * else as ".".
+   * @param {Uint8Array} bytes
+   */
+  function bytesToAscii(bytes) {
+    let out = "";
+    for (let i = 0; i < bytes.length; i++) {
+      const b = bytes[i];
+      if (b === 0x0d && bytes[i + 1] === 0x0a) {
+        continue;
+      }
+      out += b === 0x0a || b === 0x09 || (b >= 0x20 && b < 0x7f) ? String.fromCharCode(b) : ".";
+    }
+    return out;
+  }
+
+  /**
+   * Classic hex dump (offset, 16 bytes, ASCII) starting at `offset`.
+   * @param {Uint8Array} bytes @param {number} [offset]
+   */
+  function hexDump(bytes, offset = 0) {
+    const lines = [];
+    for (let i = 0; i < bytes.length; i += 16) {
+      const chunk = bytes.subarray(i, i + 16);
+      const hex = [...chunk].map((b) => b.toString(16).padStart(2, "0"));
+      const left = hex.slice(0, 8).join(" ");
+      const right = hex.slice(8).join(" ");
+      const ascii = [...chunk].map(asciiChar).join("");
+      lines.push(`${(offset + i).toString(16).padStart(8, "0")}  ${left.padEnd(23)}  ${right.padEnd(23)}  ${ascii}`);
+    }
+    return lines.join("\n");
+  }
+
+  /** Display filter for a followed stream. @param {string} proto @param {number} stream */
+  function streamFilter(proto, stream) {
+    return `${proto === "udp" ? "udp" : "tcp"}.stream eq ${stream}`;
+  }
+
+  // ---------------------------------------------------------------- statistics tables
+
+  /** 1234567 -> "1,234,567"; floats keep up to 6 decimals. @param {unknown} v */
+  function formatCell(v) {
+    if (typeof v !== "number") {
+      return v === null || v === undefined ? "" : String(v);
+    }
+    return Number.isInteger(v) ? v.toLocaleString("en-US") : v.toLocaleString("en-US", { maximumFractionDigits: 6 });
+  }
+
+  /**
+   * Stable sort of table rows by one column (numbers numerically, text case-insensitively).
+   * @param {{cells: unknown[]}[]} rows @param {number} col @param {boolean} desc
+   */
+  function sortRows(rows, col, desc) {
+    const dir = desc ? -1 : 1;
+    return rows
+      .map((row, i) => ({ row, i }))
+      .sort((a, b) => {
+        const x = a.row.cells[col];
+        const y = b.row.cells[col];
+        const c =
+          typeof x === "number" && typeof y === "number"
+            ? x - y
+            : String(x ?? "").localeCompare(String(y ?? ""), undefined, { sensitivity: "base", numeric: true });
+        return c * dir || a.i - b.i;
+      })
+      .map((e) => e.row);
+  }
+
+  /** @param {{label: string}[]} columns @param {{cells: unknown[]}[]} rows */
+  function tableToCsv(columns, rows) {
+    /** @param {unknown} v */
+    const q = (v) => {
+      const s = v === null || v === undefined ? "" : String(v);
+      return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    return [columns.map((c) => q(c.label)).join(","), ...rows.map((r) => r.cells.map(q).join(","))].join("\n");
+  }
+
+  /**
+   * Clean axis ticks from 0 to at least `max` (1-2-5 steps), e.g. 0, 20, 40, 60.
+   * @param {number} max @param {number} [target] approximate number of intervals
+   */
+  function niceTicks(max, target = 4) {
+    if (!(max > 0)) {
+      return [0, 1];
+    }
+    const raw = max / target;
+    const mag = 10 ** Math.floor(Math.log10(raw));
+    const step = [1, 2, 5, 10].map((m) => m * mag).find((s) => s >= raw) ?? 10 * mag;
+    const ticks = [];
+    for (let v = 0; v < max + step / 2; v += step) {
+      ticks.push(Math.round(v * 1e9) / 1e9);
+    }
+    if (ticks[ticks.length - 1] < max) {
+      ticks.push(Math.round((ticks[ticks.length - 1] + step) * 1e9) / 1e9);
+    }
+    return ticks;
+  }
+
   /** @param {string} hex */
   function hexToBytes(hex) {
     const out = new Uint8Array(hex.length >> 1);
@@ -480,6 +583,13 @@
     applyCompletion,
     friendlyType,
     acceptedColumns,
+    bytesToAscii,
+    hexDump,
+    streamFilter,
+    formatCell,
+    sortRows,
+    tableToCsv,
+    niceTicks,
     hexToBytes,
     asciiChar,
     formatOffset,

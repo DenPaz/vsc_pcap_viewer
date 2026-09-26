@@ -44,6 +44,8 @@ export type WebviewToHost =
   | { type: "reload" }
   | { type: "filterApplied"; expr: string }
   | { type: "saveFilter"; expr: string }
+  | { type: "selection"; frame: number | null }
+  | { type: "follow"; proto: "tcp" | "udp" | "tls" | "http"; frame: number }
   | { type: "manageSavedFilters" }
   | { type: "copy"; text: string }
   | { type: "showLog" };
@@ -64,6 +66,7 @@ export type HostToWebview =
   | { type: "rpcResult"; id: number; result: unknown }
   | { type: "rpcError"; id: number; error: { code: number; message: string; data?: unknown } }
   | { type: "applyFilter"; expr: string }
+  | { type: "prepareFilter"; expr: string }
   | { type: "focusFilter" }
   | { type: "goto"; number: number }
   | { type: "columns"; columns: ColumnSetting[] }

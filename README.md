@@ -29,6 +29,16 @@ by **tshark** (Wireshark's command-line tool), so results match Wireshark exactl
   find its field), including reassembled data (e.g. HTTP over several TCP segments).
 - Tree context menu: *Apply as Filter*, *Prepare as Filter*, *…and/or/and not
   Selected*, *Copy Value / Line / Field Name / as Filter / Bytes*.
+- **Follow TCP / UDP / TLS / HTTP stream** from the selected packet (right-click
+  a packet or use the command palette). The stream opens in a panel with the
+  two directions coloured and labelled. You can show one direction only, switch
+  between ASCII, hex dump and raw hex, step to other streams, filter the capture
+  to the stream, and save it (raw bytes or the text shown).
+- **Statistics**: Conversations and Endpoints (Ethernet, IPv4, IPv6, TCP, UDP),
+  Protocol Hierarchy, I/O Graph (line chart plus table, adjustable interval),
+  Expert Information and Capture File Properties. Each opens in a panel with
+  sortable columns, CSV copy, and an option to limit it to the current display
+  filter. Rows can apply or prepare a display filter, and expert rows jump to their packet.
 - **Lua dissectors**, **Decode As** (`-d`) rules and **preference overrides**
   (`-o`) from settings, applied to every tshark call.
 - Progress and cancellation while indexing large files; clear errors when
@@ -57,6 +67,8 @@ Open any `.pcap`, `.pcapng` or `.cap` file. It opens in the PCAP Viewer by defau
 | PCAP: Save Display Filter… | | Save the current filter under a name |
 | PCAP: Saved Display Filters | | Apply or delete saved filters |
 | PCAP: Go to Packet | `Ctrl+G` (`Cmd+G`) | Jump to a frame number |
+| PCAP: Follow TCP / UDP / TLS / HTTP Stream | | Follow the selected packet's stream (also in the packet list's right-click menu) |
+| PCAP Statistics: Conversations, Endpoints, Protocol Hierarchy, I/O Graph, Expert Information, Capture File Properties | | Open the report in a panel beside the capture |
 | PCAP: Manage Custom Columns | | Add or remove columns (searches tshark's field list) |
 | PCAP: Reload Capture | | Re-run tshark, e.g. after editing a Lua dissector |
 | PCAP: Show Log | | Backend and tshark messages (Lua errors, warnings) |
@@ -127,9 +139,7 @@ file up to that packet so reassembly stays correct (see the roadmap below).
 
 ## Roadmap
 
-Planned (see the project brief): Follow TCP/UDP/TLS/HTTP stream, statistics (conversations, endpoints, protocol
-hierarchy, IO graph, expert info, capture properties), Lua dissector
-management commands and a Decode As UI, export (filtered pcapng, CSV/JSON,
+Planned (see the project brief): Lua dissector management commands and a Decode As UI, export (filtered pcapng, CSV/JSON,
 bytes), coloring rules, and a faster "quick view" of late packets in huge captures.
 
 ## Running locally (Linux)

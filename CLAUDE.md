@@ -47,10 +47,14 @@ user-facing description.
 - `src/webview/` plain JS/CSS/HTML (no build step). `lib.js` = pure helpers
   shared with Node tests; `main.js` = UI. Type-checked via JSDoc +
   `tsconfig.webview.json`.
+- `src/panels/` statistics and follow-stream webview panels (`panelHtml.ts`
+  builds their CSP'd HTML); their UIs are `src/webview/stats.js` and
+  `follow.js` with `panel.css`.
 - `backend/pcap_backend/` Python package run as `python -m pcap_backend`
   with `PYTHONPATH=backend`. `server.py` (JSON-RPC), `pcap_service.py`
   (methods), `tshark.py` (discovery/argv/process helpers), `cache.py`
   (row store, frame index, LRU), `pdml.py` (PDML + hexdump parsing),
+  `stats.py` (`-z` report and follow parsers), `fields.py` (field catalogue),
   `protocol.py` (error codes, request context), `cancellation.py`.
 - `backend/dissectors/example.lua` sample dissector (UDP/9999).
 - `test/backend` pytest; `test/backend/acceptance` pytest-bdd scenarios
@@ -140,6 +144,29 @@ UI behaviour stays in the Chromium test (`test/webview/e2e.test.js`).
   `globalState`): user vs workspace scope gives "global or workspace"
   persistence, and they sync and can be edited in settings.json. Recent-filter
   history stays in `globalState` (50 entries).
+- **Follow stream** uses tshark's `-z follow,<proto>,raw,<n>`: one hex line per
+  segment, lines starting with a tab come from node 1. Exact bytes, so ASCII,
+  hex dump and raw views plus raw save are all rendered client-side. The
+  stream number for a packet comes from `tcp.stream`/`udp.stream`, extracted
+  once through the row-store column machinery (first follow costs one pass).
+  TLS/HTTP follow the TCP stream number. Payload is capped (`maxBytes`, 16 MB).
+- **Statistics** parse tshark's human-readable `-z` reports into one generic
+  table model (`stats.py`: columns, rows with optional `filter`/`frame`/`depth`),
+  rendered by one panel (`src/webview/stats.js`). Sizes like "12 kB" are
+  converted with SI units. Expert info joins `-z expert` (severity/group/
+  protocol/count) with a `-T fields -e _ws.expert` pass (aggregator `\x1e`)
+  to get frame numbers. Rows are matched by regex because multi-word groups
+  ("Response code") overflow tshark's fixed-width column. The display-filter
+  limit uses each tap's own filter argument (`conv,tcp,<filter>` etc.).
+- **Never `str.splitlines()` on packet-derived text**: it also splits on
+  `\x1c`–`\x1e`, `\x85`, `\u2028`… Stats parsers use `_lines()` (split on `\n`).
+- **Panels** (`src/panels/`) are separate webview panels beside the editor. They
+  share the editor's backend (`session.backend`), close with it
+  (`session.onDidDispose`), and send filters/goto back to it. One stats panel
+  per (editor, kind); follow panels are per invocation. The IO graph is a
+  single-series SVG line in the theme's `--vscode-charts-blue` (no legend,
+  hover crosshair, keyboard arrows/Home/End, the table below is the
+  accessible view). Packets or bytes is a switch, never a second axis.
 - **Protocol**: JSON-RPC 2.0 framing (`"jsonrpc": "2.0"`), LSP-style
   cancellation code -32800; app codes in `backend/pcap_backend/protocol.py`
   and mirrored in `src/backendClient.ts` (`ErrorCodes`). `open` returns the
@@ -158,10 +185,12 @@ this took the backend from 710 MB to 125 MB peak.
 
 ## Status
 
-Implemented: steps 1–4 of the brief (foundation, packet list with paging /
+Implemented: steps 1–5 of the brief (foundation, packet list with paging /
 virtualization / sorting / custom columns, detail tree + hex with two-way
 highlighting, display filters with validation, autocomplete, history, saved
-filters and apply-as-filter from the tree).
+filters, apply-as-filter, follow TCP/UDP/TLS/HTTP stream, and statistics
+panels: conversations, endpoints, protocol hierarchy, IO graph, expert info,
+capture properties).
 
-Not yet: follow stream, statistics, export, coloring rules, Lua management
-commands, Decode As UI (settings already work end-to-end).
+Not yet: export, coloring rules, Lua management commands, Decode As UI
+(settings already work end-to-end), quick view for late packets in huge files.

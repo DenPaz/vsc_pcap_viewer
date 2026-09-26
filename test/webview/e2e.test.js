@@ -7,57 +7,8 @@
  * Set PCAP_VIEWER_SCREENSHOT=<path> to save a screenshot of the final state.
  */
 const assert = require("node:assert/strict");
-const crypto = require("node:crypto");
-const fs = require("node:fs");
-const http = require("node:http");
 const path = require("node:path");
-const { spawnSync } = require("node:child_process");
-
-const ROOT = path.resolve(__dirname, "../..");
-const WEBVIEW = path.join(ROOT, "src", "webview");
-const HAVE_TSHARK = spawnSync("tshark", ["--version"]).status === 0;
-
-function loadDeps() {
-  try {
-    const { chromium } = require("playwright-core");
-    const { BackendClient, findPython } = require(path.join(ROOT, "out", "src", "backendClient.js"));
-    return { chromium, BackendClient, findPython };
-  } catch {
-    return null;
-  }
-}
-
-/** Serve src/webview statically so the page's CSP can allow it as `cspSource`. */
-function serveWebview() {
-  const types = { ".js": "text/javascript", ".css": "text/css" };
-  const server = http.createServer((req, res) => {
-    const file = path.join(WEBVIEW, path.basename(new URL(req.url, "http://x").pathname));
-    if (!file.startsWith(WEBVIEW) || !fs.existsSync(file)) {
-      res.writeHead(404).end();
-      return;
-    }
-    res.writeHead(200, { "content-type": types[path.extname(file)] || "application/octet-stream" });
-    fs.createReadStream(file).pipe(res);
-  });
-  return new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve(server)));
-}
-
-function renderHtml(origin) {
-  const nonce = crypto.randomBytes(16).toString("base64");
-  // Stand-in for VS Code's acquireVsCodeApi, bridged to the Node host below.
-  const stub = `<script nonce="${nonce}">
-    window.acquireVsCodeApi = () => ({
-      postMessage: (m) => window.__toHost(JSON.stringify(m)),
-      getState: () => undefined,
-      setState: () => undefined,
-    });
-  </script>`;
-  const values = { cspSource: origin, nonce, stylesUri: `${origin}/styles.css`, libUri: `${origin}/lib.js`, mainUri: `${origin}/main.js` };
-  return fs
-    .readFileSync(path.join(WEBVIEW, "index.html"), "utf8")
-    .replace(/\{\{(\w+)\}\}/g, (_m, k) => values[k])
-    .replace("<script", `${stub}\n  <script`);
-}
+const { ROOT, HAVE_TSHARK, loadDeps, serveWebview, renderEditorHtml, startBackend } = require("./harness");
 
 const deps = loadDeps();
 const maybe = deps && HAVE_TSHARK ? suite : suite.skip;
@@ -76,16 +27,7 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
   suiteSetup(async function () {
     server = await serveWebview();
     const origin = `http://127.0.0.1:${server.address().port}`;
-    // PCAP_VIEWER_PYTHON, else the uv-managed .venv interpreter (Python 3.14 after `uv sync`).
-    const venv = path.join(ROOT, ".venv", process.platform === "win32" ? "Scripts/python.exe" : "bin/python");
-    const py = deps.findPython(process.env.PCAP_VIEWER_PYTHON ?? (fs.existsSync(venv) ? venv : undefined));
-    client = new deps.BackendClient({
-      python: py.python,
-      backendDir: path.join(ROOT, "backend"),
-      logger: { info() {}, warn() {}, error: (m) => console.error(m) },
-    });
-    client.start();
-    await client.request("initialize", {});
+    client = await startBackend(deps);
 
     try {
       browser = await deps.chromium.launch();
@@ -124,7 +66,7 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
         hostLog.push(msg);
         savedFilters = [...savedFilters, { name: `Saved ${savedFilters.length}`, filter: msg.expr }];
         await post({ type: "savedFilters", savedFilters });
-      } else if (msg.type === "manageSavedFilters" || msg.type === "filterApplied") {
+      } else if (["manageSavedFilters", "filterApplied", "selection", "follow"].includes(msg.type)) {
         hostLog.push(msg);
       } else if (msg.type === "rpc") {
         const pending = client.send(msg.method, msg.params, { timeoutMs: 0 });
@@ -134,7 +76,7 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
         );
       }
     });
-    await page.setContent(renderHtml(origin), { waitUntil: "load" });
+    await page.setContent(renderEditorHtml(origin), { waitUntil: "load" });
   });
 
   suiteTeardown(async () => {
@@ -321,6 +263,27 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     await page.waitForFunction(() => document.querySelectorAll("#list-rows .list-row:not(.loading)").length > 0);
     const headers = await page.$$eval("#list-header > div", (cells) => cells.map((c) => c.firstChild.textContent));
     assert.deepEqual(headers.slice(-2), ["Info", "Stream"]);
+  });
+
+  test("the selection is reported and the packet list offers Follow Stream", async () => {
+    await page.click("#filter-clear");
+    await page.waitForFunction(() => document.querySelectorAll("#list-rows .list-row:not(.loading)").length === 11);
+    await page.click("#list-header > div:has-text('No.')"); // back to frame order
+    await page.waitForFunction(() => {
+      const row = document.querySelectorAll("#list-rows .list-row")[3];
+      return row && !row.classList.contains("loading") && row.children[0].textContent === "4";
+    });
+    await page.click("#list-rows .list-row >> nth=3", { button: "right" }); // frame 4 (HTTP GET)
+    assert.ok(hostLog.some((m) => m.type === "selection" && m.frame === 4));
+    const items = await page.$$eval("#context-menu .item", (els) => els.map((e) => [e.textContent, !e.classList.contains("disabled")]));
+    assert.deepEqual(items.slice(0, 4), [
+      ["Follow TCP Stream", true],
+      ["Follow UDP Stream", true],
+      ["Follow TLS Stream", false],
+      ["Follow HTTP Stream", true],
+    ]);
+    await page.click("#context-menu .item:has-text('Follow HTTP Stream')");
+    assert.deepEqual(hostLog.at(-1), { type: "follow", proto: "http", frame: 4 });
   });
 
   test("no script errors or CSP violations", () => {
