@@ -24,7 +24,8 @@ Feature: Statistics
   Scenario: Protocol hierarchy
     When I request the "phs" statistics
     Then the statistics include "dns" one level below "udp" with 6 packets
-    And the statistics include "eth" at depth 0 with 26 packets
+    And the statistics include "eth" with 26 packets
+    And the top level of the hierarchy covers 26 packets
 
   Scenario: IO graph with an explicit interval
     When I request the "io" statistics with interval 0.01

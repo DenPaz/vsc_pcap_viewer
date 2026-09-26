@@ -237,9 +237,10 @@ UI behaviour stays in the Chromium test (`test/webview/e2e.test.js`).
 - **Statistics** parse tshark's human-readable `-z` reports into one generic
   table model (`stats.py`: columns, rows with optional `filter`/`frame`/`depth`),
   rendered by one panel (`src/webview/stats.js`). Sizes like "12 kB" are
-  converted with SI units. tshark 4.6 nests the protocol hierarchy one level
-  deeper (dns at depth 4, 4.2: 3), so tests check the parent row ("dns one
-  level below udp"), never absolute depths. Expert info joins `-z expert` (severity/group/
+  converted with SI units. tshark 4.6 adds a top-level `frame` row to the
+  protocol hierarchy (eth at depth 1, dns at 4; 4.2: 0 and 3), so tests check
+  parent rows ("dns one level below udp") and totals, never absolute depths.
+  Percentages divide by the depth-0 rows, which cover every packet either way. Expert info joins `-z expert` (severity/group/
   protocol/count) with a `-T fields -e _ws.expert` pass (aggregator `\x1e`)
   to get frame numbers. Rows are matched by regex because multi-word groups
   ("Response code") overflow tshark's fixed-width column. The display-filter
