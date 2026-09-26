@@ -1,10 +1,8 @@
 """JSON-RPC error types and the per-request context handed to service methods."""
 
-from __future__ import annotations
-
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Any, TypeVar
+from typing import Any
 
 from .cancellation import CancelToken
 
@@ -60,10 +58,7 @@ class RequestContext:
     progress: ProgressFn = _no_progress
 
 
-T = TypeVar("T")
-
-
-def param(params: Mapping[str, Any], name: str, kind: type[T], default: T | None = None) -> T:
+def param[T](params: Mapping[str, Any], name: str, kind: type[T], default: T | None = None) -> T:
     """Fetch and type-check a request parameter."""
     if name not in params or params[name] is None:
         if default is None:

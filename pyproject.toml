@@ -4,9 +4,9 @@ version = "0.1.0"
 description = "tshark-orchestrating JSON-RPC backend for the PCAP Viewer VS Code extension"
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.10"
+requires-python = ">=3.14"
 # The backend is stdlib-only at runtime so the extension works with any
-# Python 3.10+ interpreter, without a virtualenv or `pip install`.
+# Python 3.14+ interpreter, without a virtualenv or `pip install`.
 dependencies = []
 
 [project.scripts]
@@ -32,6 +32,10 @@ packages = ["backend/pcap_backend"]
 testpaths = ["test/backend"]
 pythonpath = ["backend"]
 addopts = ["-ra", "--strict-markers"]
+filterwarnings = [
+    "error::ResourceWarning",  # leaked pipes/files from tshark runs are bugs
+    "ignore:'maxsplit' is passed as positional argument:DeprecationWarning:gherkin",
+]
 markers = [
     "tshark: requires tshark/capinfos to be installed",
     "lua: runs a Lua dissector (skipped as root: tshark disables Lua for root)",
@@ -40,7 +44,7 @@ bdd_features_base_dir = "test/backend/acceptance/features"
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py314"
 src = ["backend", "test/backend"]
 
 [tool.ruff.lint]
@@ -60,6 +64,6 @@ ignore = [
 "test/fixtures/generate.py" = ["S311"]
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.14"
 strict = true
 files = ["backend/pcap_backend"]

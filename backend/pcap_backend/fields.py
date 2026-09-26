@@ -5,8 +5,6 @@ catalogue has ~250k entries, so lookups bisect a sorted, lower-cased key list
 instead of scanning.
 """
 
-from __future__ import annotations
-
 from bisect import bisect_left
 from dataclasses import dataclass, field
 from typing import Any

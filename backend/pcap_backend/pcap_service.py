@@ -12,8 +12,6 @@ process per open editor). All heavy lifting is delegated to tshark:
   reassembly etc.) is still correct.
 """
 
-from __future__ import annotations
-
 import re
 import shutil
 import tempfile
@@ -382,7 +380,7 @@ class PcapService:
             res = run(
                 [str(tshark.capinfos), "-T", "-M", "-a", "-e", "-E", "-S", "-t", str(path)], token
             )
-        except (OSError, CancelledError):
+        except OSError, CancelledError:
             return {}
         return parse_capinfos(res.stdout.decode("utf-8", "replace"))
 

@@ -5,8 +5,6 @@ Security rule for this module: commands are always argv lists handed to
 string.
 """
 
-from __future__ import annotations
-
 import atexit
 import os
 import re
@@ -202,7 +200,7 @@ class ProcessRegistry:
                 try:
                     proc.kill()
                     proc.wait(timeout=2)
-                except (OSError, subprocess.TimeoutExpired):
+                except OSError, subprocess.TimeoutExpired:
                     pass
 
     def __len__(self) -> int:
@@ -273,13 +271,17 @@ def run(
     proc = _popen(argv, env)
     PROCESSES.add(proc)
     try:
-        token.register(proc)
+        token.register(proc)  # kills the process if the token is already cancelled
         try:
             out, err = proc.communicate()
         finally:
             token.unregister(proc)
     finally:
         PROCESSES.discard(proc)
+        if proc.returncode is None:
+            # Cancelled before communicate(): reap the killed process, close its pipes.
+            proc.kill()
+            proc.communicate()
     token.raise_if_cancelled()
     return RunResult(proc.returncode, out, clean_stderr(err.decode("utf-8", "replace")))
 
@@ -311,8 +313,9 @@ def stream_lines(
             proc.wait()
         PROCESSES.discard(proc)
         collector.join(timeout=5)
-        if proc.stdout is not None:
-            proc.stdout.close()
+        for pipe in (proc.stdout, proc.stderr):
+            if pipe is not None:
+                pipe.close()
         result.returncode = proc.returncode
         result.stderr = collector.text
     if token.cancelled:

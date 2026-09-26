@@ -76,7 +76,9 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
   suiteSetup(async function () {
     server = await serveWebview();
     const origin = `http://127.0.0.1:${server.address().port}`;
-    const py = deps.findPython(process.env.PCAP_VIEWER_PYTHON);
+    // PCAP_VIEWER_PYTHON, else the uv-managed .venv interpreter (Python 3.14 after `uv sync`).
+    const venv = path.join(ROOT, ".venv", process.platform === "win32" ? "Scripts/python.exe" : "bin/python");
+    const py = deps.findPython(process.env.PCAP_VIEWER_PYTHON ?? (fs.existsSync(venv) ? venv : undefined));
     client = new deps.BackendClient({
       python: py.python,
       backendDir: path.join(ROOT, "backend"),
