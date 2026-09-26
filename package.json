@@ -39,9 +39,67 @@
           },
           {
             "filenamePattern": "*.cap"
+          },
+          {
+            "filenamePattern": "*.pcap.gz"
+          },
+          {
+            "filenamePattern": "*.pcapng.gz"
+          },
+          {
+            "filenamePattern": "*.pcap.zst"
+          },
+          {
+            "filenamePattern": "*.pcapng.zst"
+          },
+          {
+            "filenamePattern": "*.pcap.lz4"
+          },
+          {
+            "filenamePattern": "*.pcapng.lz4"
+          },
+          {
+            "filenamePattern": "*.ntar"
+          },
+          {
+            "filenamePattern": "*.pcap[0-9]*"
+          },
+          {
+            "filenamePattern": "*.snoop"
+          },
+          {
+            "filenamePattern": "*.erf"
+          },
+          {
+            "filenamePattern": "*.pklg"
+          },
+          {
+            "filenamePattern": "*.btsnoop"
           }
         ],
         "priority": "default"
+      },
+      {
+        "viewType": "pcapViewer.editorOptional",
+        "displayName": "PCAP Viewer",
+        "selector": [
+          {
+            "filenamePattern": "*.[0-9]"
+          },
+          {
+            "filenamePattern": "*.log"
+          },
+          {
+            "filenamePattern": "*.dmp"
+          },
+          {
+            "filenamePattern": "*.trc"
+          },
+          {
+            "filenamePattern": "*.ber"
+          }
+        ],
+        "priority": "option"
       }
     ],
     "commands": [
@@ -200,91 +258,91 @@
       "commandPalette": [
         {
           "command": "pcapViewer.applyFilter",
-          "when": "activeCustomEditorId == pcapViewer.editor"
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/"
         },
         {
           "command": "pcapViewer.clearFilter",
-          "when": "activeCustomEditorId == pcapViewer.editor"
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/"
         },
         {
           "command": "pcapViewer.goToPacket",
-          "when": "activeCustomEditorId == pcapViewer.editor"
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/"
         },
         {
           "command": "pcapViewer.reload",
-          "when": "activeCustomEditorId == pcapViewer.editor"
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/"
         },
         {
           "command": "pcapViewer.saveFilter",
-          "when": "activeCustomEditorId == pcapViewer.editor"
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/"
         },
         {
           "command": "pcapViewer.followStream",
-          "when": "activeCustomEditorId == pcapViewer.editor || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
         },
         {
           "command": "pcapViewer.followTcpStream",
-          "when": "activeCustomEditorId == pcapViewer.editor || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
         },
         {
           "command": "pcapViewer.followUdpStream",
-          "when": "activeCustomEditorId == pcapViewer.editor || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
         },
         {
           "command": "pcapViewer.followTlsStream",
-          "when": "activeCustomEditorId == pcapViewer.editor || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
         },
         {
           "command": "pcapViewer.followHttpStream",
-          "when": "activeCustomEditorId == pcapViewer.editor || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
         },
         {
           "command": "pcapViewer.statistics.conversations",
-          "when": "activeCustomEditorId == pcapViewer.editor || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
         },
         {
           "command": "pcapViewer.statistics.endpoints",
-          "when": "activeCustomEditorId == pcapViewer.editor || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
         },
         {
           "command": "pcapViewer.statistics.protocolHierarchy",
-          "when": "activeCustomEditorId == pcapViewer.editor || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
         },
         {
           "command": "pcapViewer.statistics.ioGraph",
-          "when": "activeCustomEditorId == pcapViewer.editor || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
         },
         {
           "command": "pcapViewer.statistics.expertInfo",
-          "when": "activeCustomEditorId == pcapViewer.editor || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
         },
         {
           "command": "pcapViewer.statistics.captureProperties",
-          "when": "activeCustomEditorId == pcapViewer.editor || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
         },
         {
           "command": "pcapViewer.decodeAs",
-          "when": "activeCustomEditorId == pcapViewer.editor || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
         },
         {
           "command": "pcapViewer.exportFiltered",
-          "when": "activeCustomEditorId == pcapViewer.editor || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
         },
         {
           "command": "pcapViewer.exportPacketList",
-          "when": "activeCustomEditorId == pcapViewer.editor || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
         },
         {
           "command": "pcapViewer.exportPacketBytes",
-          "when": "activeCustomEditorId == pcapViewer.editor || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
         },
         {
           "command": "pcapViewer.colorizeWithFilter",
-          "when": "activeCustomEditorId == pcapViewer.editor || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
         },
         {
           "command": "pcapViewer.toggleColoring",
-          "when": "activeCustomEditorId == pcapViewer.editor || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
         }
       ]
     },
@@ -293,13 +351,13 @@
         "command": "pcapViewer.applyFilter",
         "key": "ctrl+/",
         "mac": "cmd+/",
-        "when": "activeCustomEditorId == pcapViewer.editor"
+        "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/"
       },
       {
         "command": "pcapViewer.goToPacket",
         "key": "ctrl+g",
         "mac": "cmd+g",
-        "when": "activeCustomEditorId == pcapViewer.editor"
+        "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/"
       }
     ],
     "configuration": {

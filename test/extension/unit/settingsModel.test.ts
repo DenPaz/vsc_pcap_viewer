@@ -1,6 +1,6 @@
 import * as assert from "node:assert/strict";
 import * as path from "node:path";
-import { COLORIZE_PALETTE, configTargetFor, exportFileName, isColor, normalizeColoringRules, normalizeColumns, prependColoringRule, normalizeSavedFilters, pushHistory, resolveLuaScripts, upsertSavedFilter } from "../../../src/settingsModel";
+import { COLORIZE_PALETTE, captureStem, configTargetFor, exportFileName, isColor, normalizeColoringRules, normalizeColumns, prependColoringRule, normalizeSavedFilters, pushHistory, resolveLuaScripts, upsertSavedFilter } from "../../../src/settingsModel";
 
 suite("settingsModel", () => {
   test("normalizeColumns accepts strings and objects, drops junk", () => {
@@ -104,5 +104,26 @@ suite("settingsModel", () => {
   test("exportFileName suggests a file next to the capture", () => {
     assert.equal(exportFileName(path.join("dir", "trace.pcapng"), "filtered", "pcapng"), path.join("dir", "trace-filtered.pcapng"));
     assert.equal(exportFileName(path.join("dir", "a.b.pcap"), "frame4", "bin"), path.join("dir", "a.b-frame4.bin"));
+    // Compression suffixes go too: the export is never compressed.
+    assert.equal(exportFileName(path.join("dir", "trace.pcap.gz"), "filtered", "pcapng"), path.join("dir", "trace-filtered.pcapng"));
+    assert.equal(exportFileName(path.join("dir", "trace.pcapng.zst"), "packets", "csv"), path.join("dir", "trace-packets.csv"));
+  });
+
+  test("captureStem drops compression and format extensions", () => {
+    const cases: [string, string][] = [
+      ["trace.pcap", "trace"],
+      ["trace.pcap.gz", "trace"],
+      ["TRACE.PCAPNG.ZST", "TRACE"],
+      ["trace.pcap.lz4", "trace"],
+      ["trace.pcap1", "trace"],
+      ["capture.1", "capture"],
+      ["hci.btsnoop", "hci"],
+      ["my.trace.snoop", "my.trace"],
+      ["archive.gz", "archive"],
+      ["noext", "noext"],
+    ];
+    for (const [name, stem] of cases) {
+      assert.equal(captureStem(path.join("dir", name)), stem, name);
+    }
   });
 });

@@ -6,12 +6,17 @@ Usage (from the repository root)::
     uv run python test/fixtures/generate.py --large 1000000 /tmp/big.pcap
 
 The committed fixtures are deterministic (fixed timestamps, addresses and
-sequence numbers) so that tests can assert on exact values.
+sequence numbers) so that tests can assert on exact values. ``formats/`` holds
+the same packets in the other file types the viewer opens (compressed, snoop,
+ERF, Bluetooth logs, generic extensions); those writers use only the standard
+library, so their bytes never depend on a Wireshark version.
 """
 
 import argparse
+import gzip
 import random
 import struct
+from compression import zstd
 from pathlib import Path
 
 from scapy.layers.dns import DNS, DNSQR, DNSRR
@@ -236,6 +241,150 @@ def large_capture(count: int, dest: Path) -> None:
             fh.write(data)
 
 
+# --------------------------------------------------------------------------- other formats
+
+FORMATS = HERE / "formats"
+BT_EPOCH_US = 0x00DCDDB30F2F8000  # btsnoop timestamps count microseconds from 0 AD
+
+
+def _records(packets: list[Packet]) -> list[tuple[float, bytes]]:
+    return [(float(p.time), bytes(p)) for p in packets]
+
+
+def _xxh32(data: bytes, seed: int = 0) -> int:
+    """xxHash32 (needed for the LZ4 frame header checksum)."""
+    p1, p2, p3, p4, p5 = 2654435761, 2246822519, 3266489917, 668265263, 374761393
+    mask = 0xFFFFFFFF
+
+    def rotl(x: int, r: int) -> int:
+        return ((x << r) | (x >> (32 - r))) & mask
+
+    i, n = 0, len(data)
+    if n >= 16:
+        v = [(seed + p1 + p2) & mask, (seed + p2) & mask, seed, (seed - p1) & mask]
+        while i + 16 <= n:
+            for k in range(4):
+                lane = struct.unpack_from("<I", data, i + 4 * k)[0]
+                v[k] = (rotl((v[k] + lane * p2) & mask, 13) * p1) & mask
+            i += 16
+        h = (rotl(v[0], 1) + rotl(v[1], 7) + rotl(v[2], 12) + rotl(v[3], 18)) & mask
+    else:
+        h = (seed + p5) & mask
+    h = (h + n) & mask
+    while i + 4 <= n:
+        h = (rotl((h + struct.unpack_from("<I", data, i)[0] * p3) & mask, 17) * p4) & mask
+        i += 4
+    while i < n:
+        h = (rotl((h + data[i] * p5) & mask, 11) * p1) & mask
+        i += 1
+    h ^= h >> 15
+    h = (h * p2) & mask
+    h ^= h >> 13
+    h = (h * p3) & mask
+    return h ^ (h >> 16)
+
+
+def lz4_frame(data: bytes) -> bytes:
+    """An LZ4 frame holding ``data`` in stored (uncompressed) blocks: valid for any
+    LZ4 reader without needing an LZ4 compressor here."""
+    descriptor = bytes([0x60, 0x40])  # version 1, independent blocks; 64 KiB max block
+    out = bytearray(struct.pack("<I", 0x184D2204) + descriptor)
+    out.append((_xxh32(descriptor) >> 8) & 0xFF)
+    for i in range(0, len(data), 64 * 1024):
+        block = data[i : i + 64 * 1024]
+        out += struct.pack("<I", 0x80000000 | len(block)) + block  # high bit: stored
+    out += struct.pack("<I", 0)  # end mark
+    return bytes(out)
+
+
+def snoop_file(records: list[tuple[float, bytes]]) -> bytes:
+    """RFC 1761 snoop, Ethernet."""
+    out = bytearray(b"snoop\0\0\0" + struct.pack(">II", 2, 4))
+    for ts, data in records:
+        pad = -len(data) % 4
+        sec, usec = divmod(round(ts * 1_000_000), 1_000_000)
+        out += struct.pack(">IIIIII", len(data), len(data), 24 + len(data) + pad, 0, sec, usec)
+        out += data + b"\0" * pad
+    return bytes(out)
+
+
+def erf_file(records: list[tuple[float, bytes]]) -> bytes:
+    """Endace ERF, type 2 (Ethernet) records with the 2-byte Ethernet pad."""
+    out = bytearray()
+    for ts, data in records:
+        sec, frac = divmod(round(ts * 2**32), 2**32)
+        body = b"\0\0" + data
+        pad = -(16 + len(body)) % 8
+        rlen = 16 + len(body) + pad
+        out += struct.pack("<Q", (sec << 32) | frac)
+        out += struct.pack(">BBHHH", 2, 0x04, rlen, 0, len(data))  # 0x04: varying length
+        out += body + b"\0" * pad
+    return bytes(out)
+
+
+# HCI traffic for the Bluetooth logs: Reset and Read BD_ADDR, each with its
+# Command Complete event. (H4 packet type, HCI bytes.)
+HCI_PACKETS: list[tuple[int, bytes]] = [
+    (0x01, bytes.fromhex("030c00")),
+    (0x04, bytes.fromhex("0e0401030c00")),
+    (0x01, bytes.fromhex("091000")),
+    (0x04, bytes.fromhex("0e0a01091000665544332211")),
+]
+
+
+def packetlogger_file() -> bytes:
+    """Apple PacketLogger (.pklg): length, timestamp, type (0 command, 1 event), HCI."""
+    out = bytearray()
+    for i, (h4, hci) in enumerate(HCI_PACKETS):
+        kind = 0x00 if h4 == 0x01 else 0x01
+        out += struct.pack(">IIIB", 9 + len(hci), int(BASE_TS), i * 1000, kind) + hci
+    return bytes(out)
+
+
+def btsnoop_file() -> bytes:
+    """btsnoop version 1, HCI UART (H4) datalink 1002."""
+    out = bytearray(b"btsnoop\0" + struct.pack(">II", 1, 1002))
+    for i, (h4, hci) in enumerate(HCI_PACKETS):
+        data = bytes([h4]) + hci
+        flags = 0b10 | (0 if h4 == 0x01 else 1)  # command/event; sent/received
+        ts = BT_EPOCH_US + int(BASE_TS) * 1_000_000 + i * 1000
+        out += struct.pack(">IIIIq", len(data), len(data), flags, 0, ts) + data
+    return bytes(out)
+
+
+def format_fixtures() -> None:
+    """Every extra file type the viewer registers for, from the base fixtures."""
+    FORMATS.mkdir(exist_ok=True)
+    pcap = (HERE / "http.pcap").read_bytes()
+    pcapng = (HERE / "mixed.pcapng").read_bytes()
+    files = {
+        # Default editor: unambiguous capture files.
+        "http.pcap.gz": gzip.compress(pcap, mtime=0),
+        "mixed.pcapng.gz": gzip.compress(pcapng, mtime=0),
+        "http.pcap.zst": zstd.compress(pcap),
+        "mixed.pcapng.zst": zstd.compress(pcapng),
+        "http.pcap.lz4": lz4_frame(pcap),
+        "mixed.pcapng.lz4": lz4_frame(pcapng),
+        "mixed.ntar": pcapng,  # pcapng's old extension
+        "trace.pcap1": (HERE / "dns.pcap").read_bytes(),  # tcpdump -C rotation
+        "http.snoop": snoop_file(_records(http_packets())),
+        "http.erf": erf_file(_records(http_packets())),
+        "hci.pklg": packetlogger_file(),
+        "hci.btsnoop": btsnoop_file(),
+        # "Reopen Editor With…" only: generic extensions that are sometimes captures.
+        "capture.1": pcap,
+        "capture.log": pcapng,
+        "capture.dmp": pcap,
+        "capture.trc": snoop_file(_records(http_packets())),
+        # A raw ASN.1 BER file: tshark reads it as one frame. SEQUENCE { 5, "hello" }.
+        "capture.ber": bytes.fromhex("300a020105040568656c6c6f"),
+        # Not a capture at all: exercises the "unsupported format" message.
+        "notes.log": b"2023-11-14 22:13:20 INFO this is a text log, not a capture\n",
+    }
+    for name, data in files.items():
+        (FORMATS / name).write_bytes(data)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--large", nargs=2, metavar=("COUNT", "DEST"))
@@ -251,6 +400,7 @@ def main() -> None:
     # A truncated file to exercise malformed-capture handling.
     data = (HERE / "http.pcap").read_bytes()
     (HERE / "truncated.pcap").write_bytes(data[: len(data) - 30])
+    format_fixtures()
     print(f"fixtures written to {HERE}")
 
 

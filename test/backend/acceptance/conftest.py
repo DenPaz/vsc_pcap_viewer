@@ -17,7 +17,7 @@ from pytest_bdd import given, parsers, then, when
 
 from pcap_backend.cancellation import CancelledError
 from pcap_backend.pcap_service import BASE_COLUMNS, PcapService
-from pcap_backend.protocol import FilterError, RequestContext, RpcError
+from pcap_backend.protocol import FilterError, RequestContext, RpcError, UnsupportedFormatError
 from pcap_backend.tshark import PROCESSES, ConfigError
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -54,6 +54,7 @@ class World:
     check: dict[str, Any] | None = None
     choices: dict[str, Any] | None = None
     exported: dict[str, Any] | None = None
+    progress: list[dict[str, Any]] = field(default_factory=list)
     coloring: dict[str, Any] | None = None
     error: Exception | None = None
 
@@ -121,6 +122,8 @@ def open_capture(world: World, name: str) -> None:
         "decodeAs": world.decode_as,
         "columns": world.columns,
     }
+    world.progress = []
+    world.ctx.progress = lambda p: world.progress.append(dict(p))
     world.info = world.call(world.service.open, params)
 
 
@@ -213,6 +216,26 @@ def warning_mentions(world: World, text: str) -> None:
 def request_fails(world: World, text: str) -> None:
     assert world.error is not None, "expected the request to fail"
     assert text in str(world.error)
+
+
+@then(parsers.re(r"the open progress is (?P<kind>estimated|indeterminate)$"))
+def open_progress(world: World, kind: str) -> None:
+    assert world.error is None, world.error
+    index = [p for p in world.progress if p.get("phase") == "index"]
+    assert index[-1]["fraction"] == 1.0  # done
+    during = [p["fraction"] for p in index[:-1]]
+    assert during, "no progress was reported while indexing"
+    if kind == "estimated":
+        assert all(isinstance(f, float) and 0 < f < 1 for f in during), during
+    else:
+        assert all(f is None for f in during), during
+
+
+@then(parsers.re(r'the request fails because "(?P<name>[^"]+)" is not a capture file$'))
+def not_a_capture(world: World, name: str) -> None:
+    assert isinstance(world.error, UnsupportedFormatError), world.error
+    assert str(world.error) == f"{name} is not a capture file that tshark can read"
+    assert world.error.data and "TShark understands" in world.error.data["stderr"]
 
 
 @then(parsers.parse('the columns end with "{fld}"'))

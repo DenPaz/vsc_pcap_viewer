@@ -19,6 +19,7 @@ TSHARK_NOT_FOUND = -32001
 TSHARK_FAILED = -32002
 NOT_OPEN = -32003
 INVALID_FILTER = -32010
+UNSUPPORTED_FORMAT = -32011
 
 
 class RpcError(Exception):
@@ -43,6 +44,12 @@ class NotOpenError(RpcError):
 
 class FilterError(RpcError):
     code = INVALID_FILTER
+
+
+class UnsupportedFormatError(RpcError):
+    """The file is not a capture tshark can read."""
+
+    code = UNSUPPORTED_FORMAT
 
 
 ProgressFn = Callable[[Mapping[str, Any]], None]

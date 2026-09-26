@@ -105,4 +105,46 @@ suite("PCAP Viewer smoke test", () => {
     await vscode.commands.executeCommand("workbench.action.closeAllEditors");
     await waitFor(() => (backend.running ? undefined : true), 10_000);
   });
+
+  test("file types: capture files open in the viewer, generic extensions only on request", async () => {
+    const ext = vscode.extensions.all.find((e) => e.packageJSON.name === "pcap-viewer");
+    const api = (await ext!.activate()) as PcapViewerApi;
+    const formats = path.join(FIXTURES, "formats");
+    // What VS Code itself resolved for a plain "open" (this checks the selector globs).
+    const openedAs = async (name: string): Promise<string> => {
+      const uri = vscode.Uri.file(path.join(formats, name));
+      await vscode.commands.executeCommand("vscode.open", uri);
+      const input = await waitFor(() => {
+        const i = vscode.window.tabGroups.activeTabGroup.activeTab?.input as { uri?: vscode.Uri } | undefined;
+        return i?.uri?.fsPath === uri.fsPath ? i : undefined;
+      });
+      return input instanceof vscode.TabInputCustom ? input.viewType : "other";
+    };
+
+    const defaults = ["http.pcap.gz", "mixed.pcapng.gz", "http.pcap.zst", "mixed.pcapng.zst", "http.pcap.lz4", "mixed.pcapng.lz4",
+      "mixed.ntar", "trace.pcap1", "http.snoop", "http.erf", "hci.pklg", "hci.btsnoop"];
+    for (const name of defaults) {
+      assert.equal(await openedAs(name), "pcapViewer.editor", name);
+      await vscode.commands.executeCommand("workbench.action.closeActiveEditor");
+    }
+    for (const name of ["capture.1", "capture.log", "capture.dmp", "capture.trc", "capture.ber", "notes.log"]) {
+      assert.equal(await openedAs(name), "other", `${name} must not open in the viewer by default`);
+      await vscode.commands.executeCommand("workbench.action.closeActiveEditor");
+    }
+
+    // A compressed capture is indexed like any other.
+    const gz = vscode.Uri.file(path.join(formats, "http.pcap.gz"));
+    await vscode.commands.executeCommand("vscode.open", gz);
+    const gzSession = await waitFor(() => api.provider.allSessions.find((s) => s.uri.fsPath === gz.fsPath && s.openInfo));
+    assert.equal(gzSession.openInfo?.frames, 11);
+
+    // "Reopen Editor With…" offers the viewer for generic extensions.
+    const log = vscode.Uri.file(path.join(formats, "capture.log"));
+    await vscode.commands.executeCommand("vscode.openWith", log, "pcapViewer.editorOptional");
+    const logSession = await waitFor(() => api.provider.allSessions.find((s) => s.uri.fsPath === log.fsPath && s.openInfo));
+    assert.equal(logSession.openInfo?.frames, 26);
+
+    await vscode.commands.executeCommand("workbench.action.closeAllEditors");
+    await waitFor(() => (api.provider.allSessions.length ? undefined : true), 10_000);
+  });
 });
