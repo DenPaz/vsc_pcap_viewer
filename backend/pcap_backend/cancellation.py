@@ -1,9 +1,10 @@
 """Cooperative cancellation shared by the JSON-RPC server and tshark runners."""
 
-import contextlib
 import subprocess
 import threading
 from collections.abc import Callable
+
+from .procs import kill_process
 
 
 class CancelledError(Exception):
@@ -14,8 +15,10 @@ class CancelToken:
     """Tracks a request's cancellation state and the child processes it owns.
 
     Cancelling the token kills every registered process, which unblocks any
-    thread reading from their pipes. Handlers call :meth:`raise_if_cancelled`
-    at convenient points to stop promptly.
+    thread reading from their pipes. If the kill is refused (AppArmor), the
+    reading thread notices the cancellation itself (it polls) and stops the
+    process (:func:`pcap_backend.procs.stop_process`). Handlers call
+    :meth:`raise_if_cancelled` at convenient points to stop promptly.
     """
 
     def __init__(self) -> None:
@@ -64,6 +67,4 @@ class CancelToken:
 
 
 def _kill(proc: subprocess.Popen[bytes]) -> None:
-    if proc.poll() is None:
-        with contextlib.suppress(OSError):
-            proc.kill()
+    kill_process(proc)  # never raises; a refused kill is logged once

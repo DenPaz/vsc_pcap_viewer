@@ -715,19 +715,31 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     await waitSelection([7, 6]);
     await page.click("#list-header > div[data-id='number']"); // sort off
 
-    await command("selectAll"); // Ctrl+A
+    // Ctrl+A: Chromium's select-all (the key, or VS Code's Select All command running
+    // execCommand("selectAll") in the webview) selects every packet, not the page's text.
+    await page.focus("#list-viewport");
+    await page.keyboard.press("Control+a");
     await page.waitForFunction(() => document.querySelectorAll("#list-rows .list-row.selected").length === 11);
     assert.match(await status(), /\(11 packets\)/);
+    assert.equal(await page.evaluate(() => String(window.getSelection())), "", "no text selected");
+    await page.keyboard.press("Escape");
+    await page.waitForFunction(() => document.querySelectorAll("#list-rows .list-row.selected").length === 1);
+    await page.evaluate(() => document.execCommand("selectAll"));
+    await page.waitForFunction(() => document.querySelectorAll("#list-rows .list-row.selected").length === 11);
+    assert.equal(await page.evaluate(() => String(window.getSelection())), "");
     // ...a new filter drops it.
     await page.fill("#filter-input", "http");
     await page.press("#filter-input", "Enter");
     await page.waitForFunction(() => /Displayed: 2/.test(document.querySelector("#status-left").textContent));
     await page.waitForFunction(() => document.querySelectorAll("#list-rows .list-row.selected").length <= 1);
     assert.doesNotMatch(await status(), /packets\)/);
-    // Ctrl+A in the filter bar selects its text, not packets.
+    // Ctrl+A in the filter bar selects its text, not packets (also via the palette command).
     await page.focus("#filter-input");
-    await command("selectAll");
+    await page.keyboard.press("Control+a");
     assert.equal(await page.evaluate(() => { const i = /** @type {HTMLInputElement} */ (document.getElementById("filter-input")); return i.value.slice(i.selectionStart ?? 0, i.selectionEnd ?? 0); }), "http");
+    await page.evaluate(() => /** @type {HTMLInputElement} */ (document.getElementById("filter-input")).setSelectionRange(0, 0));
+    await command("selectAll");
+    await page.waitForFunction(() => { const i = /** @type {HTMLInputElement} */ (document.getElementById("filter-input")); return i.value.slice(i.selectionStart ?? 0, i.selectionEnd ?? 0) === "http"; });
     assert.ok((await page.$$("#list-rows .list-row.selected")).length <= 1);
   });
 

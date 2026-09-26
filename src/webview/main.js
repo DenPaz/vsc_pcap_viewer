@@ -823,6 +823,7 @@
     setSelection(new Set([...base, ...frames]));
   }
 
+  let selectAllPending = false;
   /** Ctrl+A: every packet of the current view (in the filter bar or find box: its text). */
   async function selectAll() {
     const active = /** @type {HTMLElement | null} */ (document.activeElement);
@@ -830,9 +831,11 @@
       /** @type {HTMLInputElement} */ (active).select();
       return;
     }
-    if (!state.ready || state.total === 0) {
-      return;
+    const all = Math.min(state.total, MAX_SELECTION);
+    if (!state.ready || state.total === 0 || selectAllPending || (all > 1 && state.selection.size === all)) {
+      return; // (the key and VS Code's Select All command can both arrive)
     }
+    selectAllPending = true;
     const filterId = state.filterId;
     try {
       const res = await rpc("view_frames", { offset: 0, limit: Math.min(state.total, MAX_SELECTION), ...orderParams() }).promise;
@@ -848,8 +851,25 @@
       }
     } catch (err) {
       showNotice(String(/** @type {any} */ (err)?.message ?? err));
+    } finally {
+      selectAllPending = false;
     }
   }
+
+  // Ctrl+A / Cmd+A. VS Code's webview doesn't stop the key, so Chromium selects
+  // all of the page's text, and VS Code's own Select All runs execCommand("selectAll")
+  // in the webview (a package.json keybinding doesn't win over either). Both start
+  // with a cancelable selectstart on <body> (in an input its target is the input,
+  // which keeps its normal Ctrl+A): cancel it and select every packet instead.
+  let pointerDown = false; // a mouse drag can also start on <body>
+  document.addEventListener("mousedown", () => (pointerDown = true), true);
+  document.addEventListener("mouseup", () => (pointerDown = false), true);
+  document.addEventListener("selectstart", (e) => {
+    if (e.target === document.body && !pointerDown) {
+      e.preventDefault();
+      void selectAll();
+    }
+  });
 
   /** Cached rows of `frames` in view order, or null if some aren't loaded. @param {Set<number>} frames */
   function cachedRows(frames) {

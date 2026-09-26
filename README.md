@@ -13,7 +13,7 @@ by **tshark** (Wireshark's command-line tool), so results match Wireshark exactl
   the visible rows and the backend pages through a cached index; scrolling
   never re-runs tshark.
 - **Multi-select** like Wireshark: `Shift+click` or `Shift+arrow keys` select a
-  range, `Ctrl+click` (`Cmd+click`) adds or removes a packet, `Ctrl+A` selects
+  range, `Ctrl+click` (`Cmd+click`) adds or removes a packet, `Ctrl+A` (`Cmd+A`) selects
   every displayed packet and `Esc` goes back to one. `Ctrl+M` marks the
   selection, `Ctrl+C` or the right-click menu copies its rows (visible
   columns, tab-separated) or frame numbers, and *Export Selected Packets…*
@@ -163,7 +163,7 @@ tshark built with them (`tshark --version` lists "with Zstandard", "with LZ4").
 | PCAP: Go Back / Go Forward (Packet History) | `Alt+Left`, `Alt+Right` | Walk back and forth over jumps (links, go to, find…) |
 | PCAP: Next / Previous Packet in Conversation | `Ctrl+.`, `Ctrl+,` | Same TCP/UDP stream, else the same address pair |
 | PCAP: First Packet / Last Packet | `Ctrl+Home`, `Ctrl+End` | |
-| PCAP: Select All Packets | `Ctrl+A` (`Cmd+A`) | Select every displayed packet |
+| PCAP: Select All Packets | `Ctrl+A` (`Cmd+A`) in the packet list | Select every displayed packet |
 | PCAP: Mark/Unmark Selected Packets | `Ctrl+M` | Mark the selected packets (unmark them if all are marked) |
 | PCAP: Next / Previous Marked Packet | `Ctrl+Shift+N`, `Ctrl+Shift+B` | |
 | PCAP: Unmark All Packets / Export Marked Packets… | | Clear the marks / save the marked packets as pcapng or pcap |
@@ -384,6 +384,7 @@ uv run python -u test/perf/bench.py test/fixtures/large-1m.pcap --no-tcp-analysi
 | "No Python 3.14+ interpreter found" | VS Code doesn't see `~/.local/bin`. Set `pcapViewer.pythonPath` to the output of `uv python find 3.14`, or start VS Code from a terminal where `python3.14` works. |
 | "tshark was not found" | Install tshark (step 1) or set `pcapViewer.tsharkPath`, e.g. `/usr/bin/tshark`. |
 | `tshark: You don't have permission to read the file "…"` although the file is yours | On Ubuntu with tshark 4.6, the AppArmor profile `/etc/apparmor.d/tshark` only lets tshark use `/tmp` and Wireshark's own folders. Allow your files with a local rule: `echo 'owner @{HOME}/** rw,' \| sudo tee -a /etc/apparmor.d/local/tshark` then `sudo apparmor_parser -r /etc/apparmor.d/tshark` (add e.g. `owner /media/** rw,` for other places). Check with `sudo aa-status \| grep tshark`; denials show in `journalctl -k \| grep 'profile="tshark"'`. A Snap-packaged tshark has similar limits: use the distribution's package instead. |
+| Cancelling a filter is slow, *PCAP: Show Log* says "could not stop tshark … Permission denied", or the kernel log shows `apparmor="DENIED" operation="signal" profile="tshark" … peer="vscode"` | The same AppArmor profile doesn't let tshark receive signals from the extension (VS Code runs under its own `vscode` profile; the tests run unconfined). The backend then closes tshark's output instead, so tshark stops at its next write, but a pass that writes nothing runs to its end. Allow the signals with two more local rules and reload: `printf '%s\n' 'signal (receive) peer=unconfined,' 'signal (receive) peer=vscode,' \| sudo tee -a /etc/apparmor.d/local/tshark` then `sudo apparmor_parser -r /etc/apparmor.d/tshark`. |
 | Lua dissector isn't applied | Check *PCAP: Show Log* for Lua errors. Don't run as root. Use *PCAP: Reload Capture* after editing the script. |
 | Opening a huge file is slow | Indexing speed is tshark's. Settings such as `"pcapViewer.prefs": { "tcp.analyze_sequence_numbers": false }` make it cheaper. |
 | `pnpm install` fails with "Ignored build scripts" | Use the pnpm version pinned in `package.json` (`corepack enable pnpm`). The build-script policy is in `pnpm-workspace.yaml`. |

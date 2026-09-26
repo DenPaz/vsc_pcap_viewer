@@ -579,6 +579,23 @@ def phs_includes(world: World, proto: str, depth: int, packets: int) -> None:
     assert _stats_cell(world, rows[0], "Packets") == packets
 
 
+@then(
+    parsers.re(
+        r'the statistics include "(?P<proto>[^"]+)" one level below "(?P<parent>[^"]+)" '
+        r"with (?P<packets>\d+) packets$"
+    )
+)
+def phs_below(world: World, proto: str, parent: str, packets: str) -> None:
+    """Depth-independent: tshark 4.6 adds a level above ip (dns: depth 4, was 3)."""
+    rows = _table(world)["rows"]
+    i = next((i for i, r in enumerate(rows) if r["cells"][0] == proto), None)
+    assert i is not None, proto
+    depth = rows[i]["depth"]
+    up = next(r for r in reversed(rows[:i]) if r["depth"] < depth)  # the parent row
+    assert (up["cells"][0], up["depth"]) == (parent, depth - 1)
+    assert _stats_cell(world, rows[i], "Packets") == int(packets)
+
+
 @then(parsers.parse('every row has {value:d} "{label}"'))
 def every_row_has(world: World, value: int, label: str) -> None:
     assert all(_stats_cell(world, r, label) == value for r in _table(world)["rows"])

@@ -531,12 +531,6 @@
         "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/"
       },
       {
-        "command": "pcapViewer.selectAll",
-        "key": "ctrl+a",
-        "mac": "cmd+a",
-        "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inputFocus"
-      },
-      {
         "command": "pcapViewer.toggleMark",
         "key": "ctrl+m",
         "mac": "cmd+m",

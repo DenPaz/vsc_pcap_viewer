@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from pcap_backend import sandbox
 from pcap_backend import tshark as ts
 from pcap_backend.cancellation import CancelledError, CancelToken
 from pcap_backend.tshark import (
@@ -111,6 +112,19 @@ def test_stream_lines_and_cancellation() -> None:
     assert len(ts.PROCESSES) == 0
 
 
+def test_stream_lines_keeps_the_exit_code() -> None:
+    # A child that ends its output, then takes a moment to exit: not killed.
+    script = "import os, time\nprint('a', flush=True); os.close(1); time.sleep(0.3); os._exit(3)"
+    for _ in range(3):
+        result = StreamResult()
+        assert list(ts.stream_lines([sys.executable, "-c", script], result)) == [b"a"]
+        assert result.returncode == 3 and result.lines == 1
+    # Partial last line, CRLF, empty lines and a chunk boundary inside a line.
+    script = "import sys; sys.stdout.write('x' * 70000 + '\\r\\n\\nlast')"
+    lines = list(ts.stream_lines([sys.executable, "-c", script], StreamResult()))
+    assert lines == [b"x" * 70000, b"", b"last"]
+
+
 def test_run_captures_stderr() -> None:
     res = ts.run([sys.executable, "-c", "import sys; sys.stderr.write('tshark: bad'); sys.exit(3)"])
     assert res.returncode == 3
@@ -145,14 +159,14 @@ DENIED = 'tshark: You don\'t have permission to read the file "/home/u/x.pcap".'
 def test_apparmor_confines_tshark(tmp_path: Path) -> None:
     profiles = tmp_path / "profiles"
     profiles.write_text("tshark//dumpcap (enforce)\ntshark (enforce)\nman (complain)\n")
-    assert ts.apparmor_confines_tshark(profiles, tmp_path / "none")
+    assert sandbox.apparmor_confines_tshark(profiles, tmp_path / "none")
     profiles.write_text("tshark (complain)\ntcpdump (enforce)\n")
-    assert not ts.apparmor_confines_tshark(profiles, tmp_path / "none")
+    assert not sandbox.apparmor_confines_tshark(profiles, tmp_path / "none")
     # securityfs unreadable: fall back to whether the profile file exists.
     profile_file = tmp_path / "tshark"
-    assert not ts.apparmor_confines_tshark(tmp_path / "missing", profile_file)
+    assert not sandbox.apparmor_confines_tshark(tmp_path / "missing", profile_file)
     profile_file.write_text("profile tshark /usr/bin/tshark {}")
-    assert ts.apparmor_confines_tshark(tmp_path / "missing", profile_file)
+    assert sandbox.apparmor_confines_tshark(tmp_path / "missing", profile_file)
 
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="AppArmor/Snap are Linux-only")
@@ -161,13 +175,29 @@ def test_permission_hint(tmp_path: Path) -> None:
     enforce.write_text("tshark (enforce)\n")
     other = tmp_path / "tshark"
     other.write_bytes(b"")
-    assert ts.permission_hint(other, "tshark: some other failure", enforce) is None
-    assert ts.permission_hint(Path("/snap/bin/tshark"), DENIED, enforce) == ts.SNAP_HINT
-    assert ts.permission_hint(other, DENIED, enforce) == ts.GENERIC_HINT
+    assert sandbox.permission_hint(other, "tshark: some other failure", enforce) is None
+    assert sandbox.permission_hint(Path("/snap/bin/tshark"), DENIED, enforce) == sandbox.SNAP_HINT
+    assert sandbox.permission_hint(other, DENIED, enforce) == sandbox.GENERIC_HINT
     if Path("/usr/bin/tshark").resolve() == Path("/usr/bin/tshark"):
-        hint = ts.permission_hint(Path("/usr/bin/tshark"), DENIED, enforce)
-        assert hint == ts.APPARMOR_HINT
+        hint = sandbox.permission_hint(Path("/usr/bin/tshark"), DENIED, enforce)
+        assert hint == sandbox.APPARMOR_HINT
         assert "/etc/apparmor.d/local/tshark" in hint and "apparmor_parser -r" in hint
+        # The same hint explains a refused kill of a cancelled tshark.
+        assert sandbox.kill_denied_hint(Path("/usr/bin/tshark"), enforce) == hint
+    assert sandbox.kill_denied_hint(other, enforce) == sandbox.GENERIC_KILL_HINT
+
+
+def test_apparmor_hint_rules() -> None:
+    hint = sandbox.APPARMOR_HINT
+    for rule in (
+        "owner @{HOME}/** rw,",
+        "signal (receive) peer=unconfined,",
+        "signal (receive) peer=vscode,",
+    ):
+        assert f"'{rule}'" in hint
+    assert "printf '%s\\n' 'owner @{HOME}/** rw,' " in hint
+    reload = "  sudo apparmor_parser -r /etc/apparmor.d/tshark"
+    assert f"| sudo tee -a /etc/apparmor.d/local/tshark\n{reload}" in hint
 
 
 def test_tshark_error_appends_hint(tmp_path: Path) -> None:

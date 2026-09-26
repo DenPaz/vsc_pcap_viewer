@@ -123,6 +123,9 @@ class ByteSource:
         return {"name": self.name, "hex": self.data.hex()}
 
 
+# Name of the first byte source (the packet's own bytes) whatever tshark calls it:
+# "Frame" up to 4.4, "Packet" from 4.6. Single-source packets print no header.
+FRAME_SOURCE = "Frame"
 _HEADER_RE = re.compile(r"^(?P<name>.+) \((?P<len>\d+) bytes?\):$")
 _ROW_RE = re.compile(r"^(?P<off>[0-9a-fA-F]{4,})  (?P<rest>.*)$")
 _BYTE_RE = re.compile(r"[0-9a-fA-F]{2}")
@@ -132,7 +135,10 @@ def parse_hexdump(text: str) -> list[ByteSource]:
     """Parse ``tshark -x`` output into byte sources.
 
     Single-source packets have no header line; multi-source packets print
-    ``Frame (N bytes):`` / ``Reassembled TCP (N bytes):`` headers.
+    ``Frame (N bytes):`` (``Packet (N bytes):`` in tshark 4.6) /
+    ``Reassembled TCP (N bytes):`` headers. The first source is always named
+    FRAME_SOURCE, so the UI reads the same across tshark versions and for
+    single- and multi-source packets.
     """
     sources: list[ByteSource] = []
     current: ByteSource | None = None
@@ -141,14 +147,14 @@ def parse_hexdump(text: str) -> list[ByteSource]:
             continue
         header = _HEADER_RE.match(line)
         if header:
-            current = ByteSource(header["name"], bytearray())
+            current = ByteSource(header["name"] if sources else FRAME_SOURCE, bytearray())
             sources.append(current)
             continue
         row = _ROW_RE.match(line)
         if not row:
             continue
         if current is None:
-            current = ByteSource("Frame", bytearray())
+            current = ByteSource(FRAME_SOURCE, bytearray())
             sources.append(current)
         offset = int(row["off"], 16)
         # Hex area is 16 * "xx " = 48 chars; the ASCII column follows.
