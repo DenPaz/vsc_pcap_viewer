@@ -58,6 +58,7 @@ class World:
     sort: dict[str, Any] | None = None
     found: dict[str, Any] | None = None
     time_ref: int | None = None
+    time_format: str | None = None
     coloring: dict[str, Any] | None = None
     error: Exception | None = None
 
@@ -173,7 +174,8 @@ def sort_by(world: World, title: str, direction: str) -> None:
     assert direction in ("ascending", "descending")
     sort = {"field": TITLE_TO_FIELD[title], "desc": direction == "descending"}
     world.sort = sort
-    world.page = world.rows(sort=sort)
+    extra: dict[str, Any] = {"timeFormat": world.time_format} if world.time_format else {}
+    world.page = world.rows(sort=sort, **extra)
 
 
 @when(parsers.parse("I select packet {number:d}"))
@@ -863,8 +865,10 @@ def time_reference(world: World, frame: int) -> None:
     world.time_ref = frame
 
 
+@given(parsers.parse('I show times as "{fmt}"'))
 @when(parsers.parse('I show times as "{fmt}"'))
 def show_times(world: World, fmt: str) -> None:
+    world.time_format = fmt
     extra: dict[str, Any] = {"timeFormat": fmt, "timeRef": world.time_ref}
     if world.sort:
         extra["sort"] = world.sort

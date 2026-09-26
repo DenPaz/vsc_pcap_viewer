@@ -2,7 +2,14 @@ from pathlib import Path
 
 import pytest
 
-from pcap_backend.cache import FrameIndex, LruCache, RowStore, sort_frames
+from pcap_backend.cache import (
+    FrameIndex,
+    LruCache,
+    RowStore,
+    address_key,
+    sort_frames,
+    sort_frames_by_key,
+)
 
 
 def _store(tmp_path: Path, rows: list[str]) -> RowStore:
@@ -95,3 +102,45 @@ def test_lru_cache_budget() -> None:
     assert cache.get("huge") is None
     cache.clear()
     assert len(cache) == 0
+
+
+def test_address_key_orders_addresses_numerically() -> None:
+    values = [
+        "name.example",
+        "192.168.1.10",
+        "fe80::1",
+        "10.0.0.1,10.0.0.9",  # the first occurrence decides
+        "02:00:00:00:00:01",
+        "8.8.8.8",
+        "::1",
+        "00-11-22-33-44-55",
+        "999.1.1.1",  # not an IPv4 address: text
+        "Broadcast",
+    ]
+    assert sorted(values, key=address_key) == [
+        "8.8.8.8",
+        "10.0.0.1,10.0.0.9",
+        "192.168.1.10",
+        "::1",
+        "fe80::1",
+        "00-11-22-33-44-55",
+        "02:00:00:00:00:01",
+        "999.1.1.1",
+        "Broadcast",
+        "name.example",
+    ]
+
+
+def test_sort_frames_addresses() -> None:
+    column = ["192.168.1.10", "8.8.8.8", "", "10.0.0.1", "8.8.8.8"]
+    frames = [1, 2, 3, 4, 5]
+    assert sort_frames(frames, column, False).frames().tolist() == [4, 1, 2, 5, 3]  # text
+    by_addr = sort_frames(frames, column, False, addresses=True).frames().tolist()
+    assert by_addr == [2, 5, 4, 1, 3]  # empty last, ties in frame order
+    assert sort_frames(frames, column, True, addresses=True).frames().tolist() == [1, 4, 2, 5, 3]
+
+
+def test_sort_frames_by_key() -> None:
+    frames = [3, 5, 8, 9]
+    assert sort_frames_by_key(frames, [20, None, 10, 20], False).frames().tolist() == [8, 3, 9, 5]
+    assert sort_frames_by_key(frames, [20, None, 10, 20], True).frames().tolist() == [3, 9, 8, 5]

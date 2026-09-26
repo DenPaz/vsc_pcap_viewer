@@ -23,6 +23,7 @@ import tempfile
 import threading
 import time
 from array import array
+from bisect import bisect_left
 from collections.abc import Callable, Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -30,7 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from . import coloring, navigation, pdml, stats
-from .cache import FrameIndex, LruCache, RowStore, sort_frames
+from .cache import FrameIndex, LruCache, RowStore, sort_frames, sort_frames_by_key
 from .cancellation import CancelledError, CancelToken
 from .export import (
     CAPTURE_FORMATS,
@@ -69,6 +70,9 @@ EXPORT_CHUNK = 5000
 # line at 32767 characters). Bigger marked-packet exports run in chunks + mergecap.
 MAX_FILTER_ARG = 16_000
 NEIGHBOR_CHUNK = 2000
+# Most frames one request may name or return (multi-selection: Shift+click ranges,
+# copy, export). 4 bytes each in the backend, ~8 in JSON.
+MAX_SELECTION = 1_000_000
 PROGRESS_INTERVAL_S = 0.2
 
 
@@ -79,18 +83,24 @@ class Column:
     field: str
     legacy_field: str
     numeric: bool = False
+    addresses: bool = False  # sort IPv4/IPv6/MAC numerically (cache.address_key)
 
 
 BASE_COLUMNS: tuple[Column, ...] = (
     Column("number", "No.", "frame.number", "frame.number", numeric=True),
     Column("time", "Time", "frame.time_relative", "frame.time_relative", numeric=True),
-    Column("source", "Source", "_ws.col.def_src", "_ws.col.Source"),
-    Column("destination", "Destination", "_ws.col.def_dst", "_ws.col.Destination"),
+    Column("source", "Source", "_ws.col.def_src", "_ws.col.Source", addresses=True),
+    Column("destination", "Destination", "_ws.col.def_dst", "_ws.col.Destination", addresses=True),
     Column("protocol", "Protocol", "_ws.col.protocol", "_ws.col.Protocol"),
     Column("length", "Length", "frame.len", "frame.len", numeric=True),
     Column("info", "Info", "_ws.col.info", "_ws.col.Info"),
 )
 _LEN_IDX = 5  # position of frame.len in BASE_COLUMNS
+_TIME_FIELD = "frame.time_relative"
+# Time column sort keys that differ from capture order: the time format's deltas.
+# Internal sort "fields" (never valid field names, so no clash with real ones).
+_DELTA_SORTS = {"delta_displayed": "@delta_displayed", "delta_captured": "@delta_captured"}
+_ADDRESS_TYPES = frozenset({"FT_IPv4", "FT_IPv6", "FT_ETHER"})
 
 _FIELD_NAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.\-]*$")
 _INVALID_FIELDS_RE = re.compile(r"Some fields aren't valid:\s*(?P<names>(?:\s*\S+)+)")
@@ -532,16 +542,18 @@ class PcapService:
     def list_packets(self, params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
         """Return rows ``[offset, offset + limit)`` of the current (filtered, sorted) view.
 
-        ``columns`` is the full list of custom column fields wanted after the
-        seven base columns (default: the ones given to ``open``). Fields not
-        indexed yet are extracted with one extra tshark pass, then cached.
+        With ``frames`` (at most MAX_PAGE frame numbers) instead, the rows of
+        those frames that are displayed, in view order (e.g. to copy a
+        multi-selection). ``columns`` is the full list of custom column fields
+        wanted after the seven base columns (default: the ones given to
+        ``open``). Fields not indexed yet are extracted with one extra tshark
+        pass, then cached.
         """
         offset = param(params, "offset", int, 0)
         limit = param(params, "limit", int, 200)
         if offset < 0 or limit < 0:
             raise InvalidParamsError("offset and limit must be non-negative")
         limit = min(limit, MAX_PAGE)
-        sort = _parse_sort(params.get("sort"))
         f, view = self._require_view()
         base_fields = {c.field for c in BASE_COLUMNS}
         if "columns" in params:
@@ -551,17 +563,13 @@ class PcapService:
         else:
             extra_fields = list(f.columns)
         self._ensure_columns(f, extra_fields, ctx)
-        if sort != view.sort:
-            ordered = self._sorted(f, view, sort, ctx) if sort else view.matched
-            with self._lock:
-                if self._view is view:
-                    view.sort = sort
-                    view.ordered = ordered
-            view_ordered = ordered
-        else:
-            view_ordered = view.ordered
+        view_ordered = self._apply_sort(f, view, params, ctx)
 
-        frames = view_ordered.slice(offset, limit)
+        if "frames" in params:
+            wanted = set(_frame_list(params, "frames", MAX_PAGE))
+            frames = [n for n in view_ordered.frames() if n in wanted] if wanted else []
+        else:
+            frames = view_ordered.slice(offset, limit)
         rejected = [fld for fld in extra_fields if fld in f.rejected]
         n_base = len(BASE_COLUMNS)
         base_rows = f.base.rows.get_many(frames)
@@ -573,8 +581,7 @@ class PcapService:
         if "timeFormat" in params:
             times = self._display_times(
                 f,
-                view_ordered,
-                offset,
+                view.matched,
                 frames,
                 [r["cells"][1] for r in rows],
                 param(params, "timeFormat", str),
@@ -606,11 +613,51 @@ class PcapService:
             "rejectedColumns": rejected,
         }
 
-    def find_frame(self, params: dict[str, Any], _ctx: RequestContext) -> dict[str, Any]:
-        """Row index of a frame in the current view (for "go to packet")."""
+    def _apply_sort(
+        self, f: _Open, view: _View, params: dict[str, Any], ctx: RequestContext
+    ) -> FrameIndex:
+        """The view's order after applying ``sort`` (and ``timeFormat``, which picks
+        what the Time column sorts by) from ``params``; the new order becomes the
+        view's. Every request that uses row indexes takes them, so an index
+        request can't overtake the page request that changes the sort."""
+        sort = _parse_sort(params.get("sort"))
+        if sort and sort[0] == _TIME_FIELD and params.get("timeFormat") in _DELTA_SORTS:
+            # "Since previous packet" formats sort by that delta, not by capture time.
+            sort = (_DELTA_SORTS[params["timeFormat"]], sort[1])
+        if sort == view.sort:
+            return view.ordered
+        ordered = self._sorted(f, view, sort, ctx) if sort else view.matched
+        with self._lock:
+            if self._view is view:
+                view.sort = sort
+                view.ordered = ordered
+        return ordered
+
+    def find_frame(self, params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
+        """Row index of a frame in the current view (for "go to packet").
+
+        ``sort``/``timeFormat`` as for list_packets (omitted: the current order)."""
         number = param(params, "number", int)
-        _f, view = self._require_view()
-        return {"index": view.ordered.position_of(number), "filterId": view.filter_id}
+        f, view = self._require_view()
+        ordered = self._apply_sort(f, view, params, ctx) if "sort" in params else view.ordered
+        return {"index": ordered.position_of(number), "filterId": view.filter_id}
+
+    def view_frames(self, params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
+        """Frame numbers of rows ``[offset, offset + limit)`` of the current view
+        (a Shift+click range; ``limit`` at most MAX_SELECTION), or, with
+        ``frames``, those of them that are displayed, in view order.
+        ``sort``/``timeFormat`` as for list_packets (omitted: the current order)."""
+        f, view = self._require_view()
+        ordered = self._apply_sort(f, view, params, ctx) if "sort" in params else view.ordered
+        if "frames" in params:
+            wanted = set(_frame_list(params, "frames"))
+            frames = [n for n in ordered.frames() if n in wanted] if wanted else []
+            return {"frames": frames, "filterId": view.filter_id}
+        offset = param(params, "offset", int, 0)
+        limit = param(params, "limit", int)
+        if offset < 0 or not 0 <= limit <= MAX_SELECTION:
+            raise InvalidParamsError(f"offset must be >= 0 and limit 0..{MAX_SELECTION}")
+        return {"frames": ordered.slice(offset, limit), "filterId": view.filter_id}
 
     def _locate(self, f: _Open, fld: str) -> tuple[RowStore, int] | None:
         for store in (f.base, *f.extra):
@@ -667,6 +714,12 @@ class PcapService:
         cached = self._sorts.get(key)
         if cached is not None:
             return cached
+        if fld in _DELTA_SORTS.values():
+            ctx.progress({"phase": "sort", "fraction": None})
+            deltas = self._time_deltas(f, view.matched, fld == _DELTA_SORTS["delta_displayed"], ctx)
+            ordered = sort_frames_by_key(view.matched.frames(), deltas, desc)
+            self._sorts.put(key, ordered)
+            return ordered
         self._ensure_columns(f, [fld], ctx)
         if fld in f.rejected:
             raise InvalidParamsError(f"cannot sort by unknown field {fld!r}")
@@ -679,18 +732,58 @@ class PcapService:
             values = rows.column(idx)
             self._sort_columns.put(fld, values)
         ctx.token.raise_if_cancelled()
-        numeric = next((c.numeric for c in BASE_COLUMNS if c.field == fld), None)
-        ordered = sort_frames(view.matched.frames(), values, desc, numeric=numeric or None)
+        base = next((c for c in BASE_COLUMNS if c.field == fld), None)
+        if base is not None:
+            numeric, addresses = base.numeric or None, base.addresses
+        else:
+            numeric, addresses = None, self._is_address_field(fld, ctx)
+        ordered = sort_frames(
+            view.matched.frames(), values, desc, numeric=numeric, addresses=addresses
+        )
         self._sorts.put(key, ordered)
         return ordered
+
+    def _is_address_field(self, fld: str, ctx: RequestContext) -> bool:
+        """Custom columns of IPv4/IPv6/MAC fields sort numerically, like Source/Destination."""
+        try:
+            entry = self._catalog(ctx).lookup(fld)
+        except CancelledError:
+            raise
+        except RpcError, ToolError, OSError:
+            return False
+        return entry is not None and entry.get("type") in _ADDRESS_TYPES
+
+    def _time_deltas(
+        self, f: _Open, matched: FrameIndex, displayed: bool, ctx: RequestContext
+    ) -> list[int | None]:
+        """Per frame of ``matched``: ns since the previous displayed (``matched``)
+        or captured packet, the values the delta time formats show (0 for the first)."""
+        fld = "frame.time_epoch"
+        self._ensure_columns(f, [fld], ctx)
+        loc = self._locate(f, fld)
+        assert loc is not None
+        rows, idx = loc
+        epoch = [navigation.parse_ns(v) for v in rows.column(idx)]
+        ctx.token.raise_if_cancelled()
+        out: list[int | None] = []
+        prev: int | None = None
+        for n in matched.frames():
+            e = epoch[n - 1] if n <= len(epoch) else None
+            p = prev if displayed else (n - 1 if n > 1 else None)
+            pe = epoch[p - 1] if p is not None and p <= len(epoch) else None
+            if e is None:
+                out.append(None)
+            else:
+                out.append(e - pe if pe is not None else (0 if p is None else None))
+            prev = n
+        return out
 
     # ------------------------------------------------------------------ time formats
 
     def _display_times(
         self,
         f: _Open,
-        ordered: FrameIndex,
-        offset: int,
+        matched: FrameIndex,
         frames: list[int],
         relative: list[str],
         fmt: str,
@@ -700,9 +793,10 @@ class PcapService:
         """Time column text for one page in ``fmt`` (see navigation.TIME_FORMATS).
 
         Everything but plain "seconds since beginning" needs frame.time_epoch,
-        extracted once into the row store. "Since previous displayed" follows the
-        current filter and sort order: the previous row of the view, not
-        tshark's frame.time_delta_displayed from the unfiltered pass.
+        extracted once into the row store. "Since previous displayed" is since the
+        previous packet of the current filter in capture order (``matched``), like
+        Wireshark's frame.time_delta_displayed but for our filter: a property of
+        the packet, whatever the sort order, so the Time column can sort by it.
         """
         if fmt not in navigation.TIME_FORMATS:
             raise InvalidParamsError(
@@ -720,10 +814,14 @@ class PcapService:
         fld = "frame.time_epoch"
         self._ensure_columns(f, [fld], ctx)
         need = set(frames)
-        prev_row: int | None = None
-        if fmt == "delta_displayed" and offset > 0 and frames:
-            prev_row = ordered.slice(offset - 1, 1)[0]
-            need.add(prev_row)
+        prev_displayed: dict[int, int] = {}
+        if fmt == "delta_displayed":
+            seq = matched.frames()
+            for n in frames:
+                i = bisect_left(seq, n)
+                if 0 < i <= len(seq):
+                    prev_displayed[n] = seq[i - 1]
+            need |= set(prev_displayed.values())
         if fmt == "delta_captured":
             need |= {n - 1 for n in frames if n > 1}
         if ref is not None:
@@ -745,7 +843,8 @@ class PcapService:
             elif fmt == "relative":
                 out.append(navigation.format_seconds(e - ref_ns) if ref_ns is not None else "")
             elif fmt == "delta_displayed":
-                p = epoch.get(prev_row) if prev_row is not None else None
+                prev = prev_displayed.get(n)
+                p = epoch.get(prev) if prev is not None else None
                 out.append(navigation.format_seconds(e - p) if p is not None else zero)
             elif fmt == "delta_captured":
                 p = epoch.get(n - 1)
@@ -754,7 +853,6 @@ class PcapService:
                 out.append(navigation.format_seconds(e))
             else:
                 out.append(navigation.format_absolute(e, utc=fmt == "utc"))
-            prev_row = n
         return out
 
     # ------------------------------------------------------------------ find / navigate / mark
@@ -797,7 +895,7 @@ class PcapService:
                 self._filters.put(expr, matched)
             for n in matched.frames():
                 hits[n] = 1
-        ordered = view.ordered
+        ordered = self._apply_sort(f, view, params, ctx) if "sort" in params else view.ordered
         seq = ordered.frames()
         total = len(ordered)
         start = params.get("from")
@@ -830,7 +928,8 @@ class PcapService:
         if direction not in ("next", "previous"):
             raise InvalidParamsError("direction must be next or previous")
         f, view = self._require_view()
-        pos = view.ordered.position_of(frame)
+        ordered = self._apply_sort(f, view, params, ctx) if "sort" in params else view.ordered
+        pos = ordered.position_of(frame)
         if pos is None:
             raise InvalidParamsError(f"packet {frame} is not displayed")
         self._ensure_columns(f, ["tcp.stream", "udp.stream"], ctx)
@@ -838,7 +937,7 @@ class PcapService:
         result: dict[str, Any] = {"frame": None, "index": None, "filterId": view.filter_id}
         if key is None:
             return result
-        seq = view.ordered.frames()
+        seq = ordered.frames()
         step = 1 if direction == "next" else -1
         i = pos + step
         while 0 <= i < len(seq):
@@ -870,19 +969,15 @@ class PcapService:
         return keys
 
     def mark_packets(self, params: dict[str, Any], _ctx: RequestContext) -> dict[str, Any]:
-        """Mark (``mark: true``), unmark (``false``) or toggle (omitted) ``frames``."""
-        frames = params.get("frames")
-        if not isinstance(frames, list) or not all(
-            isinstance(n, int) and not isinstance(n, bool) for n in frames
-        ):
-            raise InvalidParamsError("parameter 'frames' must be a list of frame numbers")
+        """Mark (``mark: true``) or unmark (``false``) ``frames``. Omitted: toggle,
+        like Wireshark's Ctrl+M on a multi-selection: mark them all unless all
+        of them are already marked, then unmark them."""
         f = self._require_file()
+        frames = [n for n in _frame_list(params, "frames") if 1 <= n <= f.info.frames]
         mark = params.get("mark")
         with self._lock:
+            on = bool(mark) if mark is not None else not all(n in self._marks for n in frames)
             for n in frames:
-                if not 1 <= n <= f.info.frames:
-                    continue
-                on = (n not in self._marks) if mark is None else bool(mark)
                 if on:
                     self._marks.add(n)
                 else:
@@ -890,6 +985,7 @@ class PcapService:
             return {
                 "count": len(self._marks),
                 "marked": [n for n in frames if n in self._marks],
+                "unmarked": [n for n in frames if n not in self._marks],
             }
 
     def unmark_all(self, _params: dict[str, Any], _ctx: RequestContext) -> dict[str, Any]:
@@ -1156,10 +1252,12 @@ class PcapService:
         ``kind``:
 
         * ``pcapng`` / ``pcap``: packets matching ``filter`` (default: the current
-          display filter; ``""`` for all packets), written by tshark.
+          display filter; ``""`` for all packets), written by tshark. Or the
+          marked packets (``marked: true``) or the packets in ``frames`` (a
+          multi-selection).
         * ``csv`` / ``json``: the packet list of the current view, in its current
           order, with the base columns plus ``columns`` (custom fields; titles in
-          the parallel ``titles`` list).
+          the parallel ``titles`` list); only the rows of ``frames`` if given.
         * ``bytes``: the raw bytes of frame ``number`` (data ``source`` index,
           default 0: the frame itself).
 
@@ -1183,7 +1281,17 @@ class PcapService:
         self, f: _Open, fmt: str, dest: Path, params: dict[str, Any], ctx: RequestContext
     ) -> dict[str, Any]:
         if params.get("marked"):
-            return self._export_marked(f, fmt, dest, ctx)
+            with self._lock:
+                marks = sorted(self._marks)
+            if not marks:
+                raise InvalidParamsError("No packets are marked")
+            return self._export_frames(f, fmt, dest, marks, "marked packets", ctx)
+        if "frames" in params:
+            n_frames = f.info.frames
+            frames = sorted({n for n in _frame_list(params, "frames") if 1 <= n <= n_frames})
+            if not frames:
+                raise InvalidParamsError("No packets are selected")
+            return self._export_frames(f, fmt, dest, frames, "selected packets", ctx)
         if "filter" in params:
             flt = param(params, "filter", str, "").strip()
         else:
@@ -1232,28 +1340,27 @@ class PcapService:
             "warnings": _stderr_warnings(result.stderr),
         }
 
-    def _export_marked(self, f: _Open, fmt: str, dest: Path, ctx: RequestContext) -> dict[str, Any]:
-        """Marked frames to a capture: ``frame.number in {...}`` (ranges compressed).
+    def _export_frames(
+        self, f: _Open, fmt: str, dest: Path, frames: list[int], label: str, ctx: RequestContext
+    ) -> dict[str, Any]:
+        """Some frames (marked or selected) to a capture: ``frame.number in {...}``
+        (ranges compressed).
 
         A filter longer than MAX_FILTER_ARG would overflow the command line
-        (Windows caps it at 32767 characters), so big mark sets are written in
+        (Windows caps it at 32767 characters), so big frame sets are written in
         chunks and joined in frame order with ``mergecap -a``.
         """
-        with self._lock:
-            marks = sorted(self._marks)
-        if not marks:
-            raise InvalidParamsError("No packets are marked")
-        filters = navigation.frame_set_filters(marks, MAX_FILTER_ARG)
+        filters = navigation.frame_set_filters(frames, MAX_FILTER_ARG)
         if len(filters) == 1:
             result = self._export_capture(f, fmt, dest, {"filter": filters[0]}, ctx)
-            result["filter"] = "marked packets"
+            result["filter"] = label
             return result
         try:
             mergecap = find_tool("mergecap", sibling_of=f.tshark.path)
         except ToolNotFoundError as exc:
             raise ToolError(
-                f"{len(marks):,} marked packets need mergecap (part of Wireshark), "
-                "which was not found; mark fewer packets or install mergecap"
+                f"{len(frames):,} {label} need mergecap (part of Wireshark), "
+                "which was not found; export fewer packets or install mergecap"
             ) from exc
         assert self._work_dir is not None
         parts: list[Path] = []
@@ -1262,7 +1369,7 @@ class PcapService:
         try:
             for i, flt in enumerate(filters):
                 ctx.token.raise_if_cancelled()
-                part = self._work_dir / f"marked-{i}.{fmt}"
+                part = self._work_dir / f"frames-{i}.{fmt}"
                 parts.append(part)
                 res = self._export_capture(f, fmt, part, {"filter": flt}, ctx)
                 packets += res["packets"]
@@ -1279,7 +1386,7 @@ class PcapService:
         finally:
             for part in parts:
                 part.unlink(missing_ok=True)
-        return {"packets": packets, "filter": "marked packets", "warnings": warnings}
+        return {"packets": packets, "filter": label, "warnings": warnings}
 
     def _export_list(
         self, f: _Open, fmt: str, dest: Path, params: dict[str, Any], ctx: RequestContext
@@ -1299,6 +1406,9 @@ class PcapService:
         keys = [c.id for c in BASE_COLUMNS] + custom
         numeric = [c.numeric for c in BASE_COLUMNS] + [False] * len(custom)
         ordered = view.ordered
+        if "frames" in params:
+            wanted = set(_frame_list(params, "frames"))
+            ordered = FrameIndex.of(n for n in ordered.frames() if n in wanted)
         total = len(ordered)
         n_base = len(BASE_COLUMNS)
         with atomic_output(dest) as tmp, tmp.open("w", encoding="utf-8", newline="") as fh:
@@ -1315,7 +1425,8 @@ class PcapService:
                     {"phase": "export", "fraction": min(0.99, (offset + len(frames)) / total)}
                 )
             writer.close()
-        return {"packets": total, "filter": view.expr, "columns": keys}
+        label = "selected packets" if "frames" in params else view.expr
+        return {"packets": total, "filter": label, "columns": keys}
 
     def _export_bytes(
         self, dest: Path, params: dict[str, Any], ctx: RequestContext
@@ -1420,6 +1531,17 @@ def _index_error(tshark: Tshark, path: Path, result: StreamResult) -> Exception:
     return tshark.error(
         result.stderr, result.returncode, f"tshark exited with code {result.returncode}"
     )
+
+
+def _frame_list(params: dict[str, Any], key: str, limit: int = MAX_SELECTION) -> list[int]:
+    frames = params.get(key)
+    if not isinstance(frames, list) or not all(
+        isinstance(n, int) and not isinstance(n, bool) for n in frames
+    ):
+        raise InvalidParamsError(f"parameter {key!r} must be a list of frame numbers")
+    if len(frames) > limit:
+        raise InvalidParamsError(f"parameter {key!r} holds more than {limit:,} frames")
+    return frames
 
 
 def _parse_sort(raw: Any) -> tuple[str, bool] | None:
@@ -1543,6 +1665,7 @@ def rpc_methods(service: PcapService) -> dict[str, Callable[[dict[str, Any], Req
         "set_filter": service.set_filter,
         "list_packets": service.list_packets,
         "find_frame": service.find_frame,
+        "view_frames": service.view_frames,
         "packet_detail": service.packet_detail,
         "field_index": service.field_index,
         "follow_stream": service.follow_stream,

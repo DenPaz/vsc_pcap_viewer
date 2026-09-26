@@ -424,6 +424,12 @@ button.icon:hover {
   background: var(--vscode-list-activeSelectionBackground);
 }
 
+/* The focused row of a multi-selection (it's the one the detail pane shows). */
+#list-rows .list-row.focused {
+  outline: 1px solid var(--vscode-list-focusOutline, var(--vscode-focusBorder));
+  outline-offset: -1px;
+}
+
 #list-rows .list-row.loading > div {
   opacity: 0.4;
 }
@@ -702,7 +708,7 @@ button.icon:hover {
   background: var(--vscode-editor-foreground) !important;
 }
 
-#list-rows .list-row.marked:not(.selected) > div:first-child::before {
+#list-rows .list-row.marked > div:first-child::before {
   content: "● ";
 }
 

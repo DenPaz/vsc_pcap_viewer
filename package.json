@@ -164,8 +164,13 @@
         "category": "PCAP"
       },
       {
+        "command": "pcapViewer.selectAll",
+        "title": "Select All Packets",
+        "category": "PCAP"
+      },
+      {
         "command": "pcapViewer.toggleMark",
-        "title": "Mark/Unmark Packet",
+        "title": "Mark/Unmark Selected Packets",
         "category": "PCAP"
       },
       {
@@ -186,6 +191,11 @@
       {
         "command": "pcapViewer.exportMarked",
         "title": "Export Marked Packets\u2026",
+        "category": "PCAP"
+      },
+      {
+        "command": "pcapViewer.exportSelected",
+        "title": "Export Selected Packets\u2026",
         "category": "PCAP"
       },
       {
@@ -470,6 +480,10 @@
           "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/"
         },
         {
+          "command": "pcapViewer.selectAll",
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/"
+        },
+        {
           "command": "pcapViewer.toggleMark",
           "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/"
         },
@@ -487,6 +501,10 @@
         },
         {
           "command": "pcapViewer.exportMarked",
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/"
+        },
+        {
+          "command": "pcapViewer.exportSelected",
           "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/"
         },
         {
@@ -511,6 +529,12 @@
         "key": "ctrl+g",
         "mac": "cmd+g",
         "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/"
+      },
+      {
+        "command": "pcapViewer.selectAll",
+        "key": "ctrl+a",
+        "mac": "cmd+a",
+        "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inputFocus"
       },
       {
         "command": "pcapViewer.toggleMark",
