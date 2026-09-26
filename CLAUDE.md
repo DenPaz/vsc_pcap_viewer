@@ -66,7 +66,8 @@ The `Makefile` wraps all of these (`make` lists the targets; `make check` = lint
   (methods), `tshark.py` (discovery/argv/process helpers), `cache.py`
   (row store, frame index, LRU), `pdml.py` (PDML + hexdump parsing),
   `stats.py` (`-z` report and follow parsers), `fields.py` (field catalogue),
-  `coloring.py` (coloring rules → `colorfilters`), `export.py` (destination
+  `coloring.py` (coloring rules → `colorfilters`), `navigation.py` (find
+  expressions, hex parsing, frame-set filters, time formatting), `export.py` (destination
   checks, atomic output, CSV/JSON writers), `protocol.py` (error codes,
   request context), `cancellation.py`.
 - `backend/dissectors/example.lua` sample dissector (UDP/9999).
@@ -269,6 +270,50 @@ UI behaviour stays in the Chromium test (`test/webview/e2e.test.js`).
   transient. `@pcap` (package.json `chatParticipants`) is registered only if
   `vscode.chat.createChatParticipant` exists, and answers with validated filters
   plus `pcapViewer.applyFilter` buttons.
+- **Navigation and customisation** (Wireshark-like; all over the *current view*,
+  i.e. the filter and sort order, which only the backend knows in full):
+  - *Find Packet* is backend `find_packet`. It turns the search into a display
+    filter (`navigation.find_expression`: string → `frame contains "…"`, or
+    case-insensitive `frame matches "(?i)<re-escaped>"`; hex →
+    `frame contains aa:bb:cc`, a single byte as `"\xaa"`). The filter is
+    validated, run once and cached in the filter LRU. Matches go into a
+    one-byte-per-frame bitmap, then view order is walked from the selection,
+    wrapping around. The `marked` mode walks the marks instead.
+  - *Conversation stepping* is backend `neighbor_frame`: `tcp.stream`/
+    `udp.stream` columns, extracted once into the row store, else the unordered
+    Source/Destination pair. It reads cells in chunks along the view and
+    doesn't wrap.
+  - *Marks* live in the backend (`mark_packets`/`unmark_all`, per session,
+    not persisted). Rows carry `marked`; the webview patches its cached pages
+    instead of refetching. *Export marked* uses `export` with `marked: true`:
+    `frame.number in {…}` with ranges compressed, split into chunks when the
+    filter would exceed `MAX_FILTER_ARG` (16k characters, under Windows'
+    32767-character command line), and the chunks joined with `mergecap -a`.
+  - *Times* are formatted by the backend when `list_packets` gets `timeFormat`
+    (and `timeRef`). Plain relative time uses the index pass's column; every
+    other format uses `frame.time_epoch`, extracted once, parsed to integer ns.
+    "Since previous displayed" uses the previous row *of the view* (the page's
+    predecessor via `ordered.slice(offset-1, 1)`), not tshark's
+    `frame.time_delta_displayed`, which only knows the unfiltered pass. There
+    is one time reference; its row shows `*REF*` in every format. The format
+    and reference are part of the webview's page cache key.
+  - *Frame links*: after a detail loads, the webview asks `field_types` (exact
+    catalogue lookups) for the tree's field names once, and `FT_FRAMENUM`
+    fields become links. The back/forward history covers jumps (links, go to,
+    find, marks, conversation, first/last), not arrow keys.
+  - *Keys*: the webview handles keys VS Code leaves to a focused webview
+    (Ctrl+F, F3, Ctrl+Home/End, Esc). Keys VS Code binds globally even then
+    (Ctrl+M, Ctrl+T, Ctrl+,, Ctrl+Shift+N/B, and Alt+Left, which is Back on
+    Windows) are package.json keybindings scoped to the viewer
+    (`… && !sideBarFocus && !panelFocus && !inputFocus`). They send a
+    `command` message and the webview ignores the raw key, so nothing runs
+    twice.
+  - *Columns*: `pcapViewer.columnLayout` holds `{order, hidden}` by column id
+    (`number`…`info`, `custom:<field>`), and `lib.layoutColumns` maps visible
+    columns to cell indexes. `pcapViewer.columns` is now resource-scoped, so
+    *Apply as Column*, rename and remove write for the capture's folder.
+    `lib.cellFilter` builds cell filters (ip/ipv6/eth by address form; none for
+    Time or Info). `lib.formatBytesAs` has the bytes-pane copy formats.
 - **Protocol**: JSON-RPC 2.0 framing (`"jsonrpc": "2.0"`), LSP-style
   cancellation code -32800; app codes in `backend/pcap_backend/protocol.py`
   and mirrored in `src/backendClient.ts` (`ErrorCodes`; -32011 unsupported format). `open` returns the

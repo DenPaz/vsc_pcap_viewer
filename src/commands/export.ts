@@ -128,6 +128,37 @@ export async function exportFiltered(provider: PcapEditorProvider): Promise<Expo
   return result;
 }
 
+/** "PCAP: Export Marked Packets…": the packets marked with Ctrl+M to pcapng or pcap. */
+export async function exportMarked(provider: PcapEditorProvider): Promise<ExportResult | undefined> {
+  const session = requireSession(provider);
+  if (!session || !backendOf(session)) {
+    return undefined;
+  }
+  if (!session.markedCount) {
+    void vscode.window.showInformationMessage("No packets are marked. Mark packets with Ctrl+M (Cmd+M) first.");
+    return undefined;
+  }
+  const format = await vscode.window.showQuickPick(
+    [
+      { label: "pcapng", description: "Wireshark's default format", ext: "pcapng" },
+      { label: "pcap", description: "libpcap, for older tools", ext: "pcap" },
+    ],
+    { title: `Export ${session.markedCount.toLocaleString()} Marked Packet${session.markedCount === 1 ? "" : "s"}`, placeHolder: "File format" },
+  );
+  if (!format) {
+    return undefined;
+  }
+  const dest = await chooseDestination(session, "marked", format.ext, { [format.label]: [format.ext] });
+  if (!dest) {
+    return undefined;
+  }
+  const result = await runExport(session, `Exporting marked packets to ${path.basename(dest)}`, { kind: format.ext, dest, marked: true });
+  if (result) {
+    void reportExport(result, `${(result.packets ?? 0).toLocaleString()} marked packet${result.packets === 1 ? "" : "s"}`, true);
+  }
+  return result;
+}
+
 /** "PCAP: Export Packet List as CSV/JSON…": the displayed rows (current filter and sort) with their columns. */
 export async function exportPacketList(provider: PcapEditorProvider): Promise<ExportResult | undefined> {
   const session = requireSession(provider);
@@ -205,6 +236,7 @@ export function registerExportCommands(context: vscode.ExtensionContext, provide
   context.subscriptions.push(
     vscode.commands.registerCommand("pcapViewer.exportFiltered", () => exportFiltered(provider)),
     vscode.commands.registerCommand("pcapViewer.exportPacketList", () => exportPacketList(provider)),
+    vscode.commands.registerCommand("pcapViewer.exportMarked", () => exportMarked(provider)),
     vscode.commands.registerCommand("pcapViewer.exportPacketBytes", (frame?: number) => exportPacketBytes(provider, frame)),
   );
 }

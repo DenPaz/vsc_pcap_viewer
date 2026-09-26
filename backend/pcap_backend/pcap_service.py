@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import coloring, pdml, stats
+from . import coloring, navigation, pdml, stats
 from .cache import FrameIndex, LruCache, RowStore, sort_frames
 from .cancellation import CancelledError, CancelToken
 from .export import (
@@ -56,13 +56,19 @@ from .tshark import (
     DissectionOptions,
     StreamResult,
     ToolError,
+    ToolNotFoundError,
     Tshark,
+    find_tool,
     run,
     stream_lines,
 )
 
 MAX_PAGE = 5000
 EXPORT_CHUNK = 5000
+# Longest display filter passed as one argv entry (Windows caps the whole command
+# line at 32767 characters). Bigger marked-packet exports run in chunks + mergecap.
+MAX_FILTER_ARG = 16_000
+NEIGHBOR_CHUNK = 2000
 PROGRESS_INTERVAL_S = 0.2
 
 
@@ -205,6 +211,8 @@ class PcapService:
         self._colors: array[int] | None = None
         self._coloring_id = 0
         self._coloring_seq = 0
+        # Marked frames (Wireshark's Ctrl+M): per session, not persisted.
+        self._marks: set[int] = set()
         self._pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="svc")
 
     # ------------------------------------------------------------------ lifecycle
@@ -239,6 +247,7 @@ class PcapService:
         self._file = None
         self._view = None
         self._colors = None
+        self._marks = set()
         for cache in (self._filters, self._sorts, self._sort_columns, self._details):
             cache.clear()
         if self._work_dir is not None:
@@ -561,8 +570,25 @@ class PcapService:
             {"number": n, "cells": base_rows[i][:n_base] + [col[i] for col in extra_cols]}
             for i, n in enumerate(frames)
         ]
+        if "timeFormat" in params:
+            times = self._display_times(
+                f,
+                view_ordered,
+                offset,
+                frames,
+                [r["cells"][1] for r in rows],
+                param(params, "timeFormat", str),
+                params.get("timeRef"),
+                ctx,
+            )
+            for row, text in zip(rows, times, strict=True):
+                row["cells"][1] = text
         with self._lock:
+            marks = self._marks
             colors, coloring_id = self._colors, self._coloring_id
+        for row in rows:
+            if row["number"] in marks:
+                row["marked"] = True
         if colors is not None:
             for row in rows:
                 n = row["number"]
@@ -657,6 +683,232 @@ class PcapService:
         ordered = sort_frames(view.matched.frames(), values, desc, numeric=numeric or None)
         self._sorts.put(key, ordered)
         return ordered
+
+    # ------------------------------------------------------------------ time formats
+
+    def _display_times(
+        self,
+        f: _Open,
+        ordered: FrameIndex,
+        offset: int,
+        frames: list[int],
+        relative: list[str],
+        fmt: str,
+        ref: Any,
+        ctx: RequestContext,
+    ) -> list[str]:
+        """Time column text for one page in ``fmt`` (see navigation.TIME_FORMATS).
+
+        Everything but plain "seconds since beginning" needs frame.time_epoch,
+        extracted once into the row store. "Since previous displayed" follows the
+        current filter and sort order: the previous row of the view, not
+        tshark's frame.time_delta_displayed from the unfiltered pass.
+        """
+        if fmt not in navigation.TIME_FORMATS:
+            raise InvalidParamsError(
+                f"timeFormat must be one of {', '.join(navigation.TIME_FORMATS)}"
+            )
+        if ref is not None and (
+            isinstance(ref, bool) or not isinstance(ref, int) or not 1 <= ref <= f.info.frames
+        ):
+            raise InvalidParamsError(f"timeRef must be a frame number 1..{f.info.frames}")
+        if fmt == "relative" and ref is None:
+            return [
+                navigation.format_seconds(ns) if (ns := navigation.parse_ns(v)) is not None else v
+                for v in relative
+            ]
+        fld = "frame.time_epoch"
+        self._ensure_columns(f, [fld], ctx)
+        need = set(frames)
+        prev_row: int | None = None
+        if fmt == "delta_displayed" and offset > 0 and frames:
+            prev_row = ordered.slice(offset - 1, 1)[0]
+            need.add(prev_row)
+        if fmt == "delta_captured":
+            need |= {n - 1 for n in frames if n > 1}
+        if ref is not None:
+            need.add(ref)
+        wanted = sorted(need)
+        epoch = {
+            n: navigation.parse_ns(c)
+            for n, c in zip(wanted, self._column_cells(f, fld, wanted), strict=True)
+        }
+        ref_ns = epoch.get(ref) if ref is not None else None
+        zero = navigation.format_seconds(0)
+        out: list[str] = []
+        for n in frames:
+            e = epoch.get(n)
+            if n == ref:
+                out.append("*REF*")
+            elif e is None:
+                out.append("")
+            elif fmt == "relative":
+                out.append(navigation.format_seconds(e - ref_ns) if ref_ns is not None else "")
+            elif fmt == "delta_displayed":
+                p = epoch.get(prev_row) if prev_row is not None else None
+                out.append(navigation.format_seconds(e - p) if p is not None else zero)
+            elif fmt == "delta_captured":
+                p = epoch.get(n - 1)
+                out.append(navigation.format_seconds(e - p) if p is not None else zero)
+            elif fmt == "epoch":
+                out.append(navigation.format_seconds(e))
+            else:
+                out.append(navigation.format_absolute(e, utc=fmt == "utc"))
+            prev_row = n
+        return out
+
+    # ------------------------------------------------------------------ find / navigate / mark
+
+    def find_packet(self, params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
+        """Next (or previous) frame of the current view that matches a search.
+
+        ``mode``: ``filter`` (a display filter), ``string`` (text in the packet
+        bytes; ``caseSensitive``), ``hex`` (bytes, e.g. ``47:45:54``) or
+        ``marked``. The search starts after ``from`` (a frame number; omitted:
+        from the top or bottom) in view order (current filter and sort) and
+        wraps around. The search filter runs once and is cached like any filter.
+        """
+        mode = param(params, "mode", str)
+        direction = param(params, "direction", str, "next")
+        if mode not in navigation.FIND_MODES or direction not in ("next", "previous"):
+            raise InvalidParamsError("invalid find mode or direction")
+        f, view = self._require_view()
+        n_frames = f.info.frames
+        hits = bytearray(n_frames + 1)
+        expr = ""
+        if mode == "marked":
+            with self._lock:
+                for n in self._marks:
+                    if 0 < n <= n_frames:
+                        hits[n] = 1
+        else:
+            try:
+                expr = navigation.find_expression(
+                    mode, param(params, "value", str, ""), bool(params.get("caseSensitive"))
+                )
+            except ValueError as exc:
+                raise InvalidParamsError(str(exc)) from exc
+            matched = self._filters.get(expr)
+            if matched is None:
+                error = f.tshark.validate_filter(expr, ctx.token)
+                if error:
+                    raise FilterError(error, {"expr": expr})
+                matched = self._run_filter(f, expr, ctx)
+                self._filters.put(expr, matched)
+            for n in matched.frames():
+                hits[n] = 1
+        ordered = view.ordered
+        seq = ordered.frames()
+        total = len(ordered)
+        start = params.get("from")
+        pos = ordered.position_of(start) if isinstance(start, int) else None
+        step = 1 if direction == "next" else -1
+        result: dict[str, Any] = {"frame": None, "index": None, "filterId": view.filter_id}
+        if expr:
+            result["expr"] = expr
+        for k in range(total):
+            if pos is None:
+                i = k if step == 1 else total - 1 - k
+            else:
+                i = (pos + step * (k + 1)) % total
+            if hits[seq[i]]:
+                wrapped = pos is not None and (i <= pos if step == 1 else i >= pos)
+                result.update({"frame": seq[i], "index": i, "wrapped": wrapped})
+                break
+            if k % 65536 == 65535:
+                ctx.token.raise_if_cancelled()
+        return result
+
+    def neighbor_frame(self, params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
+        """Next/previous frame of the current view in the same conversation.
+
+        The conversation is the tcp.stream or udp.stream (extracted once into the
+        row store), else the Source/Destination address pair. No wrap-around.
+        """
+        frame = param(params, "frame", int)
+        direction = param(params, "direction", str, "next")
+        if direction not in ("next", "previous"):
+            raise InvalidParamsError("direction must be next or previous")
+        f, view = self._require_view()
+        pos = view.ordered.position_of(frame)
+        if pos is None:
+            raise InvalidParamsError(f"packet {frame} is not displayed")
+        self._ensure_columns(f, ["tcp.stream", "udp.stream"], ctx)
+        key = self._conversation_keys(f, [frame])[0]
+        result: dict[str, Any] = {"frame": None, "index": None, "filterId": view.filter_id}
+        if key is None:
+            return result
+        seq = view.ordered.frames()
+        step = 1 if direction == "next" else -1
+        i = pos + step
+        while 0 <= i < len(seq):
+            stop = min(len(seq), i + NEIGHBOR_CHUNK) if step == 1 else max(-1, i - NEIGHBOR_CHUNK)
+            positions = list(range(i, stop, step))
+            keys = self._conversation_keys(f, [seq[p] for p in positions])
+            for p, k in zip(positions, keys, strict=True):
+                if k == key:
+                    result.update({"frame": seq[p], "index": p})
+                    return result
+            ctx.token.raise_if_cancelled()
+            i = stop
+        return result
+
+    def _conversation_keys(self, f: _Open, frames: list[int]) -> list[tuple[str, ...] | None]:
+        tcp = self._column_cells(f, "tcp.stream", frames)
+        udp = self._column_cells(f, "udp.stream", frames)
+        base = f.base.rows.get_many(frames)
+        keys: list[tuple[str, ...] | None] = []
+        for t, u, cells in zip(tcp, udp, base, strict=True):
+            if t:
+                keys.append(("tcp", t.split(",")[0]))
+            elif u:
+                keys.append(("udp", u.split(",")[0]))
+            elif cells[2] and cells[3]:
+                keys.append(("addr", *sorted((cells[2], cells[3]))))
+            else:
+                keys.append(None)
+        return keys
+
+    def mark_packets(self, params: dict[str, Any], _ctx: RequestContext) -> dict[str, Any]:
+        """Mark (``mark: true``), unmark (``false``) or toggle (omitted) ``frames``."""
+        frames = params.get("frames")
+        if not isinstance(frames, list) or not all(
+            isinstance(n, int) and not isinstance(n, bool) for n in frames
+        ):
+            raise InvalidParamsError("parameter 'frames' must be a list of frame numbers")
+        f = self._require_file()
+        mark = params.get("mark")
+        with self._lock:
+            for n in frames:
+                if not 1 <= n <= f.info.frames:
+                    continue
+                on = (n not in self._marks) if mark is None else bool(mark)
+                if on:
+                    self._marks.add(n)
+                else:
+                    self._marks.discard(n)
+            return {
+                "count": len(self._marks),
+                "marked": [n for n in frames if n in self._marks],
+            }
+
+    def unmark_all(self, _params: dict[str, Any], _ctx: RequestContext) -> dict[str, Any]:
+        self._require_file()
+        with self._lock:
+            self._marks = set()
+        return {"count": 0}
+
+    def field_types(self, params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
+        """Type and display name of each field in ``names`` (unknown ones are left out),
+        e.g. to render FT_FRAMENUM fields as links to the frame they reference."""
+        names = str_list(params, "names")[:2000]
+        catalog = self._catalog(ctx)
+        types: dict[str, dict[str, str]] = {}
+        for name in names:
+            entry = catalog.lookup(name)
+            if entry is not None:
+                types[name] = {"type": entry.get("type", "protocol"), "desc": entry.get("desc", "")}
+        return {"types": types}
 
     # ------------------------------------------------------------------ detail
 
@@ -930,6 +1182,8 @@ class PcapService:
     def _export_capture(
         self, f: _Open, fmt: str, dest: Path, params: dict[str, Any], ctx: RequestContext
     ) -> dict[str, Any]:
+        if params.get("marked"):
+            return self._export_marked(f, fmt, dest, ctx)
         if "filter" in params:
             flt = param(params, "filter", str, "").strip()
         else:
@@ -977,6 +1231,55 @@ class PcapService:
             "filter": flt,
             "warnings": _stderr_warnings(result.stderr),
         }
+
+    def _export_marked(self, f: _Open, fmt: str, dest: Path, ctx: RequestContext) -> dict[str, Any]:
+        """Marked frames to a capture: ``frame.number in {...}`` (ranges compressed).
+
+        A filter longer than MAX_FILTER_ARG would overflow the command line
+        (Windows caps it at 32767 characters), so big mark sets are written in
+        chunks and joined in frame order with ``mergecap -a``.
+        """
+        with self._lock:
+            marks = sorted(self._marks)
+        if not marks:
+            raise InvalidParamsError("No packets are marked")
+        filters = navigation.frame_set_filters(marks, MAX_FILTER_ARG)
+        if len(filters) == 1:
+            result = self._export_capture(f, fmt, dest, {"filter": filters[0]}, ctx)
+            result["filter"] = "marked packets"
+            return result
+        try:
+            mergecap = find_tool("mergecap", sibling_of=f.tshark.path)
+        except ToolNotFoundError as exc:
+            raise ToolError(
+                f"{len(marks):,} marked packets need mergecap (part of Wireshark), "
+                "which was not found; mark fewer packets or install mergecap"
+            ) from exc
+        assert self._work_dir is not None
+        parts: list[Path] = []
+        packets = 0
+        warnings: list[str] = []
+        try:
+            for i, flt in enumerate(filters):
+                ctx.token.raise_if_cancelled()
+                part = self._work_dir / f"marked-{i}.{fmt}"
+                parts.append(part)
+                res = self._export_capture(f, fmt, part, {"filter": flt}, ctx)
+                packets += res["packets"]
+                warnings += res["warnings"]
+                ctx.progress({"phase": "export", "fraction": min(0.99, (i + 1) / len(filters))})
+            with atomic_output(dest) as tmp:
+                merged = run(
+                    [str(mergecap), "-a", "-F", fmt, "-w", str(tmp), *map(str, parts)], ctx.token
+                )
+                if merged.returncode != 0 or not tmp.exists():
+                    raise ToolError(
+                        merged.stderr or "mergecap failed", merged.stderr, merged.returncode
+                    )
+        finally:
+            for part in parts:
+                part.unlink(missing_ok=True)
+        return {"packets": packets, "filter": "marked packets", "warnings": warnings}
 
     def _export_list(
         self, f: _Open, fmt: str, dest: Path, params: dict[str, Any], ctx: RequestContext
@@ -1247,6 +1550,11 @@ def rpc_methods(service: PcapService) -> dict[str, Callable[[dict[str, Any], Req
         "check_dissectors": service.check_dissectors,
         "decode_as_options": service.decode_as_options,
         "set_coloring": service.set_coloring,
+        "find_packet": service.find_packet,
+        "neighbor_frame": service.neighbor_frame,
+        "mark_packets": service.mark_packets,
+        "unmark_all": service.unmark_all,
+        "field_types": service.field_types,
         "export": service.export,
         "close": service.close,
     }

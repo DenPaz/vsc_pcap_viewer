@@ -652,3 +652,94 @@ button.icon:hover {
   margin: 4px 0;
   background: var(--vscode-menu-separatorBackground, var(--border));
 }
+
+/* ------------------------------------------------------------------ find bar */
+
+#find-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 4px 4px;
+}
+
+#find-bar select,
+#find-bar input[type="text"] {
+  color: var(--vscode-input-foreground);
+  background: var(--vscode-input-background);
+  border: 1px solid var(--vscode-input-border, transparent);
+  padding: 2px 4px;
+  font-family: var(--mono);
+  font-size: var(--mono-size);
+}
+
+#find-input {
+  flex: 1;
+  min-width: 80px;
+}
+
+#find-input.invalid {
+  border-color: var(--vscode-inputValidation-errorBorder);
+}
+
+#find-status {
+  min-width: 70px;
+  color: var(--vscode-descriptionForeground);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 40%;
+}
+
+#find-status.error {
+  color: var(--vscode-errorForeground);
+}
+
+/* ------------------------------------------------------------------ marks, links, notices */
+
+/* Marked packets (Ctrl+M) win over coloring rules; the selection wins over marks. */
+#list-rows .list-row.marked:not(.selected) {
+  color: var(--vscode-editor-background) !important;
+  background: var(--vscode-editor-foreground) !important;
+}
+
+#list-rows .list-row.marked:not(.selected) > div:first-child::before {
+  content: "● ";
+}
+
+.node-row.frame-link .label {
+  color: var(--vscode-textLink-foreground);
+  cursor: pointer;
+}
+
+.node-row.frame-link .label:hover {
+  text-decoration: underline;
+}
+
+#filter-error button.notice-action {
+  margin-left: 8px;
+  padding: 0 6px;
+}
+
+.status-link {
+  padding: 0;
+  margin-right: 12px;
+  color: inherit;
+  background: transparent;
+  border: none;
+  font: inherit;
+  cursor: pointer;
+}
+
+.status-link:hover {
+  color: var(--vscode-textLink-foreground);
+  text-decoration: underline;
+}
+
+/* Column headers: drag to reorder. */
+#list-header > div.drag-over {
+  box-shadow: inset 2px 0 0 var(--vscode-focusBorder);
+}
+
+#list-header > div[draggable="true"] {
+  cursor: grab;
+}

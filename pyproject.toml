@@ -64,6 +64,7 @@ ignore = [
 "test/fixtures/generate.py" = ["S311"]
 "test/backend/test_stats.py" = ["E501"]  # captured tshark report text
 "test/backend/test_export.py" = ["E501"]  # one-line request literals
+"test/backend/test_navigation.py" = ["E501"]
 
 [tool.mypy]
 python_version = "3.14"

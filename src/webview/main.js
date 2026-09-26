@@ -18,6 +18,15 @@
   const MAX_CACHED_PAGES = 100;
   const MAX_INFLIGHT_PAGES = 6;
 
+  /** @type {Record<string, string>} */
+  const TIME_LABELS = {
+    relative: "Time: seconds since start",
+    delta_displayed: "Time: since previous displayed",
+    delta_captured: "Time: since previous captured",
+    absolute: "Time: local date and time",
+    utc: "Time: UTC date and time",
+    epoch: "Time: epoch seconds",
+  };
   const DEFAULT_WIDTHS = { number: 70, time: 100, source: 150, destination: 150, protocol: 80, length: 64 };
   const CUSTOM_WIDTH = 120;
   const NUMERIC_IDS = new Set(["number", "time", "length"]);
@@ -52,6 +61,17 @@
     bytesView: $("bytes-view"),
     statusLeft: $("status-left"),
     statusRight: $("status-right"),
+    statusTime: $("status-time"),
+    statusInfo: $("status-info"),
+    findBar: $("find-bar"),
+    findMode: /** @type {HTMLSelectElement} */ ($("find-mode")),
+    findInput: /** @type {HTMLInputElement} */ ($("find-input")),
+    findCase: /** @type {HTMLInputElement} */ ($("find-case")),
+    findCaseLabel: $("find-case-label"),
+    findPrev: $("find-prev"),
+    findNext: $("find-next"),
+    findStatus: $("find-status"),
+    findClose: $("find-close"),
     overlay: $("overlay"),
     overlayBox: /** @type {HTMLElement} */ (document.querySelector(".overlay-box")),
     overlayMessage: $("overlay-message"),
@@ -68,7 +88,7 @@
 
   /**
    * @typedef {{id: string, title: string, field: string, numeric?: boolean, custom?: boolean}} Column
-   * @typedef {{number: number, cells: string[], color?: number, cid?: number}} Row
+   * @typedef {{number: number, cells: string[], color?: number, cid?: number, marked?: boolean}} Row
    * @typedef {{name: string, foreground: string, background: string}} ColorRule
    */
   const state = {
@@ -100,6 +120,16 @@
     /** @type {number | null} */ elapsedMs: null,
     /** Palette for rows whose list_packets result had this coloringId. */
     /** @type {{id: number, rules: ColorRule[]} | null} */ coloring: null,
+    /** Column order / hidden columns (pcapViewer.columnLayout). */
+    /** @type {{order: string[], hidden: string[]}} */ layout: { order: [], hidden: [] },
+    /** Time column format (pcapViewer.timeFormat) and time reference frame (Ctrl+T). */
+    timeFormat: "relative",
+    /** @type {number | null} */ timeRef: null,
+    markCount: 0,
+    /** Back/forward history over jumps (links, go to, find, marks, conversation). */
+    /** @type {{back: number[], forward: number[]}} */ nav: { back: [], forward: [] },
+    /** Field name → {type, desc} from the backend's field catalogue (frame links, Apply as Column). */
+    /** @type {Map<string, {type: string, desc: string}>} */ fieldTypes: new Map(),
     /** "✨ Ask AI": available (host says a model can be used), asking (the input holds a description). */
     ai: { available: false, asking: false, /** @type {number | null} */ request: null, savedText: "", /** @type {string[]} */ savedClasses: [] },
   };
@@ -181,8 +211,17 @@
         break;
       case "columns":
         state.customColumns = msg.columns;
+        state.layout = msg.layout || { order: [], hidden: [] };
         rebuildColumns();
-        resetView();
+        resetView({ keepSelection: true });
+        break;
+      case "timeFormat":
+        state.timeFormat = msg.format;
+        updateStatus();
+        refreshRows();
+        break;
+      case "command":
+        runCommand(msg.command);
         break;
       case "history":
         setHistory(msg.history);
@@ -214,6 +253,11 @@
     state.baseColumns = msg.info.columns.slice(0, 7);
     // Only columns tshark accepted; unknown fields were dropped (with a warning) at open.
     state.customColumns = lib.acceptedColumns(msg.columns, msg.info.columns.slice(7));
+    state.layout = msg.layout || { order: [], hidden: [] };
+    state.timeFormat = msg.timeFormat || "relative";
+    state.timeRef = null;
+    state.markCount = 0;
+    state.nav = { back: [], forward: [] };
     state.total = msg.info.frames;
     state.matchCount = msg.info.frames;
     state.filterId = msg.info.filterId;
@@ -302,17 +346,30 @@
     ];
   }
 
+  /** Visible columns in display order, each with its cell index in a row. */
+  function visibleColumns() {
+    return lib.layoutColumns(columns(), state.layout);
+  }
+
+  /** @param {Column} c */
+  function columnWidth(c) {
+    return c.id === "info" ? "minmax(200px, 1fr)" : `${state.widths[c.id] ?? DEFAULT_WIDTHS[/** @type {keyof typeof DEFAULT_WIDTHS} */ (c.id)] ?? CUSTOM_WIDTH}px`;
+  }
+
+  function applyColumnWidths() {
+    el.list.style.setProperty("--cols", visibleColumns().map((v) => columnWidth(v.column)).join(" "));
+  }
+
   function rebuildColumns() {
-    const cols = columns();
-    const template = cols
-      .map((c) => (c.id === "info" ? "minmax(200px, 1fr)" : `${state.widths[c.id] ?? DEFAULT_WIDTHS[/** @type {keyof typeof DEFAULT_WIDTHS} */ (c.id)] ?? CUSTOM_WIDTH}px`))
-      .join(" ");
-    el.list.style.setProperty("--cols", template);
+    const cols = visibleColumns().map((v) => v.column);
+    applyColumnWidths();
     el.header.replaceChildren(
       ...cols.map((c) => {
         const cell = document.createElement("div");
         cell.className = "list-row-cell" + (NUMERIC_IDS.has(c.id) ? " num" : "");
-        cell.title = c.field;
+        cell.title = `${c.field} (drag to reorder, right-click for options)`;
+        cell.dataset.id = c.id;
+        cell.draggable = true;
         cell.append(c.title);
         if (state.sort && state.sort.field === c.field) {
           const ind = document.createElement("span");
@@ -372,6 +429,8 @@
     resetView({ keepSelection: true });
   }
 
+  let resizing = false;
+
   /** @param {MouseEvent} e @param {string} id @param {HTMLElement} cell */
   function startColumnResize(e, id, cell) {
     e.preventDefault();
@@ -381,13 +440,11 @@
     /** @param {MouseEvent} ev */
     const move = (ev) => {
       state.widths[id] = Math.max(30, Math.round(startW + ev.clientX - startX));
-      const cols = columns();
-      el.list.style.setProperty(
-        "--cols",
-        cols.map((c) => (c.id === "info" ? "minmax(200px, 1fr)" : `${state.widths[c.id] ?? DEFAULT_WIDTHS[/** @type {keyof typeof DEFAULT_WIDTHS} */ (c.id)] ?? CUSTOM_WIDTH}px`)).join(" "),
-      );
+      applyColumnWidths();
     };
+    resizing = true;
     const up = () => {
+      resizing = false;
       window.removeEventListener("mousemove", move);
       window.removeEventListener("mouseup", up);
       persist();
@@ -404,6 +461,8 @@
       state.sort ? `${state.sort.field}:${state.sort.desc}` : "",
       state.customColumns.map((c) => c.field).join(","),
       state.coloring?.id ?? 0,
+      state.timeFormat,
+      state.timeRef ?? "",
     ].join("|");
   }
 
@@ -470,14 +529,14 @@
       rowHeight: state.rowHeight,
     });
     el.rows.style.transform = `translateY(${win.top}px)`;
-    const cols = columns();
+    const cols = visibleColumns();
     // Reuse row elements (pooling keeps scrolling cheap).
     while (el.rows.children.length < win.count) {
       const row = document.createElement("div");
       row.className = "list-row";
       for (let i = 0; i < cols.length; i++) {
         const cell = document.createElement("div");
-        if (NUMERIC_IDS.has(cols[i].id)) {
+        if (NUMERIC_IDS.has(cols[i].column.id)) {
           cell.className = "num";
         }
         row.append(cell);
@@ -496,17 +555,17 @@
       rowEl.classList.toggle("loading", !row);
       rowEl.classList.toggle("selected", index === state.selectedIndex);
       rowEl.setAttribute("aria-selected", String(index === state.selectedIndex));
-      // Coloring rule colors, except on the selected row (it keeps the theme's selection colors).
-      const rule = index !== state.selectedIndex ? lib.rowColors(row, state.coloring) : null;
+      // Coloring rule colors, except on the selected row (it keeps the theme's selection
+      // colors) and marked rows (the mark style wins).
+      rowEl.classList.toggle("marked", !!row?.marked);
+      const rule = index !== state.selectedIndex && !row?.marked ? lib.rowColors(row, state.coloring) : null;
       rowEl.classList.toggle("colored", !!rule);
       rowEl.style.backgroundColor = rule ? rule.background : "";
       rowEl.style.color = rule ? rule.foreground : "";
       for (let c = 0; c < cols.length; c++) {
         const cell = /** @type {HTMLElement} */ (rowEl.children[c]);
-        let text = row ? row.cells[c] ?? "" : c === 0 ? "…" : "";
-        if (row && cols[c].id === "time") {
-          text = lib.formatRelativeTime(text);
-        }
+        // Times arrive formatted by the backend (pcapViewer.timeFormat, time reference).
+        const text = row ? row.cells[cols[c].index] ?? "" : c === 0 ? "…" : "";
         if (cell.textContent !== text) {
           cell.textContent = text;
         }
@@ -529,6 +588,8 @@
         limit: PAGE_SIZE,
         columns: state.customColumns.map((c) => c.field),
         sort: state.sort,
+        timeFormat: state.timeFormat,
+        timeRef: state.timeRef,
       });
       state.inflightPages.set(key, req.id);
       req.promise.then(
@@ -584,8 +645,8 @@
   });
 
   el.viewport.addEventListener("keydown", (e) => {
-    if (!state.ready || state.total === 0) {
-      return;
+    if (!state.ready || state.total === 0 || e.ctrlKey || e.metaKey || e.altKey) {
+      return; // Ctrl+Home/End etc. are handled document-wide
     }
     const pageRows = Math.max(1, Math.floor(el.viewport.clientHeight / state.rowHeight) - 1);
     const cur = state.selectedIndex ?? -1;
@@ -671,22 +732,42 @@
     }
   }
 
-  /** @param {number} frame */
-  async function gotoFrame(frame) {
+  /**
+   * Select a frame by number (go to packet, frame links, history). If the
+   * filter hides it, say so and offer to clear the filter.
+   * @param {number} frame @param {{record?: boolean}} [opts] record: add the jump to the back history
+   * @returns {Promise<boolean>}
+   */
+  async function gotoFrame(frame, opts = {}) {
     if (!state.ready) {
-      return;
+      return false;
     }
     try {
       const res = await rpc("find_frame", { number: frame }).promise;
       if (res.index === null || res.index === undefined) {
-        showFilterError(`Packet ${frame} is not displayed with the current filter.`, true);
-        return;
+        showNotice(
+          `Packet ${frame} is not displayed with the current filter.`,
+          state.appliedFilter ? { label: "Clear filter and go", run: () => void clearFilterAndGo(frame, opts) } : undefined,
+        );
+        return false;
+      }
+      if (opts.record !== false) {
+        recordJump(frame);
       }
       selectIndex(res.index, true);
       el.viewport.focus();
+      return true;
     } catch (err) {
       showFilterError(String(/** @type {any} */ (err)?.message ?? err), true);
+      return false;
     }
+  }
+
+  /** @param {number} frame @param {{record?: boolean}} opts */
+  async function clearFilterAndGo(frame, opts) {
+    el.filterInput.value = "";
+    await applyFilter("");
+    await gotoFrame(frame, opts);
   }
 
   // ------------------------------------------------------------------ detail tree
@@ -772,6 +853,7 @@
     renderSourceTabs(detail.sources);
     hex = null;
     showSource(0);
+    void loadFieldTypes(detail);
     // Keep the same field selected when moving between similar packets.
     if (previousKey) {
       for (const entry of nodeIndex.values()) {
@@ -805,6 +887,7 @@
     /** @type {NodeEntry} */
     const entry = { node, path, row, children: null, built: false };
     nodeIndex.set(node.id, entry);
+    decorateFrameLink(entry);
     if (node.children && node.children.length) {
       const children = document.createElement("div");
       children.setAttribute("role", "group");
@@ -863,6 +946,10 @@
       setExpanded(entry, !isExpanded(entry));
     }
     selectNode(entry.node.id, { scroll: false });
+    const target = frameLinkTarget(entry.node);
+    if (target !== null && /** @type {HTMLElement} */ (e.target).classList.contains("label")) {
+      void gotoFrame(target);
+    }
   });
 
   el.tree.addEventListener("dblclick", (e) => {
@@ -914,7 +1001,15 @@
           el.viewport.focus();
         }
         break;
-      case "Enter":
+      case "Enter": {
+        const target = current ? frameLinkTarget(current.node) : null;
+        if (target !== null) {
+          void gotoFrame(target); // frame reference: follow it
+        } else if (current) {
+          setExpanded(current, !isExpanded(current));
+        }
+        break;
+      }
       case " ":
         if (current) {
           setExpanded(current, !isExpanded(current));
@@ -1103,8 +1198,20 @@
     const protocol = (row.cells[4] || "").toUpperCase();
     /** @param {"tcp" | "udp" | "tls" | "http"} proto */
     const follow = (proto) => () => vscode.postMessage({ type: "follow", proto, frame: row.number });
+    // The clicked cell: Apply as Filter on its value (validated when applied).
+    const cellEl = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (e.target).closest(".list-row > div"));
+    const vis = cellEl ? visibleColumns()[[...rowEl.children].indexOf(cellEl)] : undefined;
+    const cellValue = vis ? row.cells[vis.index] ?? "" : "";
+    const filter = vis ? lib.cellFilter(vis.column, cellValue) : null;
+    const current = state.appliedFilter;
     /** @type {[string, (() => void) | null][]} */
     const items = [
+      ["Apply as Filter", filter ? () => applyFromTree(lib.combineFilter(current, filter, "replace"), true) : null],
+      ["Prepare as Filter", filter ? () => applyFromTree(filter, false) : null],
+      ["…and Selected", filter && current ? () => applyFromTree(lib.combineFilter(current, filter, "and"), true) : null],
+      ["…or Selected", filter && current ? () => applyFromTree(lib.combineFilter(current, filter, "or"), true) : null],
+      ["…and not Selected", filter ? () => applyFromTree(lib.combineFilter(current, filter, "not"), true) : null],
+      ["-", null],
       ["Follow TCP Stream", follow("tcp")],
       ["Follow UDP Stream", follow("udp")],
       ["Follow TLS Stream", /TLS|SSL/.test(protocol) ? follow("tls") : null],
@@ -1113,6 +1220,10 @@
       ["Decode As…", () => vscode.postMessage({ type: "decodeAs", frame: row.number })],
       ["Export Packet Bytes…", () => vscode.postMessage({ type: "exportBytes", frame: row.number })],
       ["-", null],
+      [row.marked ? "Unmark Packet" : "Mark Packet", () => void toggleMark()],
+      [state.timeRef === row.number ? "Unset Time Reference" : "Set Time Reference", () => toggleTimeReference()],
+      ["-", null],
+      ["Copy Value", cellValue ? () => copy(cellValue) : null],
       ["Copy Summary", () => copy(row.cells.join("\t"))],
       ["Copy Frame Number", () => copy(String(row.number))],
     ];
@@ -1138,6 +1249,8 @@
       ["…or Selected", filter && current ? () => applyFromTree(lib.combineFilter(current, filter, "or"), true) : null],
       ["…and not Selected", filter ? () => applyFromTree(lib.combineFilter(current, filter, "not"), true) : null],
       ["Colorize with Filter…", filter ? () => vscode.postMessage({ type: "colorize", filter }) : null],
+      ["Apply as Column", canBeColumn(node) ? () => applyColumn(node) : null],
+      ...(frameLinkTarget(node) !== null ? /** @type {[string, (() => void) | null][]} */ ([[`Go to Packet ${frameLinkTarget(node)}`, () => void gotoFrame(/** @type {number} */ (frameLinkTarget(node)))]]) : []),
       ["-", null],
       ["Copy Value", node.show !== undefined ? () => copy(node.show) : null],
       ["Copy Line", () => copy(node.label)],
@@ -1246,6 +1359,9 @@
   }
 
   async function validateNow() {
+    if (state.ai.asking) {
+      return; // the input holds a description, not a filter
+    }
     const expr = el.filterInput.value.trim();
     const seq = ++state.validateSeq;
     if (!expr) {
@@ -1258,7 +1374,7 @@
     }
     try {
       const res = await rpc("validate_filter", { expr }).promise;
-      if (seq !== state.validateSeq) {
+      if (seq !== state.validateSeq || state.ai.asking) {
         return;
       }
       el.filterInput.classList.toggle("valid", res.valid);
@@ -1633,6 +1749,580 @@
     }
   });
 
+  // ------------------------------------------------------------------ notices
+
+  /**
+   * An info line under the filter bar, optionally with one action button.
+   * @param {string} message @param {{label: string, run: () => void}} [action]
+   */
+  function showNotice(message, action) {
+    showFilterError(message, true);
+    if (action) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "notice-action secondary";
+      button.textContent = action.label;
+      button.addEventListener("click", () => {
+        showFilterError("");
+        action.run();
+      });
+      el.filterError.append(button);
+    }
+  }
+
+  // ------------------------------------------------------------------ navigation history
+
+  const MAX_HISTORY = 100;
+
+  /** Remember where a jump starts (Alt+Left comes back here). @param {number} [target] */
+  function recordJump(target) {
+    const from = state.selectedFrame;
+    if (from !== null && from !== target) {
+      state.nav.back.push(from);
+      if (state.nav.back.length > MAX_HISTORY) {
+        state.nav.back.shift();
+      }
+      state.nav.forward = [];
+    }
+  }
+
+  /** Select a row found by the backend (find, marks, conversation, first/last). */
+  function jumpToIndex(/** @type {number} */ index, /** @type {number | null} */ frame, /** @type {boolean} */ focusList) {
+    recordJump(frame ?? undefined);
+    selectIndex(index, true);
+    if (focusList) {
+      el.viewport.focus();
+    }
+  }
+
+  /** @param {"back" | "forward"} which */
+  async function goHistory(which) {
+    const from = which === "back" ? state.nav.back : state.nav.forward;
+    const to = which === "back" ? state.nav.forward : state.nav.back;
+    const frame = from.pop();
+    if (frame === undefined) {
+      showNotice(which === "back" ? "No earlier packet to go back to." : "No later packet to go forward to.");
+      return;
+    }
+    if (state.selectedFrame !== null) {
+      to.push(state.selectedFrame);
+    }
+    await gotoFrame(frame, { record: false });
+  }
+
+  // ------------------------------------------------------------------ frame links
+
+  /** Frame number a detail-tree node links to (FT_FRAMENUM fields such as tcp.analysis.acks_frame). @param {any} node */
+  function frameLinkTarget(node) {
+    const type = node.name ? state.fieldTypes.get(node.name)?.type : undefined;
+    if (type !== "FT_FRAMENUM") {
+      return null;
+    }
+    const n = Number(node.show);
+    return Number.isInteger(n) && n > 0 ? n : null;
+  }
+
+  /** @param {NodeEntry} entry */
+  function decorateFrameLink(entry) {
+    const target = frameLinkTarget(entry.node);
+    if (target !== null && !entry.row.classList.contains("frame-link")) {
+      entry.row.classList.add("frame-link");
+      entry.row.title = `Go to packet ${target} (click or Enter; Alt+Left comes back)`;
+    }
+  }
+
+  /** Look up the types of the packet's fields (once per name), then mark frame links. @param {any} detail */
+  async function loadFieldTypes(detail) {
+    /** @type {Set<string>} */
+    const names = new Set();
+    /** @param {any[]} nodes */
+    const walk = (nodes) => {
+      for (const n of nodes) {
+        if (n.name && !state.fieldTypes.has(n.name)) {
+          names.add(n.name);
+        }
+        if (n.children) {
+          walk(n.children);
+        }
+      }
+    };
+    walk(detail.tree);
+    if (names.size) {
+      try {
+        const res = await rpc("field_types", { names: [...names].slice(0, 2000) }).promise;
+        for (const name of names) {
+          state.fieldTypes.set(name, res.types[name] ?? { type: "", desc: "" });
+        }
+      } catch {
+        return;
+      }
+    }
+    if (state.detail === detail) {
+      for (const entry of nodeIndex.values()) {
+        decorateFrameLink(entry);
+      }
+    }
+  }
+
+  /** @param {any} node */
+  function canBeColumn(node) {
+    return !!node.name && !node.proto && node.name !== "fake-field-wrapper" && /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/.test(node.name);
+  }
+
+  /** "Apply as Column": the host adds it to pcapViewer.columns (capture's folder scope). @param {any} node */
+  function applyColumn(node) {
+    const desc = state.fieldTypes.get(node.name)?.desc;
+    const title = desc || String(node.label).split(":")[0].trim() || node.name;
+    vscode.postMessage({ type: "applyColumn", field: node.name, title });
+  }
+
+  // ------------------------------------------------------------------ find packet
+
+  /** @type {Record<string, string>} */
+  const FIND_PLACEHOLDERS = {
+    filter: "Display filter, e.g. dns.flags.rcode != 0 (Enter: next, Shift+Enter: previous)",
+    string: "Text in the packet bytes, e.g. index.html",
+    hex: "Hex bytes, e.g. 47 45 54 or 47:45:54",
+  };
+  /** @type {number | null} */
+  let findRequest = null;
+
+  function openFind() {
+    el.findBar.classList.remove("hidden");
+    updateFindMode();
+    el.findInput.focus();
+    el.findInput.select();
+  }
+
+  function closeFind() {
+    el.findBar.classList.add("hidden");
+    setFindStatus("");
+    el.viewport.focus();
+  }
+
+  function updateFindMode() {
+    el.findInput.placeholder = FIND_PLACEHOLDERS[el.findMode.value] ?? "";
+    el.findCaseLabel.classList.toggle("hidden", el.findMode.value !== "string");
+    checkFindInput();
+  }
+
+  /** Immediate feedback for hex input (the backend validates everything again). */
+  function checkFindInput() {
+    const bad = el.findMode.value === "hex" && el.findInput.value.trim() !== "" && !lib.parseHexBytes(el.findInput.value);
+    el.findInput.classList.toggle("invalid", bad);
+    if (bad) {
+      setFindStatus("Not hex bytes", true);
+    } else if (el.findStatus.classList.contains("error")) {
+      setFindStatus("");
+    }
+    return !bad;
+  }
+
+  /** @param {string} text @param {boolean} [error] */
+  function setFindStatus(text, error = false) {
+    el.findStatus.textContent = text;
+    el.findStatus.title = text;
+    el.findStatus.classList.toggle("error", error);
+  }
+
+  /** Next/previous match in the current view (filter and sort order), wrapping around. @param {"next" | "previous"} direction */
+  async function find(direction) {
+    if (!state.ready) {
+      return;
+    }
+    if (el.findBar.classList.contains("hidden") || !el.findInput.value.trim()) {
+      openFind();
+      return;
+    }
+    if (!checkFindInput()) {
+      return;
+    }
+    if (findRequest !== null) {
+      cancelRpc(findRequest);
+    }
+    const req = rpc("find_packet", {
+      mode: el.findMode.value,
+      value: el.findInput.value,
+      caseSensitive: el.findCase.checked,
+      from: state.selectedFrame,
+      direction,
+    });
+    findRequest = req.id;
+    setFindStatus("Searching…");
+    try {
+      const res = await req.promise;
+      if (res.filterId !== state.filterId) {
+        return;
+      }
+      if (res.frame === null || res.frame === undefined) {
+        setFindStatus("Not found", true);
+        return;
+      }
+      setFindStatus(res.wrapped ? `Packet ${res.frame} (wrapped around)` : `Packet ${res.frame}`);
+      jumpToIndex(res.index, res.frame, false);
+    } catch (err) {
+      const e = /** @type {any} */ (err);
+      if (e?.code !== CANCELLED) {
+        setFindStatus(String(e?.message ?? e), true);
+      }
+    } finally {
+      if (findRequest === req.id) {
+        findRequest = null;
+      }
+    }
+  }
+
+  el.findMode.addEventListener("change", () => {
+    updateFindMode();
+    el.findInput.focus();
+  });
+  el.findInput.addEventListener("input", checkFindInput);
+  el.findInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      void find(e.shiftKey ? "previous" : "next");
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      closeFind();
+    }
+  });
+  el.findNext.addEventListener("click", () => void find("next"));
+  el.findPrev.addEventListener("click", () => void find("previous"));
+  el.findClose.addEventListener("click", closeFind);
+
+  // ------------------------------------------------------------------ packet navigation, marks, time reference
+
+  /** @param {"next" | "previous"} direction */
+  async function stepConversation(direction) {
+    const frame = state.selectedFrame;
+    if (frame === null) {
+      showNotice("Select a packet first.");
+      return;
+    }
+    try {
+      const res = await rpc("neighbor_frame", { frame, direction }).promise;
+      if (res.frame === null || res.frame === undefined) {
+        showNotice(`No ${direction} packet in this conversation${state.appliedFilter ? " among the displayed packets" : ""}.`);
+        return;
+      }
+      jumpToIndex(res.index, res.frame, true);
+    } catch (err) {
+      showNotice(String(/** @type {any} */ (err)?.message ?? err));
+    }
+  }
+
+  /** @param {number} frame @param {boolean} marked */
+  function setRowMark(frame, marked) {
+    for (const page of state.pages.values()) {
+      for (const row of page) {
+        if (row.number === frame) {
+          row.marked = marked;
+        }
+      }
+    }
+  }
+
+  function afterMarksChanged() {
+    vscode.postMessage({ type: "marks", count: state.markCount });
+    updateStatus();
+    scheduleRender();
+  }
+
+  async function toggleMark() {
+    const frame = state.selectedFrame;
+    if (frame === null) {
+      showNotice("Select a packet to mark.");
+      return;
+    }
+    try {
+      const res = await rpc("mark_packets", { frames: [frame] }).promise;
+      setRowMark(frame, res.marked.includes(frame));
+      state.markCount = res.count;
+      afterMarksChanged();
+    } catch (err) {
+      showNotice(String(/** @type {any} */ (err)?.message ?? err));
+    }
+  }
+
+  async function unmarkAll() {
+    try {
+      await rpc("unmark_all", {}).promise;
+      for (const page of state.pages.values()) {
+        for (const row of page) {
+          delete row.marked;
+        }
+      }
+      state.markCount = 0;
+      afterMarksChanged();
+    } catch (err) {
+      showNotice(String(/** @type {any} */ (err)?.message ?? err));
+    }
+  }
+
+  /** @param {"next" | "previous"} direction */
+  async function stepMark(direction) {
+    if (!state.markCount) {
+      showNotice("No packets are marked. Mark packets with Ctrl+M.");
+      return;
+    }
+    try {
+      const res = await rpc("find_packet", { mode: "marked", from: state.selectedFrame, direction }).promise;
+      if (res.frame === null || res.frame === undefined) {
+        showNotice("None of the marked packets is displayed with the current filter.");
+        return;
+      }
+      jumpToIndex(res.index, res.frame, true);
+    } catch (err) {
+      showNotice(String(/** @type {any} */ (err)?.message ?? err));
+    }
+  }
+
+  function toggleTimeReference() {
+    const frame = state.selectedFrame;
+    if (frame === null) {
+      showNotice("Select a packet to use as the time reference.");
+      return;
+    }
+    state.timeRef = state.timeRef === frame ? null : frame;
+    updateStatus();
+    refreshRows();
+  }
+
+  /** Viewer actions from the command palette, keybindings and menus. @param {string} command */
+  function runCommand(command) {
+    switch (command) {
+      case "find":
+        openFind();
+        break;
+      case "findNext":
+        void find("next");
+        break;
+      case "findPrevious":
+        void find("previous");
+        break;
+      case "goBack":
+        void goHistory("back");
+        break;
+      case "goForward":
+        void goHistory("forward");
+        break;
+      case "nextInConversation":
+        void stepConversation("next");
+        break;
+      case "previousInConversation":
+        void stepConversation("previous");
+        break;
+      case "firstPacket":
+        if (state.total) {
+          jumpToIndex(0, null, true);
+        }
+        break;
+      case "lastPacket":
+        if (state.total) {
+          jumpToIndex(state.total - 1, null, true);
+        }
+        break;
+      case "toggleMark":
+        void toggleMark();
+        break;
+      case "nextMark":
+        void stepMark("next");
+        break;
+      case "previousMark":
+        void stepMark("previous");
+        break;
+      case "unmarkAll":
+        void unmarkAll();
+        break;
+      case "toggleTimeReference":
+        toggleTimeReference();
+        break;
+    }
+  }
+
+  // Keys VS Code leaves to a focused webview are handled here. Keys it binds
+  // globally (Ctrl+M, Ctrl+T, Ctrl+, …) are package.json keybindings that come
+  // back as "command" messages, so nothing runs twice.
+  document.addEventListener("keydown", (e) => {
+    const mod = e.ctrlKey || e.metaKey;
+    if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "f") {
+      e.preventDefault();
+      openFind();
+    } else if (e.key === "F3") {
+      e.preventDefault();
+      void find(e.shiftKey ? "previous" : "next");
+    } else if (mod && (e.key === "Home" || e.key === "End")) {
+      const t = /** @type {HTMLElement} */ (e.target);
+      if (t.tagName !== "INPUT" && t.tagName !== "SELECT") {
+        e.preventDefault();
+        runCommand(e.key === "Home" ? "firstPacket" : "lastPacket");
+      }
+    }
+  });
+
+  el.statusTime.addEventListener("click", () => vscode.postMessage({ type: "pickTimeFormat" }));
+
+  // ------------------------------------------------------------------ column header menu and drag
+
+  /** @param {string} id */
+  const isHidden = (id) => state.layout.hidden.includes(id);
+
+  function saveLayout() {
+    rebuildColumns();
+    scheduleRender();
+    vscode.postMessage({ type: "columnLayout", layout: state.layout });
+  }
+
+  /** @param {string} id @param {boolean} hidden */
+  function setHidden(id, hidden) {
+    const next = hidden ? [...new Set([...state.layout.hidden, id])] : state.layout.hidden.filter((h) => h !== id);
+    if (columns().every((c) => next.includes(c.id))) {
+      return; // keep at least one column
+    }
+    state.layout = { ...state.layout, hidden: next };
+    saveLayout();
+  }
+
+  /** Width of the widest header/cell text currently rendered in the column. @param {string} id */
+  function resizeToContents(id) {
+    const pos = visibleColumns().findIndex((v) => v.column.id === id);
+    if (pos < 0) {
+      return;
+    }
+    const sample = /** @type {HTMLElement | null} */ (el.rows.firstElementChild?.children[pos] ?? el.header.children[pos] ?? null);
+    const ctx = document.createElement("canvas").getContext("2d");
+    if (!ctx || !sample) {
+      return;
+    }
+    ctx.font = getComputedStyle(sample).font;
+    let widest = ctx.measureText(visibleColumns()[pos].column.title).width + 16;
+    for (const rowEl of el.rows.children) {
+      widest = Math.max(widest, ctx.measureText(rowEl.children[pos]?.textContent ?? "").width);
+    }
+    state.widths[id] = Math.min(800, Math.max(40, Math.ceil(widest + 20)));
+    applyColumnWidths();
+    persist();
+  }
+
+  el.header.addEventListener("contextmenu", (e) => {
+    const cell = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (e.target).closest("[data-id]"));
+    const col = cell ? columns().find((c) => c.id === cell.dataset.id) : undefined;
+    if (!col) {
+      return;
+    }
+    e.preventDefault();
+    const visible = visibleColumns().length;
+    /** @type {[string, (() => void) | null][]} */
+    const items = [
+      [`Hide “${col.title}”`, visible > 1 ? () => setHidden(col.id, true) : null],
+      ["Resize to Contents", col.id !== "info" ? () => resizeToContents(col.id) : null],
+      ...(col.custom
+        ? /** @type {[string, (() => void) | null][]} */ ([
+            ["Rename Column…", () => vscode.postMessage({ type: "renameColumn", field: col.field })],
+            ["Remove Column", () => vscode.postMessage({ type: "removeColumn", field: col.field })],
+          ])
+        : []),
+      ["-", null],
+      ...columns().map(
+        (c) => /** @type {[string, (() => void) | null]} */ ([`${isHidden(c.id) ? "   " : "✓ "}${c.title}`, !isHidden(c.id) && visible === 1 ? null : () => setHidden(c.id, !isHidden(c.id))]),
+      ),
+      ["-", null],
+      [
+        "Reset Column Widths",
+        () => {
+          state.widths = {};
+          applyColumnWidths();
+          persist();
+        },
+      ],
+      [
+        "Reset Column Order and Visibility",
+        () => {
+          state.layout = { order: [], hidden: [] };
+          saveLayout();
+        },
+      ],
+    ];
+    showMenu(e.clientX, e.clientY, items);
+  });
+
+  /** @type {string | null} */
+  let dragId = null;
+  const clearDragMarks = () => [...el.header.children].forEach((c) => c.classList.remove("drag-over"));
+  el.header.addEventListener("dragstart", (e) => {
+    const cell = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (e.target).closest?.("[data-id]") ?? null);
+    if (!cell || resizing) {
+      e.preventDefault();
+      return;
+    }
+    dragId = cell.dataset.id ?? null;
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", dragId ?? "");
+    }
+  });
+  el.header.addEventListener("dragover", (e) => {
+    const cell = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (e.target).closest("[data-id]"));
+    if (!dragId || !cell) {
+      return;
+    }
+    e.preventDefault();
+    clearDragMarks();
+    if (cell.dataset.id !== dragId) {
+      cell.classList.add("drag-over");
+    }
+  });
+  el.header.addEventListener("drop", (e) => {
+    e.preventDefault();
+    clearDragMarks();
+    const cell = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (e.target).closest("[data-id]"));
+    const moving = dragId;
+    dragId = null;
+    if (!moving || !cell || cell.dataset.id === moving) {
+      return;
+    }
+    // Reorder over all columns (hidden ones keep their place), dropping in front of the target.
+    const order = lib.layoutColumns(columns(), { order: state.layout.order }).map((/** @type {any} */ c) => c.column.id);
+    state.layout = { ...state.layout, order: lib.moveColumn(order, moving, cell.dataset.id ?? null) };
+    saveLayout();
+  });
+  el.header.addEventListener("dragend", () => {
+    dragId = null;
+    clearDragMarks();
+  });
+
+  // ------------------------------------------------------------------ bytes pane copy menu
+
+  /** @type {[string, "hexdump" | "hex" | "c" | "escaped" | "base64" | "text"][]} */
+  const BYTE_FORMATS = [
+    ["Hex Dump", "hexdump"],
+    ["Hex Stream", "hex"],
+    ["C Array", "c"],
+    ["Escaped String", "escaped"],
+    ["Base64", "base64"],
+    ["Printable Text", "text"],
+  ];
+
+  el.bytesView.addEventListener("contextmenu", (e) => {
+    if (!state.detail || !hex) {
+      return;
+    }
+    e.preventDefault();
+    const all = lib.hexToBytes(state.detail.sources[hex.src].hex);
+    const entry = state.selectedNodeId !== null ? nodeIndex.get(state.selectedNodeId) : undefined;
+    const node = entry?.node;
+    const field = node && node.pos !== undefined && node.src === hex.src ? { bytes: all.subarray(node.pos, node.pos + node.size), offset: node.pos } : null;
+    /** @type {[string, (() => void) | null][]} */
+    const items = [
+      ...BYTE_FORMATS.map(([label, kind]) => /** @type {[string, (() => void) | null]} */ ([`Copy Bytes as ${label}`, () => copy(lib.formatBytesAs(all, kind))])),
+      ["-", null],
+      ...BYTE_FORMATS.map(
+        ([label, kind]) => /** @type {[string, (() => void) | null]} */ ([`Copy Field Bytes as ${label}`, field ? () => copy(lib.formatBytesAs(field.bytes, kind, field.offset)) : null]),
+      ),
+    ];
+    showMenu(e.clientX, e.clientY, items);
+  });
+
   // ------------------------------------------------------------------ AI filter help
 
   // "✨ Ask AI": the filter bar temporarily takes a description; the host asks
@@ -1656,6 +2346,9 @@
       return;
     }
     hideSuggest();
+    // A validation still pending for the old filter text must not clear the AI messages.
+    window.clearTimeout(validateTimer);
+    state.validateSeq++;
     showFilterError("");
     state.ai.asking = true;
     state.ai.savedText = el.filterInput.value;
@@ -1765,9 +2458,11 @@
 
   function updateStatus() {
     const info = state.info;
+    el.statusTime.textContent = TIME_LABELS[state.timeFormat] ?? "";
+    el.statusTime.classList.toggle("hidden", !info);
     if (!info) {
       el.statusLeft.textContent = "";
-      el.statusRight.textContent = "";
+      el.statusInfo.textContent = "";
       return;
     }
     const parts = [`Packets: ${info.frames.toLocaleString()}`];
@@ -1778,12 +2473,18 @@
     if (state.selectedFrame !== null) {
       parts.push(`Selected: ${state.selectedFrame}`);
     }
+    if (state.markCount) {
+      parts.push(`Marked: ${state.markCount.toLocaleString()}`);
+    }
+    if (state.timeRef !== null) {
+      parts.push(`Time reference: ${state.timeRef}`);
+    }
     el.statusLeft.textContent = parts.join(" · ");
     const right = [info.fileType, info.linkType, lib.formatBytes(info.size)].filter(Boolean);
     if (typeof state.elapsedMs === "number") {
       right.push(`loaded in ${(state.elapsedMs / 1000).toFixed(1)} s`);
     }
-    el.statusRight.textContent = right.join(" · ");
+    el.statusInfo.textContent = right.join(" · ");
   }
 
   function persist() {

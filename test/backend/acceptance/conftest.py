@@ -55,6 +55,9 @@ class World:
     choices: dict[str, Any] | None = None
     exported: dict[str, Any] | None = None
     progress: list[dict[str, Any]] = field(default_factory=list)
+    sort: dict[str, Any] | None = None
+    found: dict[str, Any] | None = None
+    time_ref: int | None = None
     coloring: dict[str, Any] | None = None
     error: Exception | None = None
 
@@ -169,6 +172,7 @@ def request_page_with_columns(world: World, limit: str, offset: str, columns: st
 def sort_by(world: World, title: str, direction: str) -> None:
     assert direction in ("ascending", "descending")
     sort = {"field": TITLE_TO_FIELD[title], "desc": direction == "descending"}
+    world.sort = sort
     world.page = world.rows(sort=sort)
 
 
@@ -797,3 +801,98 @@ def rule_invalid(world: World, rule: int) -> None:
 @then("no packet is colored")
 def none_colored(world: World) -> None:
     assert all("color" not in r for r in world.rows()["rows"])
+
+
+# ---------------------------------------------------------------------- navigation
+
+FIND_MODES = {"display filter": "filter", "string": "string", "hex bytes": "hex"}
+
+
+@when(
+    parsers.re(
+        r"I find the (?P<direction>next|previous) packet matching the "
+        r'(?P<mode>display filter|string|hex bytes) "(?P<value>[^"]*)"'
+        r"(?P<case> case-sensitively)?(?: after packet (?P<start>\d+))?$"
+    )
+)
+def find_packet(
+    world: World, direction: str, mode: str, value: str, case: str | None, start: str | None
+) -> None:
+    params: dict[str, Any] = {
+        "mode": FIND_MODES[mode],
+        "value": value,
+        "caseSensitive": bool(case),
+        "direction": direction,
+    }
+    if start:
+        params["from"] = int(start)
+    world.found = world.call(world.service.find_packet, params)
+
+
+@when(
+    parsers.re(
+        r"I step to the (?P<direction>next|previous) packet in the conversation "
+        r"of packet (?P<frame>\d+)$"
+    )
+)
+def step_conversation(world: World, direction: str, frame: str) -> None:
+    world.found = world.call(
+        world.service.neighbor_frame, {"frame": int(frame), "direction": direction}
+    )
+
+
+@then(parsers.parse("the found packet is {frame:d}"))
+def found_packet(world: World, frame: int) -> None:
+    assert world.error is None, world.error
+    assert world.found is not None and world.found["frame"] == frame, world.found
+
+
+@then("no packet is found")
+def nothing_found(world: World) -> None:
+    assert world.error is None, world.error
+    assert world.found is not None and world.found["frame"] is None, world.found
+
+
+@then("the search wrapped around")
+def search_wrapped(world: World) -> None:
+    assert world.found is not None and world.found.get("wrapped") is True
+
+
+@given(parsers.parse("packet {frame:d} is the time reference"))
+def time_reference(world: World, frame: int) -> None:
+    world.time_ref = frame
+
+
+@when(parsers.parse('I show times as "{fmt}"'))
+def show_times(world: World, fmt: str) -> None:
+    extra: dict[str, Any] = {"timeFormat": fmt, "timeRef": world.time_ref}
+    if world.sort:
+        extra["sort"] = world.sort
+    world.page = world.rows(**extra)
+
+
+def _time_of(world: World, frame: int) -> str:
+    assert world.page is not None
+    rows = {r["number"]: r["cells"][TITLE_TO_INDEX["Time"]] for r in world.page["rows"]}
+    return rows[frame]
+
+
+@then(parsers.parse('the time of packet {frame:d} is "{time}"'))
+def time_of(world: World, frame: int, time: str) -> None:
+    assert _time_of(world, frame) == time
+
+
+@then(parsers.parse("the times are {times}"))
+def times_are(world: World, times: str) -> None:
+    assert world.page is not None
+    assert [r["cells"][TITLE_TO_INDEX["Time"]] for r in world.page["rows"]] == items(times)
+
+
+@given(parsers.parse("packets {frames} are marked"))
+def packets_marked(world: World, frames: str) -> None:
+    world.service.mark_packets({"frames": numbers(frames), "mark": True}, world.ctx)
+
+
+@when(parsers.re(r"I export the marked packets as (?P<fmt>pcapng|pcap)$"))
+def export_marked(world: World, tmp_path: Path, fmt: str) -> None:
+    _export(world, tmp_path, fmt, f"marked.{fmt}", marked=True)
