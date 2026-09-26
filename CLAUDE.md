@@ -8,16 +8,35 @@ user-facing description.
 
 | Task | Command |
 |---|---|
-| Install dev deps | `uv sync` and `npm install` |
-| Build extension | `npm run compile` (tsc → `out/`) |
-| Lint everything | `npm run lint && uv run ruff check && uv run ruff format --check && uv run mypy` |
+| Install dev deps | `uv sync` and `pnpm install` |
+| Build extension | `pnpm run compile` (tsc → `out/`) |
+| Lint everything | `pnpm run lint && uv run ruff check && uv run ruff format --check && uv run mypy` |
 | Backend tests | `uv run pytest` (tshark tests skip if tshark is missing) |
 | Acceptance scenarios only | `uv run pytest test/backend/acceptance` (pytest-bdd, Gherkin in `features/`) |
-| TS unit + webview tests | `npm run test:unit` (mocha; includes the Chromium e2e test of the webview) |
-| VS Code smoke test | `npm run test:extension` (downloads VS Code; use `xvfb-run -a` on headless Linux) |
+| TS unit + webview tests | `pnpm run test:unit` (mocha; includes the Chromium e2e test of the webview) |
+| VS Code smoke test | `pnpm run test:extension` (downloads VS Code; use `xvfb-run -a` on headless Linux) |
 | Regenerate fixtures | `uv run python test/fixtures/generate.py` |
 | Perf check | `uv run python test/fixtures/generate.py --large 1000000 test/fixtures/large-1m.pcap && uv run python -u test/perf/bench.py test/fixtures/large-1m.pcap` |
-| Package | `npm run package` (vsce) |
+| Package | `pnpm run package` (vsce, `--no-dependencies`) |
+
+## Toolchain
+
+- **Python 3.14** everywhere: `requires-python >=3.14`, ruff `py314`, mypy
+  `3.14`, `.python-version` (uv and CI's setup-python read it). The extension
+  enforces the same minimum (`MIN_PYTHON` in `src/backendClient.ts`) and tries
+  `python3.14` / `py -3.14` before generic names. Code uses 3.14 idioms: PEP 695
+  generics, no `from __future__ import annotations` (PEP 649 lazy annotations).
+- **pnpm** (version pinned by `packageManager` in package.json; use
+  `corepack enable pnpm`). pnpm refuses to install until every dependency with
+  an install script is allowed or denied: `pnpm-workspace.yaml` denies
+  `keytar` and `@vscode/vsce-sign` (vsce's publishing/signing helpers, unused).
+  `vsce package` runs with `--no-dependencies` because its dependency check
+  runs `npm list`, which doesn't understand pnpm's layout (the extension has
+  no runtime npm dependencies anyway). `.vscode/settings.json` makes VS Code's
+  npm tasks use pnpm.
+- Node tests that start the backend use `PCAP_VIEWER_PYTHON` if set, else the
+  uv `.venv` interpreter, so they run on 3.14 even when the system `python3` is older.
+- pytest turns `ResourceWarning` into errors: leaked tshark pipes are bugs.
 
 ## Layout
 
