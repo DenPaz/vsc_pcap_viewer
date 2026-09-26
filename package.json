@@ -224,6 +224,11 @@
         "category": "PCAP"
       },
       {
+        "command": "pcapViewer.askAboutPackets",
+        "title": "Ask Copilot About Selected Packets\u2026",
+        "category": "PCAP"
+      },
+      {
         "command": "pcapViewer.followStream",
         "title": "Follow Stream\u2026",
         "category": "PCAP"
@@ -442,6 +447,10 @@
         {
           "command": "pcapViewer.suggestFilter",
           "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
+        },
+        {
+          "command": "pcapViewer.askAboutPackets",
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/"
         },
         {
           "command": "pcapViewer.find",
@@ -868,7 +877,19 @@
         "pcapViewer.ai.enabled": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "Offer AI help for display filters (the filter bar's \u2728 action, *PCAP: Suggest Display Filter\u2026* and `@pcap` in chat) through VS Code's Language Model API (GitHub Copilot). Only your request, the current filter and protocol/field names are sent; packet contents never are. Suggestions are checked with tshark before they are shown."
+          "markdownDescription": "Offer AI help through VS Code's Language Model API (GitHub Copilot): display filters (the filter bar's \u2728 action, *PCAP: Suggest Display Filter\u2026* and `@pcap` in chat), where only your request, the current filter and protocol/field names are sent and suggestions are checked with tshark; and explaining packets (*Ask Copilot About This Packet\u2026*, `@pcap /explain`), which sends packet data only if `#pcapViewer.ai.allowPacketData#` allows it."
+        },
+        "pcapViewer.ai.allowPacketData": {
+          "type": "boolean",
+          "default": false,
+          "scope": "application",
+          "markdownDescription": "Allow *Ask Copilot About This Packet\u2026* and `@pcap /explain` to send packet data to the language model: for at most 8 packets at a time, their packet-list row and dissection tree (field names and values, at most 250 lines each), plus your question and the current display filter. Raw bytes are not sent unless `#pcapViewer.ai.allowPacketBytes#` is also on. You are asked once when this is off. User settings only."
+        },
+        "pcapViewer.ai.allowPacketBytes": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "When explaining packets (with `#pcapViewer.ai.allowPacketData#`), also send raw bytes: the first 256 bytes of each packet as hex, and payload fields as bytes. Off: the hex dump is never sent and payload bytes are replaced by \"[N bytes not sent]\". User settings only.",
+          "scope": "application"
         }
       }
     },
@@ -883,8 +904,14 @@
         "id": "pcapViewer.pcap",
         "name": "pcap",
         "fullName": "PCAP Viewer",
-        "description": "Ask for a Wireshark display filter for the open capture",
-        "isSticky": false
+        "description": "Ask for a Wireshark display filter for the open capture, or /explain packets",
+        "isSticky": false,
+        "commands": [
+          {
+            "name": "explain",
+            "description": "Explain packets of the open capture, e.g. /explain 12 15-17 why the reset? (sends packet data: pcapViewer.ai.allowPacketData)"
+          }
+        ]
       }
     ]
   },

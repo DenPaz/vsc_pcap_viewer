@@ -184,6 +184,9 @@ def test_view_frames_and_rows_of_a_selection(mixed: PcapService, ctx: RequestCon
     rows = mixed.list_packets({"frames": [20, 4, 1, 2], "sort": sort}, ctx)["rows"]
     assert [r["number"] for r in rows] == [n for n in order if n in {20, 4, 1}]
     assert mixed.list_packets({"frames": [], "sort": sort}, ctx)["rows"] == []
+    # inView: false: every frame asked for (in range, once), displayed or not, in the given order.
+    rows = mixed.list_packets({"frames": [2, 20, 2, 999, 4], "inView": False}, ctx)["rows"]
+    assert [r["number"] for r in rows] == [2, 20, 4]
     # Index requests carry the view's order, so one can't overtake the page
     # request that changes the sort (the webview relocates the selection with it).
     by_number = {"field": "frame.number", "desc": True}

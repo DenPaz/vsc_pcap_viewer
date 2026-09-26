@@ -104,12 +104,15 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
       } else if (msg.type === "columnLayout") {
         hostLog.push(msg);
         layout = msg.layout;
-      } else if (["marks", "pickTimeFormat", "renameColumn", "exportSelected", "copy"].includes(msg.type)) {
+      } else if (["marks", "pickTimeFormat", "renameColumn", "exportSelected", "copy", "askAboutPackets"].includes(msg.type)) {
         hostLog.push(msg);
       } else if (["manageSavedFilters", "filterApplied", "selection", "follow", "decodeAs", "colorize", "exportBytes"].includes(msg.type)) {
         hostLog.push(msg);
       } else if (msg.type === "rpc") {
-        const pending = client.send(msg.method, msg.params, { timeoutMs: 0 });
+        const pending = client.send(msg.method, msg.params, {
+          timeoutMs: 0,
+          onProgress: (p) => void post({ type: "progress", id: msg.id, phase: p.phase, fraction: p.fraction, frames: p.frames, matched: p.matched }),
+        });
         pending.promise.then(
           (result) => post({ type: "rpcResult", id: msg.id, result }),
           (err) => post({ type: "rpcError", id: msg.id, error: { code: err.code, message: err.message } }),
@@ -741,6 +744,39 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     await command("selectAll");
     await page.waitForFunction(() => { const i = /** @type {HTMLInputElement} */ (document.getElementById("filter-input")); return i.value.slice(i.selectionStart ?? 0, i.selectionEnd ?? 0) === "http"; });
     assert.ok((await page.$$("#list-rows .list-row.selected")).length <= 1);
+  });
+
+  test("Ask Copilot About This Packet / N Selected Packets (only when AI help is available)", async () => {
+    await cleanView(); // AI unavailable
+    await rowEl(4).click({ button: "right" });
+    assert.ok(!(await page.isVisible("#context-menu .item:has-text('Ask Copilot')")), "hidden without a language model");
+    await page.keyboard.press("Escape");
+
+    await post({ type: "aiAvailable", available: true });
+    await rowEl(4).click({ button: "right" });
+    await page.click("#context-menu .item:text-is('Ask Copilot About This Packet…')");
+    await waitForHost((m) => m.type === "askAboutPackets");
+    assert.deepEqual(hostLog.filter((m) => m.type === "askAboutPackets").at(-1), { type: "askAboutPackets", frames: [4] });
+
+    await rowEl(7).click({ modifiers: ["Control"] });
+    await rowEl(2).click({ modifiers: ["Control"] });
+    await rowEl(7).click({ button: "right" }); // inside the selection: keeps it
+    await page.click("#context-menu .item:text-is('Ask Copilot About 3 Selected Packets…')");
+    await waitForHost((m) => m.type === "askAboutPackets" && m.frames.length === 3);
+    assert.deepEqual(hostLog.filter((m) => m.type === "askAboutPackets").at(-1).frames, [2, 4, 7], "frame order");
+    await post({ type: "aiAvailable", available: false });
+  });
+
+  test("the busy bar goes away once a sort is done", async () => {
+    await cleanView();
+    // First sort by Info: the backend builds the order and reports progress.
+    await page.click("#list-header > div[data-id='info']");
+    await page.waitForFunction(() => document.querySelector("#list-header > div[data-id='info'] .sort-indicator"));
+    await page.waitForFunction(() => document.querySelectorAll("#list-rows .list-row:not(.loading)").length === 11);
+    await page.waitForFunction(() => document.getElementById("busy-bar")?.classList.contains("hidden"), null, { timeout: 5000 });
+    await page.click("#list-header > div[data-id='info']");
+    await page.click("#list-header > div[data-id='info']"); // sort off
+    await page.waitForFunction(() => document.getElementById("busy-bar")?.classList.contains("hidden"));
   });
 
   test("no script errors or CSP violations", () => {

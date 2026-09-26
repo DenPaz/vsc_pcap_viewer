@@ -87,13 +87,16 @@ export type WebviewToHost =
   | { type: "pickTimeFormat" }
   | { type: "exportMarked" }
   | { type: "exportSelected" }
+  /** "Ask Copilot About This Packet…" / "…About N Selected Packets". */
+  | { type: "askAboutPackets"; frames: number[] }
   | { type: "marks"; count: number }
   | { type: "copy"; text: string }
   | { type: "showLog" };
 
 export type HostToWebview =
   | { type: "loading"; message: string }
-  | { type: "progress"; phase?: string; fraction?: number | null; frames?: number; matched?: number }
+  /** Progress of the capture load, or (with `id`) of the webview's request `id`. */
+  | { type: "progress"; id?: number; phase?: string; fraction?: number | null; frames?: number; matched?: number }
   | {
       type: "init";
       info: OpenResult;

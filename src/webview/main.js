@@ -194,12 +194,14 @@
       case "rpcResult": {
         const p = rpcPending.get(msg.id);
         rpcPending.delete(msg.id);
+        setBusy(msg.id, false);
         p?.resolve(msg.result);
         break;
       }
       case "rpcError": {
         const p = rpcPending.get(msg.id);
         rpcPending.delete(msg.id);
+        setBusy(msg.id, false);
         p?.reject(msg.error);
         break;
       }
@@ -283,6 +285,8 @@
     state.selectedIndex = null;
     state.selection = new Set();
     state.anchorIndex = null;
+    busyRequests.clear();
+    el.busyBar.classList.add("hidden");
     state.elapsedMs = msg.elapsedMs;
     const filter = msg.filter || el.filterInput.value.trim();
     if (filter) {
@@ -303,10 +307,26 @@
       if (typeof p.frames === "number") {
         el.overlayDetail.textContent = `${p.frames.toLocaleString()} packets${fraction !== null ? ` · ${Math.round(fraction * 100)}%` : ""}`;
       }
-    } else {
-      el.busyBar.classList.remove("hidden");
-      setProgress(el.busyBar, el.busyFill, fraction);
+    } else if (typeof p.id === "number" && rpcPending.has(p.id)) {
+      setBusy(p.id, true, fraction);
     }
+  }
+
+  /**
+   * The busy bar shows while a request that reported progress (a filter, a first
+   * sort, a column extraction…) is running, and hides when the last one settles.
+   */
+  /** @type {Set<number>} */
+  const busyRequests = new Set();
+  /** @param {number} id @param {boolean} on @param {number | null} [fraction] */
+  function setBusy(id, on, fraction = null) {
+    if (on) {
+      busyRequests.add(id);
+      setProgress(el.busyBar, el.busyFill, fraction);
+    } else {
+      busyRequests.delete(id);
+    }
+    el.busyBar.classList.toggle("hidden", busyRequests.size === 0);
   }
 
   /**
@@ -1503,6 +1523,16 @@
       ["Follow TLS Stream", /TLS|SSL/.test(protocol) ? follow("tls") : null],
       ["Follow HTTP Stream", /HTTP/.test(protocol) ? follow("http") : null],
       ["-", null],
+      // Sends packet data: the host asks for consent first (pcapViewer.ai.allowPacketData).
+      ...(state.ai.available
+        ? /** @type {[string, (() => void) | null][]} */ ([
+            [
+              multi ? `Ask Copilot About ${multi.toLocaleString()} Selected Packets…` : "Ask Copilot About This Packet…",
+              () => vscode.postMessage({ type: "askAboutPackets", frames: selectedFrames().sort((a, b) => a - b) }),
+            ],
+            ["-", null],
+          ])
+        : []),
       ["Decode As…", () => vscode.postMessage({ type: "decodeAs", frame: row.number })],
       ["Export Packet Bytes…", () => vscode.postMessage({ type: "exportBytes", frame: row.number })],
       ["-", null],
@@ -1694,8 +1724,7 @@
     const req = rpc("set_filter", { expr });
     state.filterRequest = req.id;
     el.filterCancel.classList.remove("hidden");
-    el.busyBar.classList.remove("hidden");
-    setProgress(el.busyBar, el.busyFill, null);
+    setBusy(req.id, true);
     try {
       const res = await req.promise;
       state.appliedFilter = res.expr;
@@ -1719,7 +1748,6 @@
       if (state.filterRequest === req.id) {
         state.filterRequest = null;
         el.filterCancel.classList.add("hidden");
-        el.busyBar.classList.add("hidden");
       }
     }
   }
