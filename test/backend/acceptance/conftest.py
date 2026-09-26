@@ -5,6 +5,7 @@ real tshark; the ``@tshark`` feature tag becomes a pytest marker, so they skip
 when tshark is missing (see ``test/backend/conftest.py``).
 """
 
+import json
 import os
 import re
 from dataclasses import dataclass, field
@@ -52,6 +53,8 @@ class World:
     table: dict[str, Any] | None = None
     check: dict[str, Any] | None = None
     choices: dict[str, Any] | None = None
+    exported: dict[str, Any] | None = None
+    coloring: dict[str, Any] | None = None
     error: Exception | None = None
 
     def call(self, fn: Any, params: dict[str, Any]) -> Any:
@@ -629,3 +632,145 @@ def choices_include(world: World, name: str, desc: str | None) -> None:
     assert found, name
     if desc:
         assert found[0]["desc"] == desc
+
+
+# ---------------------------------------------------------------------- export
+
+
+def _export(world: World, tmp_path: Path, kind: str, name: str, **extra: Any) -> None:
+    params = {"kind": kind, "dest": str(tmp_path / name), **extra}
+    world.exported = world.call(world.service.export, params)
+
+
+@when(parsers.re(r"I export (?P<which>the displayed|all) packets as (?P<fmt>pcapng|pcap)$"))
+def export_capture(world: World, tmp_path: Path, which: str, fmt: str) -> None:
+    extra = {"filter": ""} if which == "all" else {}
+    _export(world, tmp_path, fmt, f"export.{fmt}", **extra)
+
+
+@when("I export the displayed packets over the open capture")
+def export_over_capture(world: World) -> None:
+    assert world.info is not None
+    world.exported = world.call(
+        world.service.export, {"kind": "pcapng", "dest": world.info["path"]}
+    )
+
+
+@when(parsers.re(r"I export the packet list as (?P<fmt>CSV|JSON)$"))
+def export_list(world: World, tmp_path: Path, fmt: str) -> None:
+    _export(world, tmp_path, fmt.lower(), f"list.{fmt.lower()}")
+
+
+@when(parsers.parse("I export the bytes of packet {number:d}"))
+def export_bytes(world: World, tmp_path: Path, number: int) -> None:
+    _export(world, tmp_path, "bytes", "packet.bin", number=number)
+
+
+def _exported_path(world: World) -> Path:
+    assert world.error is None, world.error
+    assert world.exported is not None
+    return Path(world.exported["path"])
+
+
+_MAGIC = {"pcapng": bytes.fromhex("0a0d0d0a"), "pcap": bytes.fromhex("d4c3b2a1")}
+
+
+@then(
+    parsers.re(r"the exported capture is a (?P<fmt>pcapng|pcap) file with (?P<count>\d+) packets?$")
+)
+def exported_capture(world: World, fmt: str, count: str) -> None:
+    path = _exported_path(world)
+    assert path.read_bytes()[:4] == _MAGIC[fmt]
+    # Re-open the export with the backend itself: an independent frame count.
+    other = PcapService()
+    try:
+        info = other.open({"path": str(path)}, RequestContext())
+    finally:
+        other.shutdown()
+    assert info["frames"] == int(count)
+
+
+@then(parsers.parse("the export reports {count:d} packets"))
+def export_reports(world: World, count: int) -> None:
+    assert world.exported is not None
+    assert world.exported["packets"] == count
+
+
+@then(parsers.parse("the exported CSV has the columns {titles}"))
+def exported_csv_columns(world: World, titles: str) -> None:
+    header = _exported_path(world).read_text(encoding="utf-8").split("\n")[0]
+    assert header == ",".join(f'"{t}"' for t in items(titles))
+
+
+@then(parsers.parse("the exported CSV has {count:d} rows"))
+def exported_csv_rows(world: World, count: int) -> None:
+    lines = _exported_path(world).read_text(encoding="utf-8").strip().split("\n")
+    assert len(lines) - 1 == count
+
+
+@then(parsers.parse("the exported JSON lists the frames {frames}"))
+def exported_json_frames(world: World, frames: str) -> None:
+    data = json.loads(_exported_path(world).read_text(encoding="utf-8"))
+    assert [r["number"] for r in data] == numbers(frames)
+
+
+@then(parsers.parse("the exported file has {count:d} bytes"))
+def exported_bytes(world: World, count: int) -> None:
+    assert _exported_path(world).stat().st_size == count
+
+
+@then("the export is refused")
+def export_refused(world: World) -> None:
+    assert isinstance(world.error, RpcError), world.error
+
+
+# ---------------------------------------------------------------------- coloring
+
+
+def _set_coloring(world: World, filters: list[str]) -> None:
+    rules = [{"filter": f, "background": "#e0e0ff"} for f in filters]
+    world.coloring = world.call(world.service.set_coloring, {"rules": rules})
+    assert world.error is None, world.error
+
+
+@given(parsers.parse("the coloring rules {filters} are set"))
+def given_coloring(world: World, filters: str) -> None:
+    _set_coloring(world, items(filters))
+
+
+@when(parsers.parse("I set the coloring rules {filters}"))
+def when_coloring(world: World, filters: str) -> None:
+    _set_coloring(world, items(filters))
+
+
+@when("I clear the coloring rules")
+def clear_coloring(world: World) -> None:
+    _set_coloring(world, [])
+
+
+def _colors_by_protocol(world: World, protocol: str) -> set[int | None]:
+    page = world.rows()
+    colors = {r.get("color") for r in page["rows"] if r["cells"][4] == protocol}
+    assert colors, f"no {protocol} packets"
+    return colors
+
+
+@then(parsers.re(r'the "(?P<protocol>[^"]+)" packets are colored by rule (?P<rule>\d+)$'))
+def colored_by(world: World, protocol: str, rule: str) -> None:
+    assert _colors_by_protocol(world, protocol) == {int(rule) - 1}
+
+
+@then(parsers.re(r'the "(?P<protocol>[^"]+)" packets are not colored$'))
+def not_colored(world: World, protocol: str) -> None:
+    assert _colors_by_protocol(world, protocol) == {None}
+
+
+@then(parsers.parse("coloring rule {rule:d} is reported as invalid"))
+def rule_invalid(world: World, rule: int) -> None:
+    assert world.coloring is not None
+    assert str(rule - 1) in world.coloring["errors"], world.coloring
+
+
+@then("no packet is colored")
+def none_colored(world: World) -> None:
+    assert all("color" not in r for r in world.rows()["rows"])
