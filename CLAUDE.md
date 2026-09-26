@@ -136,7 +136,9 @@ UI behaviour stays in the Chromium test (`test/webview/e2e.test.js`).
   check which editor VS Code picks. `when` clauses use
   `activeCustomEditorId =~ /^pcapViewer\.editor(Optional)?$/`. Every pattern
   has a fixture (`test_every_file_pattern_has_a_fixture`); fixtures in other
-  formats are hand-written by `generate.py` (stdlib only: gzip, `compression.zstd`,
+  formats are hand-written by `generate.py` (stdlib only: gzip, `compression.zstd`
+  (imported lazily: Pythons built without libzstd lack `_zstd`, and `--large`
+  must work there),
   an LZ4 frame with stored blocks, snoop, ERF, PacketLogger, btsnoop, raw BER).
   Open progress is estimated only for uncompressed pcap/pcapng recognised by
   magic number (`sniff_format`); otherwise it's indeterminate (null fraction)
