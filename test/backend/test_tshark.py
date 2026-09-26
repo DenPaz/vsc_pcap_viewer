@@ -137,3 +137,42 @@ def test_find_tool_skips_directories(tmp_path: Path) -> None:
     (tmp_path / "tshark").mkdir()
     with pytest.raises(ToolNotFoundError):
         find_tool("tshark", str(tmp_path / "tshark"))
+
+
+DENIED = 'tshark: You don\'t have permission to read the file "/home/u/x.pcap".'
+
+
+def test_apparmor_confines_tshark(tmp_path: Path) -> None:
+    profiles = tmp_path / "profiles"
+    profiles.write_text("tshark//dumpcap (enforce)\ntshark (enforce)\nman (complain)\n")
+    assert ts.apparmor_confines_tshark(profiles, tmp_path / "none")
+    profiles.write_text("tshark (complain)\ntcpdump (enforce)\n")
+    assert not ts.apparmor_confines_tshark(profiles, tmp_path / "none")
+    # securityfs unreadable: fall back to whether the profile file exists.
+    profile_file = tmp_path / "tshark"
+    assert not ts.apparmor_confines_tshark(tmp_path / "missing", profile_file)
+    profile_file.write_text("profile tshark /usr/bin/tshark {}")
+    assert ts.apparmor_confines_tshark(tmp_path / "missing", profile_file)
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="AppArmor/Snap are Linux-only")
+def test_permission_hint(tmp_path: Path) -> None:
+    enforce = tmp_path / "profiles"
+    enforce.write_text("tshark (enforce)\n")
+    other = tmp_path / "tshark"
+    other.write_bytes(b"")
+    assert ts.permission_hint(other, "tshark: some other failure", enforce) is None
+    assert ts.permission_hint(Path("/snap/bin/tshark"), DENIED, enforce) == ts.SNAP_HINT
+    assert ts.permission_hint(other, DENIED, enforce) == ts.GENERIC_HINT
+    if Path("/usr/bin/tshark").resolve() == Path("/usr/bin/tshark"):
+        hint = ts.permission_hint(Path("/usr/bin/tshark"), DENIED, enforce)
+        assert hint == ts.APPARMOR_HINT
+        assert "/etc/apparmor.d/local/tshark" in hint and "apparmor_parser -r" in hint
+
+
+def test_tshark_error_appends_hint(tmp_path: Path) -> None:
+    t = Tshark(tmp_path / "tshark")
+    err = t.error(DENIED, 2, "fallback")
+    assert str(err).startswith(DENIED) and "sandboxed" in str(err)
+    assert err.stderr == DENIED and err.returncode == 2
+    assert str(t.error("", 1, "tshark exited with code 1")) == "tshark exited with code 1"

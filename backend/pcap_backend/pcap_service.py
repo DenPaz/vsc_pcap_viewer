@@ -248,6 +248,13 @@ class PcapService:
         path = Path(param(params, "path", str)).expanduser()
         if not path.is_file():
             raise InvalidParamsError(f"capture file not found: {path}")
+        try:
+            with path.open("rb") as fh:
+                fh.read(1)
+        except PermissionError as exc:
+            raise InvalidParamsError(
+                f"cannot read {path}: permission denied (check the file's permissions)"
+            ) from exc
         options = DissectionOptions.from_params(
             str_list(params, "lua"),
             str_list(params, "decodeAs"),
@@ -379,10 +386,8 @@ class PcapService:
                 rejected = _rejected_fields(result.stderr)
                 if rejected and _drop_rejected(pairs, rejected, legacy, custom, info.warnings):
                     continue
-                raise ToolError(
-                    result.stderr or f"tshark exited with code {result.returncode}",
-                    result.stderr,
-                    result.returncode,
+                raise tshark.error(
+                    result.stderr, result.returncode, f"tshark exited with code {result.returncode}"
                 )
             if bad_lines:
                 info.warnings.append(f"{bad_lines} unparseable line(s) in tshark output skipped")
@@ -651,10 +656,10 @@ class PcapService:
         pdml_res = run(pdml_argv, ctx.token)
         hex_res = hex_future.result()
         if not pdml_res.stdout.strip():
-            raise ToolError(
-                pdml_res.stderr or f"tshark returned no detail for frame {number}",
+            raise f.tshark.error(
                 pdml_res.stderr,
                 pdml_res.returncode,
+                f"tshark returned no detail for frame {number}",
             )
         sources = pdml.parse_hexdump(hex_res.stdout.decode("utf-8", "replace"))
         tree = pdml.parse_pdml(pdml_res.stdout, source_count=max(1, len(sources)))
@@ -704,9 +709,7 @@ class PcapService:
                 break  # closing the generator kills tshark
             lines.append(line)
         if not lines and result.returncode not in (0, None):
-            raise ToolError(
-                result.stderr or "tshark follow failed", result.stderr, result.returncode
-            )
+            raise f.tshark.error(result.stderr, result.returncode, "tshark follow failed")
         followed = stats.parse_follow_raw("\n".join(lines))
         followed.update({"proto": proto, "stream": stream, "truncated": truncated})
         if not followed["segments"] and proto == "tls":
@@ -801,7 +804,7 @@ class PcapService:
         res = run(f.tshark.argv("-q", "-z", spec, capture=str(f.path)), ctx.token)
         text = res.stdout.decode("utf-8", "replace")
         if res.returncode != 0 and not text.strip():
-            raise ToolError(res.stderr or f"tshark -z {spec} failed", res.stderr, res.returncode)
+            raise f.tshark.error(res.stderr, res.returncode, f"tshark -z {spec} failed")
         return text
 
     # ------------------------------------------------------------------ fields
@@ -856,8 +859,8 @@ class PcapService:
                         last_emit = now
                         ctx.progress({"phase": "color", "fraction": min(0.99, n / total)})
             if result.returncode not in (0, None) and result.lines == 0:
-                raise ToolError(
-                    result.stderr or "tshark coloring pass failed", result.stderr, result.returncode
+                raise f.tshark.error(
+                    result.stderr, result.returncode, "tshark coloring pass failed"
                 )
             errors.update(coloring.parse_compile_errors(result.stderr))
         with self._lock:
@@ -943,13 +946,13 @@ class PcapService:
                     ctx.progress({"phase": "export", "fraction": min(0.99, n / total)})
             truncated = any(h in result.stderr for h in _TRUNCATION_HINTS)
             if result.returncode not in (0, None) and not (truncated and tmp.exists()):
-                raise ToolError(
-                    result.stderr or f"tshark exited with code {result.returncode}",
-                    result.stderr,
-                    result.returncode,
+                raise f.tshark.error(
+                    result.stderr, result.returncode, f"tshark exited with code {result.returncode}"
                 )
             if not tmp.exists():
-                raise ToolError(result.stderr or "tshark wrote no output file", result.stderr)
+                raise f.tshark.error(
+                    result.stderr, result.returncode, "tshark wrote no output file"
+                )
         return {
             "packets": packets if flt else f.info.frames,
             "filter": flt,

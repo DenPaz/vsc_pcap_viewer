@@ -129,6 +129,15 @@ UI behaviour stays in the Chromium test (`test/webview/e2e.test.js`).
   (no capinfos needed up front); capinfos runs in parallel for metadata.
 - **Virtualized list**: fixed row height; above 10M px of content the scroll
   range is compressed (`lib.computeWindow`) so >1.6M rows still scroll.
+- **Sandboxed tshark**: Ubuntu's apparmor package ships `/etc/apparmor.d/tshark`
+  (upstream since 2025), which confines `/usr/bin/tshark` to `/tmp` and
+  Wireshark's folders, so `-r ~/x.pcap` fails with "You don't have permission
+  to read the file". The backend is unconfined: `open` first reads a byte
+  itself (real permission problems get their own message), and every tshark
+  failure goes through `Tshark.error()`, which appends `permission_hint()`
+  (AppArmor profile loaded in enforce mode → local-rule instructions; Snap →
+  use the distro package; else generic). Temp files (empty capture, coloring
+  config) live in `/tmp`, which the profile allows.
 - **Lua as root**: tshark refuses Lua when run as root; the backend warns. The
   Lua integration test skips as root (CI runs as a normal user).
 - **Field catalogue** (`fields.py`): `tshark -G fields` must be tshark's
