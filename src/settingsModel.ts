@@ -161,6 +161,43 @@ export function resolveDissectorsFolder(folder: string | undefined, baseDir: str
   return path.normalize(path.isAbsolute(expanded) ? expanded : baseDir ? path.join(baseDir, expanded) : expanded);
 }
 
+/** Packet-list time column formats (pcapViewer.timeFormat); computed by the backend. */
+export const TIME_FORMATS = [
+  { id: "relative", label: "Seconds since beginning of capture" },
+  { id: "delta_displayed", label: "Seconds since previous displayed packet" },
+  { id: "delta_captured", label: "Seconds since previous captured packet" },
+  { id: "absolute", label: "Date and time of day (local)" },
+  { id: "utc", label: "Date and time of day (UTC)" },
+  { id: "epoch", label: "Seconds since 1970-01-01 (epoch)" },
+] as const;
+export type TimeFormat = (typeof TIME_FORMATS)[number]["id"];
+
+export function normalizeTimeFormat(raw: unknown): TimeFormat {
+  return TIME_FORMATS.find((f) => f.id === raw)?.id ?? "relative";
+}
+
+/** Packet-list column order and hidden columns (pcapViewer.columnLayout), by column id. */
+export interface ColumnLayout {
+  order: string[];
+  hidden: string[];
+}
+
+const COLUMN_ID_RE = /^(number|time|source|destination|protocol|length|info|custom:[A-Za-z0-9_][A-Za-z0-9_.-]*)$/;
+
+export function normalizeColumnLayout(raw: unknown): ColumnLayout {
+  const ids = (v: unknown) => (Array.isArray(v) ? [...new Set(v.filter((x): x is string => typeof x === "string" && COLUMN_ID_RE.test(x)))] : []);
+  const obj = raw && typeof raw === "object" ? (raw as { order?: unknown; hidden?: unknown }) : {};
+  return { order: ids(obj.order), hidden: ids(obj.hidden) };
+}
+
+/** Add a column for `field` ("Apply as Column"); unchanged if it is already there. */
+export function addColumn(columns: readonly ColumnSetting[], field: string, title: string): ColumnSetting[] {
+  if (columns.some((c) => c.field === field)) {
+    return [...columns];
+  }
+  return [...columns, { field, title: title.trim() || field }];
+}
+
 /** A packet coloring rule as sent to the backend (`pcapViewer.coloringRules`). */
 export interface ColoringRule {
   name: string;

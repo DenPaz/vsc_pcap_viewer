@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { ColoringRule, ColumnSetting, SavedFilter, configTargetFor, normalizeColoringRules, normalizeColumns, normalizeSavedFilters, resolveLuaScripts } from "./settingsModel";
+import { ColoringRule, ColumnLayout, ColumnSetting, SavedFilter, TimeFormat, configTargetFor, normalizeColoringRules, normalizeColumnLayout, normalizeColumns, normalizeSavedFilters, normalizeTimeFormat, resolveLuaScripts } from "./settingsModel";
 
 export const SECTION = "pcapViewer";
 
@@ -11,6 +11,8 @@ export interface Settings {
   decodeAs: string[];
   prefs: Record<string, string | number | boolean>;
   columns: ColumnSetting[];
+  columnLayout: ColumnLayout;
+  timeFormat: TimeFormat;
   savedFilters: SavedFilter[];
   colorize: boolean;
   coloringRules: ColoringRule[];
@@ -30,6 +32,8 @@ export function readSettings(scope?: vscode.Uri): Settings {
     decodeAs: cfg.get<string[]>("decodeAs", []).filter((r) => typeof r === "string" && r.trim()),
     prefs: cfg.get<Record<string, string | number | boolean>>("prefs", {}),
     columns: normalizeColumns(cfg.get<unknown>("columns", [])),
+    columnLayout: normalizeColumnLayout(cfg.get<unknown>("columnLayout", {})),
+    timeFormat: normalizeTimeFormat(cfg.get<unknown>("timeFormat", "relative")),
     savedFilters: normalizeSavedFilters(cfg.get<unknown>("savedFilters", [])),
     colorize: cfg.get<boolean>("colorize", true),
     coloringRules: normalizeColoringRules(cfg.get<unknown>("coloringRules", [])),

@@ -15,10 +15,11 @@ type Item = vscode.QuickPickItem & { action: "add" | "remove"; column?: ColumnSe
 export function registerColumnCommands(context: vscode.ExtensionContext, provider: PcapEditorProvider): void {
   context.subscriptions.push(
     vscode.commands.registerCommand("pcapViewer.manageColumns", async (field?: unknown) => {
-      const columns = readSettings().columns;
+      const scope = provider.activeSession?.uri;
+      const columns = readSettings(scope).columns;
       if (typeof field === "string" && isValidFieldName(field)) {
         if (!columns.some((c) => c.field === field)) {
-          await updateSetting("columns", [...columns, { field, title: field }]);
+          await updateSetting("columns", [...columns, { field, title: field }], scope);
         }
         return;
       }
@@ -40,6 +41,7 @@ export function registerColumnCommands(context: vscode.ExtensionContext, provide
         await updateSetting(
           "columns",
           columns.filter((c) => c.field !== pick.column?.field),
+          scope,
         );
         return;
       }
@@ -51,7 +53,7 @@ export function registerColumnCommands(context: vscode.ExtensionContext, provide
       if (title === undefined) {
         return;
       }
-      await updateSetting("columns", [...columns, { field: newField, title: title.trim() || newField }]);
+      await updateSetting("columns", [...columns, { field: newField, title: title.trim() || newField }], scope);
     }),
   );
 }

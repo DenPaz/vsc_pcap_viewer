@@ -288,3 +288,68 @@ suite("webview lib: coloring", () => {
     assert.equal(lib.rowColors(undefined, coloring), null);
   });
 });
+
+suite("webview lib: navigation and customisation", () => {
+  const col = (id, extra = {}) => ({ id, field: id, ...extra });
+
+  test("cellFilter builds filters from packet-list cells", () => {
+    assert.equal(lib.cellFilter(col("source"), "192.168.1.10"), "ip.src == 192.168.1.10");
+    assert.equal(lib.cellFilter(col("destination"), "93.184.216.34"), "ip.dst == 93.184.216.34");
+    assert.equal(lib.cellFilter(col("source"), "fe80::1"), "ipv6.src == fe80::1");
+    assert.equal(lib.cellFilter(col("destination"), "2001:db8::2"), "ipv6.dst == 2001:db8::2");
+    assert.equal(lib.cellFilter(col("source"), "02:00:00:00:00:01"), "eth.src == 02:00:00:00:00:01");
+    assert.equal(lib.cellFilter(col("destination"), "Broadcast"), null); // a resolved name: no field to match
+    assert.equal(lib.cellFilter(col("protocol"), "DNS"), "dns");
+    assert.equal(lib.cellFilter(col("protocol"), "TLSv1.3"), "tls");
+    assert.equal(lib.cellFilter(col("protocol"), "HTTP/JSON"), "http");
+    assert.equal(lib.cellFilter(col("protocol"), "0x86dd"), null);
+    assert.equal(lib.cellFilter(col("length"), "144"), "frame.len == 144");
+    assert.equal(lib.cellFilter(col("number"), "4"), "frame.number == 4");
+    assert.equal(lib.cellFilter(col("time"), "0.001000"), null);
+    assert.equal(lib.cellFilter(col("info"), "GET /"), null);
+    assert.equal(lib.cellFilter(col("custom:http.host", { field: "http.host", custom: true }), "example.com"), 'http.host == "example.com"');
+    assert.equal(lib.cellFilter(col("custom:tcp.stream", { field: "tcp.stream", custom: true }), "3"), "tcp.stream == 3");
+    assert.equal(lib.cellFilter(col("custom:ip.ttl", { field: "ip.ttl", custom: true }), "64,63"), "ip.ttl == 64"); // first occurrence
+    assert.equal(lib.cellFilter(col("custom:x.y", { field: "x.y", custom: true }), 'say "hi"'), 'x.y == "say \\"hi\\""');
+    assert.equal(lib.cellFilter(col("source"), ""), null);
+  });
+
+  test("parseHexBytes accepts the usual spellings", () => {
+    assert.deepEqual(lib.parseHexBytes("474554"), ["47", "45", "54"]);
+    assert.deepEqual(lib.parseHexBytes("47 45 54"), ["47", "45", "54"]);
+    assert.deepEqual(lib.parseHexBytes("47:45:54"), ["47", "45", "54"]);
+    assert.deepEqual(lib.parseHexBytes("0x47, 0x45"), ["47", "45"]);
+    assert.deepEqual(lib.parseHexBytes("A b"), ["0a", "0b"]);
+    assert.equal(lib.parseHexBytes("abc"), null);
+    assert.equal(lib.parseHexBytes("zz"), null);
+    assert.equal(lib.parseHexBytes("   "), null);
+  });
+
+  test("formatBytesAs: the bytes pane's copy formats", () => {
+    const b = Uint8Array.from([0x47, 0x45, 0x54, 0x20, 0x2f, 0x0d, 0x0a, 0x00, 0x41]);
+    assert.equal(lib.formatBytesAs(b, "hex"), "474554202f0d0a0041");
+    assert.equal(lib.formatBytesAs(b, "escaped"), "\\x47\\x45\\x54\\x20\\x2f\\x0d\\x0a\\x00\\x41");
+    assert.equal(lib.formatBytesAs(b, "base64"), Buffer.from(b).toString("base64"));
+    assert.equal(lib.formatBytesAs(b, "text"), "GET /\nA");
+    assert.equal(
+      lib.formatBytesAs(b, "c"),
+      "static const unsigned char packet_bytes[9] = {\n  0x47, 0x45, 0x54, 0x20, 0x2f, 0x0d, 0x0a, 0x00,\n  0x41\n};",
+    );
+    assert.equal(lib.formatBytesAs(b, "hexdump", 0x10), "00000010  47 45 54 20 2f 0d 0a 00  41                       GET /...A");
+    for (const n of [0, 1, 2, 3, 4, 5]) {
+      const bytes = Uint8Array.from({ length: n }, (_, i) => i * 37);
+      assert.equal(lib.toBase64(bytes), Buffer.from(bytes).toString("base64"));
+    }
+  });
+
+  test("layoutColumns and moveColumn", () => {
+    const all = ["number", "time", "source", "info", "custom:tcp.stream"].map((id) => ({ id }));
+    const ids = (layout) => lib.layoutColumns(all, layout).map((c) => `${c.column.id}@${c.index}`);
+    assert.deepEqual(ids(undefined), ["number@0", "time@1", "source@2", "info@3", "custom:tcp.stream@4"]);
+    assert.deepEqual(ids({ hidden: ["time"] }), ["number@0", "source@2", "info@3", "custom:tcp.stream@4"]);
+    assert.deepEqual(ids({ order: ["info", "number"] }), ["info@3", "number@0", "time@1", "source@2", "custom:tcp.stream@4"]);
+    assert.deepEqual(ids({ hidden: all.map((c) => c.id) }), ["number@0"]); // never zero columns
+    assert.deepEqual(lib.moveColumn(["a", "b", "c", "d"], "d", "b"), ["a", "d", "b", "c"]);
+    assert.deepEqual(lib.moveColumn(["a", "b", "c"], "a", null), ["b", "c", "a"]);
+  });
+});

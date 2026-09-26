@@ -22,10 +22,23 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
   // Stubbed "✨ Ask AI" answer (the real host validates suggestions with tshark first); null = never answer.
   /** @type {{suggestions: {filter: string, explanation: string}[], message?: string} | null} */
   let aiReply = null;
+  // The stand-in host's pcapViewer.columns (Apply as Column / Remove update it and send it back).
+  let customCols = [{ field: "tcp.stream", title: "Stream" }];
+  let layout = { order: [], hidden: [] };
   const cspViolations = [];
   const pageErrors = [];
 
   const post = (msg) => page.evaluate((m) => window.postMessage(m, "*"), msg);
+  /** Wait until the stand-in host has received a matching message. */
+  async function waitForHost(pred, timeoutMs = 5000) {
+    const start = Date.now();
+    while (!hostLog.some(pred)) {
+      if (Date.now() - start > timeoutMs) {
+        throw new Error("the host never received the expected message");
+      }
+      await new Promise((r) => setTimeout(r, 20));
+    }
+  }
 
   suiteSetup(async function () {
     server = await serveWebview();
@@ -58,7 +71,9 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
         await post({
           type: "init",
           info,
-          columns: [{ field: "tcp.stream", title: "Stream" }],
+          columns: customCols,
+          layout,
+          timeFormat: "relative",
           filter: "",
           history: ["tcp.port == 80"],
           savedFilters,
@@ -75,6 +90,21 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
           await post({ type: "aiSuggestions", id: msg.id, ...aiReply });
         }
       } else if (msg.type === "aiCancel") {
+        hostLog.push(msg);
+      } else if (msg.type === "applyColumn") {
+        hostLog.push(msg);
+        if (!customCols.some((c) => c.field === msg.field)) {
+          customCols = [...customCols, { field: msg.field, title: msg.title }];
+        }
+        await post({ type: "columns", columns: customCols, layout });
+      } else if (msg.type === "removeColumn") {
+        hostLog.push(msg);
+        customCols = customCols.filter((c) => c.field !== msg.field);
+        await post({ type: "columns", columns: customCols, layout });
+      } else if (msg.type === "columnLayout") {
+        hostLog.push(msg);
+        layout = msg.layout;
+      } else if (["marks", "pickTimeFormat", "renameColumn"].includes(msg.type)) {
         hostLog.push(msg);
       } else if (["manageSavedFilters", "filterApplied", "selection", "follow", "decodeAs", "colorize", "exportBytes"].includes(msg.type)) {
         hostLog.push(msg);
@@ -286,7 +316,9 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     await page.click("#list-rows .list-row >> nth=3", { button: "right" }); // frame 4 (HTTP GET)
     assert.ok(hostLog.some((m) => m.type === "selection" && m.frame === 4));
     const items = await page.$$eval("#context-menu .item", (els) => els.map((e) => [e.textContent, !e.classList.contains("disabled")]));
-    assert.deepEqual(items.slice(0, 4), [
+    // The clicked cell's Apply as Filter entries come first, then Follow.
+    assert.deepEqual(items.slice(0, 2).map((i) => i[0]), ["Apply as Filter", "Prepare as Filter"]);
+    assert.deepEqual(items.slice(5, 9), [
       ["Follow TCP Stream", true],
       ["Follow UDP Stream", true],
       ["Follow TLS Stream", false],
@@ -373,7 +405,7 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     await page.waitForFunction(() => /Asking the language model/.test(document.querySelector("#filter-error").textContent));
     await page.press("#filter-input", "Escape");
     const asked = hostLog.filter((m) => m.type === "aiSuggest").at(-1);
-    assert.deepEqual(hostLog.at(-1), { type: "aiCancel", id: asked.id });
+    await waitForHost((m) => m.type === "aiCancel" && m.id === asked.id); // host messages arrive asynchronously
     assert.equal(await page.inputValue("#filter-input"), "tcp.flags.syn == 1", "Esc restores the filter");
     assert.ok(await page.$eval("#filter-error", (e) => e.classList.contains("hidden")));
 
@@ -390,6 +422,227 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     await page.fill("#filter-input", "");
     await page.type("#filter-input", "tcp.fla");
     await page.waitForSelector("#suggest .suggest-item.kind-field");
+  });
+
+  // ---------------------------------------------------------------- navigation & customisation
+
+  const status = () => page.textContent("#status-left");
+  const waitSelected = (n) => page.waitForFunction((f) => new RegExp(`Selected: ${f}(\\D|$)`).test(document.querySelector("#status-left").textContent), n);
+  const rowEl = (frame) => page.locator("#list-rows .list-row").nth(frame - 1); // unfiltered, unsorted view
+  const command = (name) => post({ type: "command", command: name });
+  const headerIds = () => page.$$eval("#list-header > div", (cells) => cells.map((c) => c.dataset.id));
+
+  async function cleanView() {
+    await post({ type: "aiAvailable", available: false });
+    await page.click("#filter-clear");
+    await page.waitForFunction(() => !/Displayed/.test(document.querySelector("#status-left").textContent));
+    await page.waitForFunction(() => document.querySelectorAll("#list-rows .list-row:not(.loading)").length === 11);
+    const sorted = await page.$("#list-header .sort-indicator");
+    if (sorted) {
+      await page.click("#list-header > div:has(.sort-indicator)"); // cycle the sort off
+      await page.click("#list-header > div:has(.sort-indicator)");
+    }
+  }
+
+  test("Find Packet: Ctrl+F, string / hex / filter, F3, errors and Esc", async () => {
+    await cleanView();
+    await rowEl(1).click();
+    await waitSelected(1);
+    await page.keyboard.press("Control+f");
+    await page.waitForSelector("#find-bar:not(.hidden)");
+    assert.equal(await page.evaluate(() => document.activeElement.id), "find-input");
+
+    await page.selectOption("#find-mode", "string");
+    assert.ok(await page.isVisible("#find-case-label"));
+    await page.fill("#find-input", "INDEX.HTML");
+    await page.press("#find-input", "Enter");
+    await waitSelected(4);
+    assert.equal(await page.textContent("#find-status"), "Packet 4");
+    await page.press("#find-input", "Enter"); // the only match: wraps to itself
+    await page.waitForFunction(() => /wrapped/.test(document.querySelector("#find-status").textContent));
+
+    await page.selectOption("#find-mode", "hex");
+    await page.fill("#find-input", "xyz");
+    assert.equal(await page.textContent("#find-status"), "Not hex bytes");
+    assert.ok(await page.$eval("#find-input", (i) => i.classList.contains("invalid")));
+    await page.fill("#find-input", "47 45 54"); // "GET"
+    await page.press("#find-input", "Enter");
+    await page.waitForFunction(() => /Packet 4/.test(document.querySelector("#find-status").textContent));
+
+    await page.selectOption("#find-mode", "filter");
+    await page.fill("#find-input", "tcp.flags.fin == 1");
+    await page.press("#find-input", "Enter");
+    await waitSelected(9);
+    await page.keyboard.press("F3");
+    await waitSelected(10);
+    await page.keyboard.press("Shift+F3");
+    await waitSelected(9);
+
+    await page.fill("#find-input", "tcp.port ==");
+    await page.press("#find-input", "Enter");
+    await page.waitForFunction(() => document.querySelector("#find-status").classList.contains("error"));
+    await page.selectOption("#find-mode", "string");
+    await page.fill("#find-input", "no such text anywhere");
+    await page.press("#find-input", "Enter");
+    await page.waitForFunction(() => document.querySelector("#find-status").textContent === "Not found");
+
+    await page.press("#find-input", "Escape");
+    assert.ok(await page.$eval("#find-bar", (b) => b.classList.contains("hidden")));
+  });
+
+  test("frame links jump to the referenced packet; Alt+Left / Alt+Right walk the history", async () => {
+    await cleanView();
+    await rowEl(7).click(); // HTTP response: "[Request in frame: 4]"
+    await waitSelected(7);
+    const http = page.locator("#detail-tree .node-row:has-text('Hypertext Transfer Protocol')").first();
+    if ((await http.getAttribute("aria-expanded")) !== "true") {
+      await http.locator(".twisty").click();
+    }
+    const link = page.locator("#detail-tree .node-row.frame-link:has-text('Request in frame')");
+    await link.waitFor();
+    assert.match(await link.getAttribute("title"), /Go to packet 4/);
+    await link.locator(".label").click();
+    await waitSelected(4);
+    await command("goBack"); // Alt+Left (a keybinding in VS Code)
+    await waitSelected(7);
+    await command("goForward");
+    await waitSelected(4);
+
+    // A link to a packet the filter hides offers to clear the filter.
+    await page.fill("#filter-input", "http.response");
+    await page.press("#filter-input", "Enter");
+    await page.waitForFunction(() => /Displayed: 1/.test(document.querySelector("#status-left").textContent));
+    await page.locator("#list-rows .list-row").first().click();
+    await waitSelected(7);
+    await page.locator("#detail-tree .node-row.frame-link:has-text('Request in frame') .label").click();
+    await page.waitForFunction(() => /Packet 4 is not displayed/.test(document.querySelector("#filter-error").textContent));
+    await page.click("#filter-error button:has-text('Clear filter and go')");
+    await waitSelected(4);
+    assert.doesNotMatch(await status(), /Displayed/);
+  });
+
+  test("marks: toggle, next/previous marked, the mark style wins over coloring, unmark all", async () => {
+    await cleanView();
+    const rules = [{ filter: "tcp", foreground: "#000000", background: "#e7e6ff" }];
+    const res = await client.request("set_coloring", { rules }, { timeoutMs: 0 });
+    await post({ type: "coloring", coloringId: res.coloringId, rules: [{ name: "TCP", foreground: "#000000", background: "#e7e6ff" }] });
+    await page.waitForFunction(() => document.querySelector("#list-rows .list-row")?.classList.contains("colored"));
+
+    for (const frame of [2, 9]) {
+      await rowEl(frame).click();
+      await waitSelected(frame);
+      await command("toggleMark"); // Ctrl+M
+      await page.waitForFunction((f) => document.querySelectorAll("#list-rows .list-row")[f - 1]?.classList.contains("marked"), frame);
+    }
+    await page.waitForFunction(() => /Marked: 2/.test(document.querySelector("#status-left").textContent));
+    assert.deepEqual(hostLog.filter((m) => m.type === "marks").at(-1), { type: "marks", count: 2 });
+    await rowEl(1).click(); // select another row so row 2 isn't drawn as selected
+    const marked = await rowEl(2).evaluate((r) => ({ marked: r.classList.contains("marked"), inline: r.style.backgroundColor }));
+    assert.deepEqual(marked, { marked: true, inline: "" }, "marked rows ignore coloring rules");
+
+    await command("nextMark"); // Shift+Ctrl+N
+    await waitSelected(2);
+    await command("nextMark");
+    await waitSelected(9);
+    await command("nextMark"); // wraps
+    await waitSelected(2);
+    await command("previousMark");
+    await waitSelected(9);
+
+    await rowEl(9).click({ button: "right" });
+    assert.ok(await page.isVisible("#context-menu .item:has-text('Unmark Packet')"));
+    await page.keyboard.press("Escape");
+    await command("unmarkAll");
+    await page.waitForFunction(() => !document.querySelector("#list-rows .list-row.marked"));
+    await post({ type: "coloring", coloringId: 0, rules: [] });
+  });
+
+  test("Apply as Column, header menu hide/show, drag to reorder", async () => {
+    await cleanView();
+    await rowEl(4).click();
+    await waitSelected(4);
+    const src = page.locator("#detail-tree .node-row:has-text('Source Address')").first();
+    await src.waitFor();
+    await src.click({ button: "right" });
+    await page.click("#context-menu .item:has-text('Apply as Column')");
+    assert.deepEqual(hostLog.filter((m) => m.type === "applyColumn").at(-1), { type: "applyColumn", field: "ip.src", title: "Source Address" });
+    await page.waitForFunction(() => [...document.querySelectorAll("#list-header > div")].some((c) => c.dataset.id === "custom:ip.src"));
+
+    await page.click("#list-header > div[data-id='time']", { button: "right" });
+    await page.click("#context-menu .item:has-text('Hide “Time”')");
+    assert.ok(!(await headerIds()).includes("time"));
+    assert.deepEqual(layout.hidden, ["time"]);
+    await page.click("#list-header > div[data-id='number']", { button: "right" });
+    // The unchecked "Time" entry shows it again.
+    await page.$$eval("#context-menu .item", (items) => items.find((i) => i.textContent.trim() === "Time" && !i.textContent.startsWith("✓")).click());
+    assert.ok((await headerIds()).includes("time"));
+
+    await page.dragAndDrop("#list-header > div[data-id='protocol']", "#list-header > div[data-id='number']");
+    assert.deepEqual((await headerIds()).slice(0, 2), ["protocol", "number"]);
+    assert.equal(layout.order[0], "protocol");
+    await page.waitForFunction(() => document.querySelector("#list-rows .list-row:not(.loading)")?.children[0]?.textContent === "TCP");
+
+    await page.click("#list-header > div[data-id='custom:ip.src']", { button: "right" });
+    await page.click("#context-menu .item:has-text('Remove Column')");
+    await page.waitForFunction(() => ![...document.querySelectorAll("#list-header > div")].some((c) => c.dataset.id === "custom:ip.src"));
+    await page.click("#list-header > div[data-id='number']", { button: "right" });
+    await page.click("#context-menu .item:has-text('Reset Column Order and Visibility')");
+    assert.deepEqual((await headerIds()).slice(0, 2), ["number", "time"]);
+  });
+
+  test("cell menu: Apply / Prepare as Filter from a packet-list cell", async () => {
+    await cleanView();
+    const srcCell = rowEl(1).locator("div").nth(2); // Source of frame 1: 192.168.1.10
+    await srcCell.click({ button: "right" });
+    await page.click("#context-menu .item:text-is('Apply as Filter')");
+    await page.waitForFunction(() => document.querySelector("#filter-input").value === "ip.src == 192.168.1.10");
+    await page.waitForFunction(() => /Displayed: 6/.test(document.querySelector("#status-left").textContent));
+
+    // Displayed now: 1, 3, 4, 8, 9, 11; the third row is frame 4, Protocol "HTTP".
+    await page.locator("#list-rows .list-row").nth(2).locator("div").nth(4).click({ button: "right" });
+    await page.click("#context-menu .item:text-is('Prepare as Filter')");
+    assert.equal(await page.inputValue("#filter-input"), "http");
+    await rowEl(1).locator("div").nth(6).click({ button: "right" }); // Info: no filter
+    assert.ok(await page.$eval("#context-menu .item:text-is('Apply as Filter')", (i) => i.classList.contains("disabled")));
+    await page.keyboard.press("Escape");
+  });
+
+  test("time display format and time reference", async () => {
+    await cleanView();
+    const timeCell = (frame) => rowEl(frame).locator("div").nth(1).textContent();
+    await page.click("#status-time");
+    assert.deepEqual(hostLog.at(-1), { type: "pickTimeFormat" });
+    await post({ type: "timeFormat", format: "utc" }); // the host saved pcapViewer.timeFormat
+    await page.waitForFunction(() => document.querySelectorAll("#list-rows .list-row")[0]?.children[1]?.textContent === "2023-11-14 22:13:20.000000");
+    assert.equal(await page.textContent("#status-time"), "Time: UTC date and time");
+    await post({ type: "timeFormat", format: "delta_captured" });
+    await page.waitForFunction(() => document.querySelectorAll("#list-rows .list-row")[4]?.children[1]?.textContent === "0.001000");
+    await post({ type: "timeFormat", format: "relative" });
+
+    await rowEl(4).click();
+    await waitSelected(4);
+    await command("toggleTimeReference"); // Ctrl+T
+    await page.waitForFunction(() => document.querySelectorAll("#list-rows .list-row")[3]?.children[1]?.textContent === "*REF*");
+    assert.equal(await timeCell(5), "0.001000");
+    assert.equal(await timeCell(1), "-0.003000");
+    assert.match(await status(), /Time reference: 4/);
+    await command("toggleTimeReference");
+    await page.waitForFunction(() => document.querySelectorAll("#list-rows .list-row")[3]?.children[1]?.textContent === "0.003000");
+  });
+
+  test("Ctrl+Home / Ctrl+End and conversation stepping", async () => {
+    await cleanView();
+    await rowEl(3).click();
+    await page.keyboard.press("Control+End");
+    await waitSelected(11);
+    await page.keyboard.press("Control+Home");
+    await waitSelected(1);
+    await command("nextInConversation"); // Ctrl+.
+    await waitSelected(2);
+    await command("previousInConversation"); // Ctrl+,
+    await waitSelected(1);
+    await command("previousInConversation");
+    await page.waitForFunction(() => /No previous packet in this conversation/.test(document.querySelector("#filter-error").textContent));
   });
 
   test("no script errors or CSP violations", () => {

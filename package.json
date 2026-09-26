@@ -119,6 +119,86 @@
         "category": "PCAP"
       },
       {
+        "command": "pcapViewer.find",
+        "title": "Find Packet\u2026",
+        "category": "PCAP"
+      },
+      {
+        "command": "pcapViewer.findNext",
+        "title": "Find Next",
+        "category": "PCAP"
+      },
+      {
+        "command": "pcapViewer.findPrevious",
+        "title": "Find Previous",
+        "category": "PCAP"
+      },
+      {
+        "command": "pcapViewer.goBack",
+        "title": "Go Back (Packet History)",
+        "category": "PCAP"
+      },
+      {
+        "command": "pcapViewer.goForward",
+        "title": "Go Forward (Packet History)",
+        "category": "PCAP"
+      },
+      {
+        "command": "pcapViewer.nextInConversation",
+        "title": "Next Packet in Conversation",
+        "category": "PCAP"
+      },
+      {
+        "command": "pcapViewer.previousInConversation",
+        "title": "Previous Packet in Conversation",
+        "category": "PCAP"
+      },
+      {
+        "command": "pcapViewer.firstPacket",
+        "title": "First Packet",
+        "category": "PCAP"
+      },
+      {
+        "command": "pcapViewer.lastPacket",
+        "title": "Last Packet",
+        "category": "PCAP"
+      },
+      {
+        "command": "pcapViewer.toggleMark",
+        "title": "Mark/Unmark Packet",
+        "category": "PCAP"
+      },
+      {
+        "command": "pcapViewer.nextMark",
+        "title": "Next Marked Packet",
+        "category": "PCAP"
+      },
+      {
+        "command": "pcapViewer.previousMark",
+        "title": "Previous Marked Packet",
+        "category": "PCAP"
+      },
+      {
+        "command": "pcapViewer.unmarkAll",
+        "title": "Unmark All Packets",
+        "category": "PCAP"
+      },
+      {
+        "command": "pcapViewer.exportMarked",
+        "title": "Export Marked Packets\u2026",
+        "category": "PCAP"
+      },
+      {
+        "command": "pcapViewer.toggleTimeReference",
+        "title": "Set/Unset Time Reference",
+        "category": "PCAP"
+      },
+      {
+        "command": "pcapViewer.timeFormat",
+        "title": "Time Display Format\u2026",
+        "category": "PCAP"
+      },
+      {
         "command": "pcapViewer.saveFilter",
         "title": "Save Display Filter\u2026",
         "category": "PCAP"
@@ -352,6 +432,70 @@
         {
           "command": "pcapViewer.suggestFilter",
           "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
+        },
+        {
+          "command": "pcapViewer.find",
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/"
+        },
+        {
+          "command": "pcapViewer.findNext",
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/"
+        },
+        {
+          "command": "pcapViewer.findPrevious",
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/"
+        },
+        {
+          "command": "pcapViewer.goBack",
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/"
+        },
+        {
+          "command": "pcapViewer.goForward",
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/"
+        },
+        {
+          "command": "pcapViewer.nextInConversation",
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/"
+        },
+        {
+          "command": "pcapViewer.previousInConversation",
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/"
+        },
+        {
+          "command": "pcapViewer.firstPacket",
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/"
+        },
+        {
+          "command": "pcapViewer.lastPacket",
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/"
+        },
+        {
+          "command": "pcapViewer.toggleMark",
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/"
+        },
+        {
+          "command": "pcapViewer.nextMark",
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/"
+        },
+        {
+          "command": "pcapViewer.previousMark",
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/"
+        },
+        {
+          "command": "pcapViewer.unmarkAll",
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/"
+        },
+        {
+          "command": "pcapViewer.exportMarked",
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/"
+        },
+        {
+          "command": "pcapViewer.toggleTimeReference",
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/"
+        },
+        {
+          "command": "pcapViewer.timeFormat",
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/"
         }
       ]
     },
@@ -367,6 +511,54 @@
         "key": "ctrl+g",
         "mac": "cmd+g",
         "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/"
+      },
+      {
+        "command": "pcapViewer.toggleMark",
+        "key": "ctrl+m",
+        "mac": "cmd+m",
+        "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inputFocus"
+      },
+      {
+        "command": "pcapViewer.nextMark",
+        "key": "ctrl+shift+n",
+        "mac": "cmd+shift+n",
+        "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inputFocus"
+      },
+      {
+        "command": "pcapViewer.previousMark",
+        "key": "ctrl+shift+b",
+        "mac": "cmd+shift+b",
+        "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inputFocus"
+      },
+      {
+        "command": "pcapViewer.toggleTimeReference",
+        "key": "ctrl+t",
+        "mac": "cmd+t",
+        "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inputFocus"
+      },
+      {
+        "command": "pcapViewer.nextInConversation",
+        "key": "ctrl+.",
+        "mac": "cmd+.",
+        "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inputFocus"
+      },
+      {
+        "command": "pcapViewer.previousInConversation",
+        "key": "ctrl+,",
+        "mac": "cmd+,",
+        "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inputFocus"
+      },
+      {
+        "command": "pcapViewer.goBack",
+        "key": "alt+left",
+        "mac": "alt+left",
+        "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inputFocus"
+      },
+      {
+        "command": "pcapViewer.goForward",
+        "key": "alt+right",
+        "mac": "alt+right",
+        "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inputFocus"
       }
     ],
     "configuration": {
@@ -447,7 +639,52 @@
             ]
           },
           "default": [],
-          "markdownDescription": "Extra packet-list columns: any tshark field (e.g. `tcp.stream`, `http.host`) or `{ \"field\": \"http.host\", \"title\": \"Host\" }`."
+          "markdownDescription": "Extra packet-list columns: any tshark field (e.g. `tcp.stream`, `http.host`) or `{ \"field\": \"http.host\", \"title\": \"Host\" }`.",
+          "scope": "resource"
+        },
+        "pcapViewer.columnLayout": {
+          "type": "object",
+          "scope": "resource",
+          "default": {},
+          "properties": {
+            "order": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Column ids in display order (number, time, source, destination, protocol, length, info, custom:<field>)"
+            },
+            "hidden": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Column ids that are hidden"
+            }
+          },
+          "markdownDescription": "Packet list column order and hidden columns, by column id (`number`, `time`, `source`, `destination`, `protocol`, `length`, `info`, `custom:<field>`). Set by dragging headers and the header context menu."
+        },
+        "pcapViewer.timeFormat": {
+          "type": "string",
+          "scope": "resource",
+          "default": "relative",
+          "enum": [
+            "relative",
+            "delta_displayed",
+            "delta_captured",
+            "absolute",
+            "utc",
+            "epoch"
+          ],
+          "enumDescriptions": [
+            "Seconds since beginning of capture (or since the time reference)",
+            "Seconds since previous displayed packet (follows the filter and sort order)",
+            "Seconds since previous captured packet",
+            "Date and time of day, local time",
+            "Date and time of day, UTC",
+            "Seconds since 1970-01-01"
+          ],
+          "markdownDescription": "How the packet list shows the Time column (*PCAP: Time Display Format\u2026*, or click the time format in the status bar)."
         },
         "pcapViewer.savedFilters": {
           "type": "array",

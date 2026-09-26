@@ -129,6 +129,10 @@
     clear() {
       this.map.clear();
     }
+    /** Cached values (does not change the LRU order). */
+    values() {
+      return this.map.values();
+    }
     get size() {
       return this.map.size;
     }
@@ -567,6 +571,182 @@
     return `${u === 0 ? v : v.toFixed(1)} ${units[u]}`;
   }
 
+  // ------------------------------------------------------------------ packet-list cells
+
+  const MAC6_RE = /^[0-9a-fA-F]{2}(:[0-9a-fA-F]{2}){5}$/;
+
+  /**
+   * Display-filter name for a Protocol column label: "TLSv1.3" → "tls",
+   * "HTTP/JSON" → "http", "DNS" → "dns". null when it can't be a filter name.
+   * @param {string} label
+   */
+  function protocolFilterName(label) {
+    const first = label.trim().split(/[/\s]/)[0].toLowerCase();
+    if (/^(tls|ssl)v?[\d.]*$/.test(first)) {
+      return "tls";
+    }
+    return /^[a-z][a-z0-9_.-]*$/.test(first) ? first : null;
+  }
+
+  /**
+   * Filter for a packet-list cell ("Apply as Filter" on the list), or null for
+   * columns without one (Time, Info) and values that can't be matched.
+   * Source/Destination pick ip/ipv6/eth by the value's form.
+   * @param {{id: string, field: string, custom?: boolean}} column @param {string} value
+   * @returns {string | null}
+   */
+  function cellFilter(column, value) {
+    const v = (value ?? "").trim();
+    if (!v) {
+      return null;
+    }
+    switch (column.id) {
+      case "number":
+        return NUMBER_RE.test(v) ? `frame.number == ${v}` : null;
+      case "length":
+        return NUMBER_RE.test(v) ? `frame.len == ${v}` : null;
+      case "time":
+      case "info":
+        return null;
+      case "source":
+      case "destination": {
+        const dir = column.id === "source" ? "src" : "dst";
+        if (IPV4_RE.test(v)) {
+          return `ip.${dir} == ${v}`;
+        }
+        if (MAC6_RE.test(v)) {
+          return `eth.${dir} == ${v}`;
+        }
+        return v.includes(":") && IPV6_RE.test(v) ? `ipv6.${dir} == ${v}` : null;
+      }
+      case "protocol":
+        return protocolFilterName(v);
+    }
+    if (column.custom && column.field) {
+      // Several occurrences come comma-separated: match the first.
+      return buildFieldFilter({ name: column.field, show: v.split(",")[0].trim() });
+    }
+    return null;
+  }
+
+  /**
+   * Visible columns in display order: ids in `layout.order` first, the rest in
+   * their natural order; hidden ones left out (at least one always stays).
+   * `index` is the column's position in `all` (= its cell index in a row).
+   * @template {{id: string}} C
+   * @param {C[]} all @param {{order?: string[], hidden?: string[]} | undefined} layout
+   * @returns {{column: C, index: number}[]}
+   */
+  function layoutColumns(all, layout) {
+    const order = layout?.order ?? [];
+    const hidden = new Set(layout?.hidden ?? []);
+    const rank = (/** @type {string} */ id) => {
+      const i = order.indexOf(id);
+      return i < 0 ? order.length : i;
+    };
+    const indexed = all.map((column, index) => ({ column, index }));
+    const sorted = [...indexed].sort((a, b) => rank(a.column.id) - rank(b.column.id) || a.index - b.index);
+    const visible = sorted.filter((c) => !hidden.has(c.column.id));
+    return visible.length ? visible : sorted.slice(0, 1);
+  }
+
+  /**
+   * New display order after dragging column `id` in front of `beforeId`
+   * (null: to the end). `current` is the current display order of all ids.
+   * @param {string[]} current @param {string} id @param {string | null} beforeId
+   */
+  function moveColumn(current, id, beforeId) {
+    const rest = current.filter((c) => c !== id);
+    const at = beforeId === null ? rest.length : rest.indexOf(beforeId);
+    rest.splice(at < 0 ? rest.length : at, 0, id);
+    return rest;
+  }
+
+  // ------------------------------------------------------------------ find / bytes
+
+  /**
+   * Hex bytes for Find Packet: "474554", "47 45 54", "47:45:54", "0x47 0x45".
+   * Returns lower-case byte pairs, or null when the input isn't hex bytes.
+   * (The backend parses the same way; this gives immediate feedback.)
+   * @param {string} text
+   * @returns {string[] | null}
+   */
+  function parseHexBytes(text) {
+    const tokens = text.trim().split(/[\s:.,-]+/).filter(Boolean).map((t) => t.toLowerCase());
+    /** @type {string[]} */
+    const out = [];
+    for (const token of tokens) {
+      let t = token.startsWith("0x") ? token.slice(2) : token;
+      if (tokens.length > 1 && t.length === 1) {
+        t = "0" + t;
+      }
+      if (!t || t.length % 2 || !/^[0-9a-f]+$/.test(t)) {
+        return null;
+      }
+      for (let i = 0; i < t.length; i += 2) {
+        out.push(t.slice(i, i + 2));
+      }
+    }
+    return out.length ? out : null;
+  }
+
+  const BASE64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+  /** @param {Uint8Array} bytes */
+  function toBase64(bytes) {
+    let out = "";
+    for (let i = 0; i < bytes.length; i += 3) {
+      const n = (bytes[i] << 16) | ((bytes[i + 1] ?? 0) << 8) | (bytes[i + 2] ?? 0);
+      out += BASE64[(n >> 18) & 63] + BASE64[(n >> 12) & 63];
+      out += i + 1 < bytes.length ? BASE64[(n >> 6) & 63] : "=";
+      out += i + 2 < bytes.length ? BASE64[n & 63] : "=";
+    }
+    return out;
+  }
+
+  /** @typedef {"hexdump" | "hex" | "c" | "escaped" | "base64" | "text"} BytesFormat */
+
+  /**
+   * Bytes pane "Copy as…" formats, like Wireshark's: hex dump (offsets + ASCII),
+   * hex stream, C array, escaped string, Base64 and printable text (non-printable
+   * bytes dropped, line breaks and tabs kept).
+   * @param {Uint8Array} bytes @param {BytesFormat} kind @param {number} [offset] first offset of the dump
+   */
+  function formatBytesAs(bytes, kind, offset = 0) {
+    const hex2 = (/** @type {number} */ b) => b.toString(16).padStart(2, "0");
+    switch (kind) {
+      case "hexdump":
+        return hexDump(bytes, offset);
+      case "hex":
+        return [...bytes].map(hex2).join("");
+      case "c": {
+        const lines = [];
+        for (let i = 0; i < bytes.length; i += 8) {
+          lines.push("  " + [...bytes.subarray(i, i + 8)].map((b) => `0x${hex2(b)}`).join(", ") + (i + 8 < bytes.length ? "," : ""));
+        }
+        return `static const unsigned char packet_bytes[${bytes.length}] = {\n${lines.join("\n")}\n};`;
+      }
+      case "escaped":
+        return [...bytes].map((b) => `\\x${hex2(b)}`).join("");
+      case "base64":
+        return toBase64(bytes);
+      case "text": {
+        let out = "";
+        for (let i = 0; i < bytes.length; i++) {
+          const b = bytes[i];
+          if (b === 0x0d && bytes[i + 1] === 0x0a) {
+            continue;
+          }
+          if (b === 0x0a || b === 0x09 || (b >= 0x20 && b < 0x7f)) {
+            out += String.fromCharCode(b);
+          }
+        }
+        return out;
+      }
+    }
+    return "";
+  }
+
   const COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 
   /**
@@ -613,6 +793,13 @@
     formatRelativeTime,
     formatBytes,
     rowColors,
+    protocolFilterName,
+    cellFilter,
+    layoutColumns,
+    moveColumn,
+    parseHexBytes,
+    toBase64,
+    formatBytesAs,
   };
 
   if (typeof module === "object" && module.exports) {

@@ -81,6 +81,22 @@ suite("PCAP Viewer smoke test", () => {
       "pcapViewer.toggleColoring",
       "pcapViewer.manageColoringRules",
       "pcapViewer.suggestFilter",
+      "pcapViewer.find",
+      "pcapViewer.findNext",
+      "pcapViewer.findPrevious",
+      "pcapViewer.goBack",
+      "pcapViewer.goForward",
+      "pcapViewer.nextInConversation",
+      "pcapViewer.previousInConversation",
+      "pcapViewer.firstPacket",
+      "pcapViewer.lastPacket",
+      "pcapViewer.toggleMark",
+      "pcapViewer.nextMark",
+      "pcapViewer.previousMark",
+      "pcapViewer.unmarkAll",
+      "pcapViewer.exportMarked",
+      "pcapViewer.toggleTimeReference",
+      "pcapViewer.timeFormat",
     ]) {
       assert.ok(commands.includes(id), `${id} is registered`);
     }

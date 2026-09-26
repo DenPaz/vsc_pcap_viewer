@@ -31,6 +31,19 @@
       <button id="filter-clear" type="button" title="Clear display filter">Clear</button>
       <button id="filter-cancel" type="button" class="hidden" title="Cancel filtering">Cancel</button>
     </div>
+    <div id="find-bar" class="hidden" role="search" aria-label="Find packet">
+      <select id="find-mode" aria-label="Find by">
+        <option value="filter">Display filter</option>
+        <option value="string">String</option>
+        <option value="hex">Hex bytes</option>
+      </select>
+      <input id="find-input" type="text" spellcheck="false" autocomplete="off" aria-label="Find">
+      <label id="find-case-label" class="hidden"><input id="find-case" type="checkbox"> Match case</label>
+      <button id="find-prev" type="button" title="Find previous (Shift+F3, Shift+Enter)">Previous</button>
+      <button id="find-next" type="button" title="Find next (F3, Enter)">Next</button>
+      <span id="find-status" role="status" aria-live="polite"></span>
+      <button id="find-close" type="button" class="icon" title="Close (Esc)">✕</button>
+    </div>
     <div id="filter-error" class="hidden" role="alert"></div>
     <div id="busy-bar" class="hidden"><div id="busy-bar-fill"></div></div>
 
@@ -61,7 +74,7 @@
 
     <footer id="status-bar">
       <span id="status-left"></span>
-      <span id="status-right"></span>
+      <span id="status-right"><button id="status-time" type="button" class="status-link" title="Time display format (click to change)"></button><span id="status-info"></span></span>
     </footer>
 
     <div id="overlay" class="overlay">

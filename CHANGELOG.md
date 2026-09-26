@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Wireshark-like navigation: Find Packet (display filter / string / hex),
+  clickable frame references with back/forward history, next/previous packet
+  in the conversation, first/last packet, marks (with export of marked
+  packets), time display formats and a time reference.
+- Customisation: Apply as Column, header menu (hide/show, rename, remove,
+  resize to contents, reset) and drag-to-reorder columns (pcapViewer.columnLayout),
+  cell Apply as Filter, and bytes-pane copy formats (hex dump, hex stream,
+  C array, escaped string, Base64, printable text).
+
 - Optional AI help for display filters (VS Code Language Model API / Copilot):
   ✨ in the filter bar, *PCAP: Suggest Display Filter…* and `@pcap` in chat.
   Suggestions are validated with tshark; no packet data is sent.

@@ -84,6 +84,15 @@ class FieldCatalog:
         fields = fields[:limit]
         return {"protocols": protocols, "fields": fields, "truncated": truncated}
 
+    def lookup(self, name: str) -> Entry | None:
+        """The field (or protocol) called ``name`` (case-insensitive), if any."""
+        key = name.lower()
+        for keys, entries in ((self._fkeys, self.fields), (self._pkeys, self.protocols)):
+            i = bisect_left(keys, key)
+            if i < len(keys) and keys[i] == key:
+                return entries[i]
+        return None
+
     def __contains__(self, name: object) -> bool:
         if not isinstance(name, str):
             return False

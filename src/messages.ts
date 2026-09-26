@@ -2,7 +2,7 @@
  * Message protocol between the extension host and the webview
  * (src/webview/main.js). Keep both sides in sync.
  */
-import type { ColumnSetting, SavedFilter } from "./settingsModel";
+import type { ColumnLayout, ColumnSetting, SavedFilter, TimeFormat } from "./settingsModel";
 
 export interface ColumnDescriptor {
   id: string;
@@ -34,7 +34,31 @@ export const WEBVIEW_RPC_METHODS = new Set([
   "find_frame",
   "field_index",
   "capture_info",
+  "find_packet",
+  "neighbor_frame",
+  "mark_packets",
+  "unmark_all",
+  "field_types",
 ]);
+
+/** Actions the host asks the webview to perform (command palette and keybindings). */
+export const VIEWER_COMMANDS = [
+  "find",
+  "findNext",
+  "findPrevious",
+  "goBack",
+  "goForward",
+  "nextInConversation",
+  "previousInConversation",
+  "firstPacket",
+  "lastPacket",
+  "toggleMark",
+  "nextMark",
+  "previousMark",
+  "unmarkAll",
+  "toggleTimeReference",
+] as const;
+export type ViewerCommand = (typeof VIEWER_COMMANDS)[number];
 
 export type WebviewToHost =
   | { type: "ready" }
@@ -53,6 +77,13 @@ export type WebviewToHost =
   | { type: "aiSuggest"; id: number; request: string }
   | { type: "aiCancel"; id: number }
   | { type: "exportBytes"; frame: number }
+  | { type: "applyColumn"; field: string; title: string }
+  | { type: "removeColumn"; field: string }
+  | { type: "renameColumn"; field: string }
+  | { type: "columnLayout"; layout: ColumnLayout }
+  | { type: "pickTimeFormat" }
+  | { type: "exportMarked" }
+  | { type: "marks"; count: number }
   | { type: "copy"; text: string }
   | { type: "showLog" };
 
@@ -63,6 +94,8 @@ export type HostToWebview =
       type: "init";
       info: OpenResult;
       columns: ColumnSetting[];
+      layout: ColumnLayout;
+      timeFormat: TimeFormat;
       filter: string;
       history: string[];
       savedFilters: SavedFilter[];
@@ -75,7 +108,9 @@ export type HostToWebview =
   | { type: "prepareFilter"; expr: string }
   | { type: "focusFilter" }
   | { type: "goto"; number: number }
-  | { type: "columns"; columns: ColumnSetting[] }
+  | { type: "columns"; columns: ColumnSetting[]; layout: ColumnLayout }
+  | { type: "timeFormat"; format: TimeFormat }
+  | { type: "command"; command: ViewerCommand }
   | { type: "history"; history: string[] }
   | { type: "savedFilters"; savedFilters: SavedFilter[] }
   /** Row `color` values of list_packets results with this `coloringId` index `rules`. */

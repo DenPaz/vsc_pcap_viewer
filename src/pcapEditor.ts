@@ -3,12 +3,12 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { BackendClient, ErrorCodes, RpcError, findPython } from "./backendClient";
-import { Settings, readSettings } from "./config";
+import { Settings, getSetting, readSettings, updateSetting } from "./config";
 import type { FilterAssistant, SuggestOutcome } from "./ai";
-import { ColoringResult, HostToWebview, OpenResult, WEBVIEW_RPC_METHODS, WebviewToHost } from "./messages";
+import { ColoringResult, HostToWebview, OpenResult, ViewerCommand, WEBVIEW_RPC_METHODS, WebviewToHost } from "./messages";
 import { saveFilterInteractive, showSavedFilters } from "./commands/savedFilters";
 import { FollowPanel } from "./panels/followPanel";
-import { ColumnSetting, SavedFilter, pushHistory } from "./settingsModel";
+import { ColumnLayout, ColumnSetting, SavedFilter, TimeFormat, addColumn, normalizeColumns, pushHistory } from "./settingsModel";
 
 const HISTORY_KEY = "pcapViewer.filterHistory";
 /** Coloring problems already shown in a notification (each is reported once per window). */
@@ -94,6 +94,8 @@ export class PcapEditorSession {
   readonly id = nextSessionId++;
   /** Frame currently selected in the packet list, if any. */
   selectedFrame: number | null = null;
+  /** Number of marked packets (the marks themselves live in the backend). */
+  markedCount = 0;
   private readonly disposeEmitter = new vscode.EventEmitter<void>();
   /** Fires when the editor closes (auxiliary panels close with it). */
   readonly onDidDispose = this.disposeEmitter.event;
@@ -219,6 +221,8 @@ export class PcapEditorSession {
         type: "init",
         info,
         columns: settings.columns,
+        layout: settings.columnLayout,
+        timeFormat: settings.timeFormat,
         filter: this.filter,
         history: this.history(),
         savedFilters: settings.savedFilters,
@@ -367,6 +371,33 @@ export class PcapEditorSession {
         return;
       case "exportBytes":
         await vscode.commands.executeCommand("pcapViewer.exportPacketBytes", msg.frame);
+        return;
+      case "applyColumn":
+        await this.updateColumns((cols) => addColumn(cols, msg.field, msg.title));
+        vscode.window.setStatusBarMessage(`Added column ${msg.title || msg.field}`, 3000);
+        return;
+      case "removeColumn":
+        await this.updateColumns((cols) => cols.filter((c) => c.field !== msg.field));
+        return;
+      case "renameColumn": {
+        const current = readSettings(this.uri).columns.find((c) => c.field === msg.field);
+        const title = await vscode.window.showInputBox({ title: `Rename column ${msg.field}`, value: current?.title ?? msg.field });
+        if (title !== undefined) {
+          await this.updateColumns((cols) => cols.map((c) => (c.field === msg.field ? { ...c, title: title.trim() || c.field } : c)));
+        }
+        return;
+      }
+      case "columnLayout":
+        await updateSetting("columnLayout", msg.layout, this.uri);
+        return;
+      case "pickTimeFormat":
+        await vscode.commands.executeCommand("pcapViewer.timeFormat");
+        return;
+      case "exportMarked":
+        await vscode.commands.executeCommand("pcapViewer.exportMarked");
+        return;
+      case "marks":
+        this.markedCount = msg.count;
         return;
       case "copy":
         await vscode.env.clipboard.writeText(String(msg.text));
@@ -533,8 +564,23 @@ export class PcapEditorSession {
     this.post({ type: "goto", number: frame });
   }
 
-  setColumns(columns: ColumnSetting[]): void {
-    this.post({ type: "columns", columns });
+  setColumns(columns: ColumnSetting[], layout: ColumnLayout): void {
+    this.post({ type: "columns", columns, layout });
+  }
+
+  setTimeFormat(format: TimeFormat): void {
+    this.post({ type: "timeFormat", format });
+  }
+
+  /** Run a viewer action (Find, marks, navigation…) from the command palette or a keybinding. */
+  runCommand(command: ViewerCommand): void {
+    this.post({ type: "command", command });
+  }
+
+  /** Change pcapViewer.columns for this capture's folder (raw entries are normalised first). */
+  private async updateColumns(change: (columns: ColumnSetting[]) => ColumnSetting[]): Promise<void> {
+    const current = normalizeColumns(getSetting<unknown>("columns", [], this.uri));
+    await updateSetting("columns", change(current), this.uri);
   }
 
   setSavedFilters(savedFilters: SavedFilter[]): void {

@@ -36,7 +36,38 @@ by **tshark** (Wireshark's command-line tool), so results match Wireshark exactl
   **two-way highlighting** (select a field to see its bytes; click a byte to
   find its field), including reassembled data (e.g. HTTP over several TCP segments).
 - Tree context menu: *Apply as Filter*, *Prepare as Filter*, *…and/or/and not
-  Selected*, *Colorize with Filter…*, *Copy Value / Line / Field Name / as Filter / Bytes*.
+  Selected*, *Colorize with Filter…*, *Apply as Column*, *Copy Value / Line / Field Name / as Filter / Bytes*.
+- **Find Packet** (`Ctrl+F`): a find bar under the filter bar that searches by
+  display filter, string (optionally case-sensitive) or hex bytes (`47 45 54`,
+  `47:45:54` or `474554`). `Enter`/`F3` finds the next match and
+  `Shift+Enter`/`Shift+F3` the previous one. The search covers the displayed
+  packets in their current order and wraps around.
+- **Frame links**: fields that reference another packet (*Request in frame*,
+  *ACK of frame*, *Response in*…) are links in the detail tree. Click one or
+  press `Enter` to jump; `Alt+Left`/`Alt+Right` go back and forward through the
+  jumps. If the filter hides the packet, you're offered *Clear filter and go*.
+- **Packet navigation**: next/previous packet in the same conversation (TCP or
+  UDP stream, else the address pair), first/last packet.
+- **Marks**: `Ctrl+M` marks the selected packet. Marked rows stand out over
+  coloring rules. You can jump to the next or previous marked packet, unmark
+  all, and *Export Marked Packets…* to pcapng or pcap. Marks last while the
+  capture is open.
+- **Time display formats**: seconds since the beginning (default), since the
+  previous displayed packet (follows the filter and sort order), since the
+  previous captured packet, local or UTC date and time, or epoch seconds.
+  Click the time format in the status bar to change it. A **time reference**
+  (`Ctrl+T`) makes relative times count from that packet, marked `*REF*`.
+- **Column customisation**: right-click a header to hide or show any column,
+  rename or remove custom columns, resize to contents or reset widths. Drag
+  headers to reorder them. Order and visibility are saved in
+  `pcapViewer.columnLayout`.
+- **Cell menu**: right-click a packet-list cell for *Apply / Prepare as Filter*
+  and *…and/or/and not Selected* on its value. Source and Destination use
+  `ip`/`ipv6`/`eth` depending on the address, Protocol uses the protocol's
+  filter name, Length uses `frame.len`, and custom columns use their field.
+- **Bytes pane copy menu**: copy the packet's bytes, or the selected field's
+  bytes, as a hex dump, hex stream, C array, escaped string, Base64 or
+  printable text.
 - **Coloring rules** like Wireshark's: the first matching rule colors a packet.
   A default set (bad TCP, checksum errors, TCP RST, ICMP errors, ARP, ICMP,
   SYN/FIN, HTTP, DNS, SMB, routing, TCP, UDP, broadcast) comes with the
@@ -118,6 +149,15 @@ tshark built with them (`tshark --version` lists "with Zstandard", "with LZ4").
 | PCAP: Suggest Display Filter… | | Describe the packets; pick an AI-suggested, tshark-checked filter (also ✨ in the filter bar and `@pcap` in chat) |
 | PCAP: Saved Display Filters | | Apply or delete saved filters |
 | PCAP: Go to Packet | `Ctrl+G` (`Cmd+G`) | Jump to a frame number |
+| PCAP: Find Packet… / Find Next / Find Previous | `Ctrl+F`, `F3`, `Shift+F3` | Find by display filter, string or hex bytes |
+| PCAP: Go Back / Go Forward (Packet History) | `Alt+Left`, `Alt+Right` | Walk back and forth over jumps (links, go to, find…) |
+| PCAP: Next / Previous Packet in Conversation | `Ctrl+.`, `Ctrl+,` | Same TCP/UDP stream, else the same address pair |
+| PCAP: First Packet / Last Packet | `Ctrl+Home`, `Ctrl+End` | |
+| PCAP: Mark/Unmark Packet | `Ctrl+M` | Mark the selected packet |
+| PCAP: Next / Previous Marked Packet | `Ctrl+Shift+N`, `Ctrl+Shift+B` | |
+| PCAP: Unmark All Packets / Export Marked Packets… | | Clear the marks / save the marked packets as pcapng or pcap |
+| PCAP: Set/Unset Time Reference | `Ctrl+T` | Relative times count from the selected packet |
+| PCAP: Time Display Format… | | Choose how the Time column is shown |
 | PCAP: Follow TCP / UDP / TLS / HTTP Stream | | Follow the selected packet's stream (also in the packet list's right-click menu) |
 | PCAP Statistics: Conversations, Endpoints, Protocol Hierarchy, I/O Graph, Expert Information, Capture File Properties | | Open the report in a panel beside the capture |
 | PCAP: Manage Custom Columns | | Add or remove columns (searches tshark's field list) |
@@ -134,8 +174,11 @@ tshark built with them (`tshark --version` lists "with Zstandard", "with LZ4").
 | PCAP: Show Log | | Backend and tshark messages (Lua errors, warnings) |
 
 Keyboard: in the list use ↑/↓/PgUp/PgDn/Home/End, `Enter`/`→` to move to the
-tree; in the tree use arrows to navigate and expand/collapse; `Esc` in the
-filter bar restores the applied filter.
+tree; in the tree use arrows to navigate and expand/collapse (`Enter` on a frame
+link jumps to that packet); `Esc` in the filter bar restores the applied filter
+and in the find bar closes it. On macOS use `Cmd` instead of `Ctrl`. The viewer
+shortcuts only apply while a capture is the active editor and focus isn't in
+the side bar or panel.
 
 ## Settings
 
@@ -147,7 +190,9 @@ filter bar restores the applied filter.
 | `pcapViewer.dissectorsFolder` | Folder whose `*.lua` files are also loaded |
 | `pcapViewer.decodeAs` | Decode As rules, e.g. `"tcp.port==8080,http"` |
 | `pcapViewer.prefs` | Preference overrides, e.g. `{ "tcp.desegment_tcp_streams": false }` |
-| `pcapViewer.columns` | Extra columns: `"tcp.stream"` or `{ "field": "http.host", "title": "Host" }` |
+| `pcapViewer.columns` | Extra columns: `"tcp.stream"` or `{ "field": "http.host", "title": "Host" }` (per workspace folder) |
+| `pcapViewer.columnLayout` | Column order and hidden columns by id, e.g. `{ "order": ["protocol", "number"], "hidden": ["time"] }` (set by the header menu and dragging) |
+| `pcapViewer.timeFormat` | Time column: `relative` (default), `delta_displayed`, `delta_captured`, `absolute`, `utc` or `epoch` |
 | `pcapViewer.savedFilters` | Named filters: `{ "name": "Web", "filter": "http \|\| tls" }` |
 | `pcapViewer.coloringRules` | Coloring rules, first match wins: `{ "name": "DNS", "filter": "dns", "foreground": "#12272e", "background": "#c8e2ff" }` |
 | `pcapViewer.colorize` | Color the packet list (default `true`) |
