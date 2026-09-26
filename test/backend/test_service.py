@@ -255,6 +255,7 @@ def test_superseded_filter(opened: PcapService, ctx: RequestContext) -> None:
 
 
 def test_field_index(service: PcapService, ctx: RequestContext) -> None:
+    assert service.field_index({"limit": 0}, ctx)["fields"] == []  # cache warm-up
     res = service.field_index({"prefix": "ip.sr", "limit": 10}, ctx)
     names = [f["name"] for f in res["fields"]]
     assert "ip.src" in names

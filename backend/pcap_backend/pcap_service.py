@@ -29,6 +29,7 @@ from typing import Any
 from . import pdml
 from .cache import FrameIndex, LruCache, RowStore, sort_frames
 from .cancellation import CancelledError, CancelToken
+from .fields import FieldCatalog, parse_field_list
 from .protocol import (
     FilterError,
     InvalidParamsError,
@@ -163,7 +164,7 @@ class PcapService:
         )
         self._sort_columns: LruCache[str, list[str]] = LruCache(2)
         self._details: LruCache[int, dict[str, Any]] = LruCache(detail_cache_size)
-        self._field_index: LruCache[tuple[str, ...], dict[str, Any]] = LruCache(2)
+        self._field_index: LruCache[tuple[str, ...], FieldCatalog] = LruCache(2)
         self._pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="svc")
 
     # ------------------------------------------------------------------ lifecycle
@@ -627,26 +628,27 @@ class PcapService:
     def field_index(self, params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
         """Field/protocol names from ``tshark -G fields`` for autocomplete.
 
-        ``prefix`` filters by name prefix; ``limit`` caps the number of fields
-        returned (the full list has ~250k entries).
+        Case-insensitive ``prefix`` search; ``limit`` caps each list (the
+        catalogue has ~250k entries). Lua dissector fields are included because
+        the catalogue is built with the file's ``-X lua_script`` options. Call
+        with ``limit: 0`` to warm the cache without transferring anything.
         """
-        prefix = param(params, "prefix", str, "").lower()
-        limit = min(param(params, "limit", int, 200), 100_000)
+        prefix = param(params, "prefix", str, "")
+        limit = max(0, min(param(params, "limit", int, 200), 100_000))
+        catalog = self._catalog(ctx)
+        return catalog.search(prefix, limit)
+
+    def _catalog(self, ctx: RequestContext) -> FieldCatalog:
         tshark = self._file.tshark if self._file else self._require_tshark()
         key = tshark.options.lua_scripts
-        index = self._field_index.get(key)
-        if index is None:
-            res = run(tshark.argv("-G", "fields"), ctx.token)
-            index = parse_field_list(res.stdout.decode("utf-8", "replace"))
-            self._field_index.put(key, index)
-        protocols = [p for p in index["protocols"] if p["name"].lower().startswith(prefix)]
-        fields: list[dict[str, str]] = []
-        for fd in index["fields"]:
-            if fd["name"].lower().startswith(prefix):
-                fields.append(fd)
-                if len(fields) >= limit:
-                    break
-        return {"protocols": protocols[:limit], "fields": fields, "truncated": len(fields) >= limit}
+        catalog = self._field_index.get(key)
+        if catalog is None:
+            with self._build_lock:
+                catalog = self._field_index.get(key)
+                if catalog is None:
+                    catalog = FieldCatalog.parse(tshark.field_list(ctx.token))
+                    self._field_index.put(key, catalog)
+        return catalog
 
 
 # ---------------------------------------------------------------------- helpers
@@ -730,32 +732,6 @@ def parse_capinfos(text: str) -> dict[str, Any]:
     }
 
 
-def parse_field_list(text: str) -> dict[str, list[dict[str, str]]]:
-    """Parse ``tshark -G fields``.
-
-    Lines are ``P<TAB>name<TAB>abbrev`` or ``F<TAB>name<TAB>abbrev<TAB>type<TAB>proto<TAB>blurb``.
-    """
-    protocols: list[dict[str, str]] = []
-    fields: list[dict[str, str]] = []
-    for line in text.splitlines():
-        parts = line.split("\t")
-        if parts[0] == "P" and len(parts) >= 3:
-            protocols.append({"name": parts[2], "desc": parts[1]})
-        elif parts[0] == "F" and len(parts) >= 5:
-            fields.append(
-                {
-                    "name": parts[2],
-                    "desc": parts[1],
-                    "type": parts[3],
-                    "proto": parts[4],
-                    "blurb": parts[7] if len(parts) > 7 else "",
-                }
-            )
-    protocols.sort(key=lambda p: p["name"])
-    fields.sort(key=lambda fd: fd["name"])
-    return {"protocols": protocols, "fields": fields}
-
-
 def rpc_methods(service: PcapService) -> dict[str, Callable[[dict[str, Any], RequestContext], Any]]:
     return {
         "initialize": service.initialize,
@@ -771,4 +747,11 @@ def rpc_methods(service: PcapService) -> dict[str, Callable[[dict[str, Any], Req
     }
 
 
-__all__ = ["BASE_COLUMNS", "PcapService", "RpcError", "parse_capinfos", "rpc_methods"]
+__all__ = [
+    "BASE_COLUMNS",
+    "PcapService",
+    "RpcError",
+    "parse_capinfos",
+    "parse_field_list",
+    "rpc_methods",
+]

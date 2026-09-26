@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { registerColumnCommands } from "./commands/columns";
 import { registerFilterCommands } from "./commands/filter";
+import { registerSavedFilterCommands } from "./commands/savedFilters";
 import { RELOAD_KEYS, SECTION, readSettings } from "./config";
 import { PcapEditorProvider } from "./pcapEditor";
 
@@ -19,6 +20,7 @@ export function activate(context: vscode.ExtensionContext): PcapViewerApi {
 
   registerFilterCommands(context, p);
   registerColumnCommands(context, p);
+  registerSavedFilterCommands(context, p);
   context.subscriptions.push(
     vscode.commands.registerCommand("pcapViewer.showLog", () => log.show()),
     vscode.workspace.onDidChangeConfiguration(async (e) => {
@@ -29,6 +31,12 @@ export function activate(context: vscode.ExtensionContext): PcapViewerApi {
         const columns = readSettings().columns;
         for (const s of p.allSessions) {
           s.setColumns(columns);
+        }
+      }
+      if (e.affectsConfiguration(`${SECTION}.savedFilters`)) {
+        const saved = readSettings().savedFilters;
+        for (const s of p.allSessions) {
+          s.setSavedFilters(saved);
         }
       }
       if (RELOAD_KEYS.some((k) => e.affectsConfiguration(k)) && p.allSessions.length) {

@@ -2,7 +2,7 @@
  * Message protocol between the extension host and the webview
  * (src/webview/main.js). Keep both sides in sync.
  */
-import type { ColumnSetting } from "./settingsModel";
+import type { ColumnSetting, SavedFilter } from "./settingsModel";
 
 export interface ColumnDescriptor {
   id: string;
@@ -43,6 +43,8 @@ export type WebviewToHost =
   | { type: "cancelLoad" }
   | { type: "reload" }
   | { type: "filterApplied"; expr: string }
+  | { type: "saveFilter"; expr: string }
+  | { type: "manageSavedFilters" }
   | { type: "copy"; text: string }
   | { type: "showLog" };
 
@@ -55,6 +57,7 @@ export type HostToWebview =
       columns: ColumnSetting[];
       filter: string;
       history: string[];
+      savedFilters: SavedFilter[];
       elapsedMs: number;
     }
   | { type: "error"; message: string; canReload: boolean }
@@ -64,4 +67,5 @@ export type HostToWebview =
   | { type: "focusFilter" }
   | { type: "goto"; number: number }
   | { type: "columns"; columns: ColumnSetting[] }
-  | { type: "history"; history: string[] };
+  | { type: "history"; history: string[] }
+  | { type: "savedFilters"; savedFilters: SavedFilter[] };

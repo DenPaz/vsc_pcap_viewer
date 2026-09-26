@@ -1,6 +1,6 @@
 import * as assert from "node:assert/strict";
 import * as path from "node:path";
-import { normalizeColumns, pushHistory, resolveLuaScripts } from "../../../src/settingsModel";
+import { normalizeColumns, normalizeSavedFilters, pushHistory, resolveLuaScripts, upsertSavedFilter } from "../../../src/settingsModel";
 
 suite("settingsModel", () => {
   test("normalizeColumns accepts strings and objects, drops junk", () => {
@@ -38,5 +38,33 @@ suite("settingsModel", () => {
     assert.deepEqual(pushHistory(["a", "b"], " b "), ["b", "a"]);
     assert.deepEqual(pushHistory(["a"], "  "), ["a"]);
     assert.deepEqual(pushHistory(["a", "b", "c"], "d", 3), ["d", "a", "b"]);
+  });
+
+  test("normalizeSavedFilters keeps valid, uniquely named entries", () => {
+    assert.deepEqual(
+      normalizeSavedFilters([
+        { name: " Web ", filter: " http || tls " },
+        { name: "Web", filter: "dns" },
+        { name: "", filter: "x" },
+        { name: "No filter" },
+        "http",
+        null,
+      ]),
+      [{ name: "Web", filter: "http || tls" }],
+    );
+    assert.deepEqual(normalizeSavedFilters({}), []);
+  });
+
+  test("upsertSavedFilter replaces by name and keeps order", () => {
+    const list = [
+      { name: "A", filter: "a" },
+      { name: "B", filter: "b" },
+    ];
+    assert.deepEqual(upsertSavedFilter(list, { name: "A", filter: "aa" }), [
+      { name: "A", filter: "aa" },
+      { name: "B", filter: "b" },
+    ]);
+    assert.deepEqual(upsertSavedFilter(list, { name: "C", filter: "c" }).map((f) => f.name), ["A", "B", "C"]);
+    assert.equal(list[0].filter, "a"); // not mutated
   });
 });

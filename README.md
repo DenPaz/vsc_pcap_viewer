@@ -16,7 +16,14 @@ by **tshark** (Wireshark's command-line tool), so results match Wireshark exactl
   any tshark field (`tcp.stream`, `http.host`, …) via `pcapViewer.columns` or
   *PCAP: Manage Custom Columns*.
 - **Display filters** with Wireshark syntax, validated as you type (green/red),
-  inline error messages, and a history dropdown. Invalid filters are never applied.
+  with inline error messages. Invalid filters are never applied.
+- **Filter autocomplete** from tshark's own field list (including fields added
+  by your Lua dissectors): field and protocol names with their type and
+  description, then operators (`==`, `contains`, `&&`, …) after a field.
+  `Tab` takes the first suggestion, `↑`/`↓` + `Enter` pick one, `Ctrl+Space` asks explicitly.
+- **Saved and recent filters** in the filter bar's ★ menu (or `↓` on an empty
+  filter bar). Saved filters live in the `pcapViewer.savedFilters` setting, so
+  they can be personal (user settings) or shared with a project (workspace settings).
 - **Packet details**: collapsible protocol tree and hex/ASCII pane with
   **two-way highlighting** (select a field to see its bytes; click a byte to
   find its field), including reassembled data (e.g. HTTP over several TCP segments).
@@ -47,6 +54,8 @@ Open any `.pcap`, `.pcapng` or `.cap` file. It opens in the PCAP Viewer by defau
 |---|---|---|
 | PCAP: Apply Display Filter | `Ctrl+/` (`Cmd+/`) | Prompt for a filter (validated) and apply it |
 | PCAP: Clear Display Filter | | |
+| PCAP: Save Display Filter… | | Save the current filter under a name |
+| PCAP: Saved Display Filters | | Apply or delete saved filters |
 | PCAP: Go to Packet | `Ctrl+G` (`Cmd+G`) | Jump to a frame number |
 | PCAP: Manage Custom Columns | | Add or remove columns (searches tshark's field list) |
 | PCAP: Reload Capture | | Re-run tshark, e.g. after editing a Lua dissector |
@@ -67,6 +76,7 @@ filter bar restores the applied filter.
 | `pcapViewer.decodeAs` | Decode As rules, e.g. `"tcp.port==8080,http"` |
 | `pcapViewer.prefs` | Preference overrides, e.g. `{ "tcp.desegment_tcp_streams": false }` |
 | `pcapViewer.columns` | Extra columns: `"tcp.stream"` or `{ "field": "http.host", "title": "Host" }` |
+| `pcapViewer.savedFilters` | Named filters: `{ "name": "Web", "filter": "http \|\| tls" }` |
 | `pcapViewer.maxCachedFrames` | Backend cache budget for filter results / sort orders |
 | `pcapViewer.requestTimeoutSeconds` | Timeout for quick requests (long ones are cancellable instead) |
 
@@ -117,8 +127,7 @@ file up to that packet so reassembly stays correct (see the roadmap below).
 
 ## Roadmap
 
-Planned (see the project brief): filter autocomplete UI and saved filters,
-Follow TCP/UDP/TLS/HTTP stream, statistics (conversations, endpoints, protocol
+Planned (see the project brief): Follow TCP/UDP/TLS/HTTP stream, statistics (conversations, endpoints, protocol
 hierarchy, IO graph, expert info, capture properties), Lua dissector
 management commands and a Decode As UI, export (filtered pcapng, CSV/JSON,
 bytes), coloring rules, and a faster "quick view" of late packets in huge captures.

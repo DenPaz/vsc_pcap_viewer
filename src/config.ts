@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { ColumnSetting, normalizeColumns, resolveLuaScripts } from "./settingsModel";
+import { ColumnSetting, SavedFilter, normalizeColumns, normalizeSavedFilters, resolveLuaScripts } from "./settingsModel";
 
 export const SECTION = "pcapViewer";
 
@@ -11,6 +11,7 @@ export interface Settings {
   decodeAs: string[];
   prefs: Record<string, string | number | boolean>;
   columns: ColumnSetting[];
+  savedFilters: SavedFilter[];
   maxCachedFrames: number;
   requestTimeoutMs: number;
 }
@@ -27,6 +28,7 @@ export function readSettings(scope?: vscode.Uri): Settings {
     decodeAs: cfg.get<string[]>("decodeAs", []).filter((r) => typeof r === "string" && r.trim()),
     prefs: cfg.get<Record<string, string | number | boolean>>("prefs", {}),
     columns: normalizeColumns(cfg.get<unknown>("columns", [])),
+    savedFilters: normalizeSavedFilters(cfg.get<unknown>("savedFilters", [])),
     maxCachedFrames: cfg.get<number>("maxCachedFrames", 5_000_000),
     requestTimeoutMs: cfg.get<number>("requestTimeoutSeconds", 60) * 1000,
   };

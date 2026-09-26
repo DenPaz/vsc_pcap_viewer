@@ -61,6 +61,16 @@
         "category": "PCAP"
       },
       {
+        "command": "pcapViewer.saveFilter",
+        "title": "Save Display Filter\u2026",
+        "category": "PCAP"
+      },
+      {
+        "command": "pcapViewer.savedFilters",
+        "title": "Saved Display Filters",
+        "category": "PCAP"
+      },
+      {
         "command": "pcapViewer.manageColumns",
         "title": "Manage Custom Columns",
         "category": "PCAP"
@@ -92,6 +102,10 @@
         },
         {
           "command": "pcapViewer.reload",
+          "when": "activeCustomEditorId == pcapViewer.editor"
+        },
+        {
+          "command": "pcapViewer.saveFilter",
           "when": "activeCustomEditorId == pcapViewer.editor"
         }
       ]
@@ -185,6 +199,26 @@
           },
           "default": [],
           "markdownDescription": "Extra packet-list columns: any tshark field (e.g. `tcp.stream`, `http.host`) or `{ \"field\": \"http.host\", \"title\": \"Host\" }`."
+        },
+        "pcapViewer.savedFilters": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "filter": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "filter"
+            ]
+          },
+          "default": [],
+          "markdownDescription": "Named display filters, e.g. `{ \"name\": \"Web\", \"filter\": \"http || tls\" }`. Shown in the filter bar's \u2605 menu and *PCAP: Saved Display Filters*. Set in user settings for all captures or in workspace settings to share with a project."
         },
         "pcapViewer.maxCachedFrames": {
           "type": "integer",

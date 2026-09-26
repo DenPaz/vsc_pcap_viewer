@@ -105,6 +105,22 @@ UI behaviour stays in the Chromium test (`test/webview/e2e.test.js`).
   range is compressed (`lib.computeWindow`) so >1.6M rows still scroll.
 - **Lua as root**: tshark refuses Lua when run as root; the backend warns. The
   Lua integration test skips as root (CI runs as a normal user).
+- **Field catalogue** (`fields.py`): `tshark -G fields` must be tshark's
+  *first* option (anything after it is a name filter), so it can't take
+  `-X lua_script:`. Lua fields are picked up by a second `-G fields` run with
+  `WIRESHARK_PLUGIN_DIR` pointing at a temp folder holding numbered copies of
+  the configured scripts; that run replaces the global plugin folder, so both
+  outputs are merged (deduplicated). Prefix search bisects a sorted,
+  lower-cased key list (~250k entries). The webview warms it after `init`.
+- **Autocomplete UX**: nothing is preselected, so `Enter` always applies the
+  filter unless a suggestion was picked with the arrows; `Tab` takes the
+  first suggestion. Operators are only offered right after a space (or on
+  `Ctrl+Space`). Context detection (`lib.completionContext`) is heuristic:
+  field / comparison operator / logical operator / none (strings, values).
+- **Saved filters** are the `pcapViewer.savedFilters` setting (not
+  `globalState`): user vs workspace scope gives "global or workspace"
+  persistence, and they sync and can be edited in settings.json. Recent-filter
+  history stays in `globalState` (50 entries).
 - **Protocol**: JSON-RPC 2.0 framing (`"jsonrpc": "2.0"`), LSP-style
   cancellation code -32800; app codes in `backend/pcap_backend/protocol.py`
   and mirrored in `src/backendClient.ts` (`ErrorCodes`). `open` returns the
@@ -123,11 +139,10 @@ this took the backend from 710 MB to 125 MB peak.
 
 ## Status
 
-Implemented: steps 1–3 of the brief (foundation, packet list with paging /
+Implemented: steps 1–4 of the brief (foundation, packet list with paging /
 virtualization / sorting / custom columns, detail tree + hex with two-way
-highlighting), plus filter validation, history (datalist) and tree
-context-menu "Apply/Prepare as Filter".
+highlighting, display filters with validation, autocomplete, history, saved
+filters and apply-as-filter from the tree).
 
-Not yet: autocomplete UI (backend `field_index` exists), saved filters,
-follow stream, statistics, export, coloring rules, Lua management commands,
-Decode As UI (settings already work end-to-end).
+Not yet: follow stream, statistics, export, coloring rules, Lua management
+commands, Decode As UI (settings already work end-to-end).

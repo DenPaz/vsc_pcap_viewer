@@ -49,6 +49,7 @@ class World:
     page: dict[str, Any] | None = None
     detail: dict[str, Any] | None = None
     validation: dict[str, Any] | None = None
+    suggestions: dict[str, Any] | None = None
     error: Exception | None = None
 
     def call(self, fn: Any, params: dict[str, Any]) -> Any:
@@ -353,3 +354,63 @@ def protocol_bytes_start(world: World, name: str, text: str) -> None:
     assert node is not None
     data = bytes.fromhex(world.detail["sources"][node["src"]]["hex"])
     assert data[node["pos"] :].startswith(text.encode())
+
+
+# ---------------------------------------------------------------------- autocomplete
+
+
+@given(parsers.parse('I open the capture "{name}"'))
+def given_open_with_options(world: World, name: str) -> None:
+    open_capture(world, name)
+    assert world.error is None, world.error
+
+
+@when(parsers.re(r'I ask for (?:(?P<limit>\d+) )?filter suggestions for "(?P<prefix>[^"]*)"$'))
+def ask_suggestions(world: World, prefix: str, limit: str | None) -> None:
+    world.suggestions = world.service.field_index(
+        {"prefix": prefix, "limit": int(limit) if limit else 50}, world.ctx
+    )
+
+
+def _suggested(world: World, kind: str) -> list[dict[str, str]]:
+    assert world.suggestions is not None
+    entries: list[dict[str, str]] = world.suggestions[kind]
+    return entries
+
+
+@then(
+    parsers.re(r'the field suggestions include "(?P<name>[^"]+)"(?: of type "(?P<ftype>[^"]+)")?$')
+)
+def field_suggested(world: World, name: str, ftype: str | None) -> None:
+    match = [f for f in _suggested(world, "fields") if f["name"] == name]
+    assert match, [f["name"] for f in _suggested(world, "fields")]
+    if ftype:
+        assert match[0]["type"] == ftype
+
+
+@then(parsers.parse('the protocol suggestions include "{name}"'))
+def protocol_suggested(world: World, name: str) -> None:
+    assert name in [p["name"] for p in _suggested(world, "protocols")]
+
+
+@then(parsers.parse('every suggestion starts with "{prefix}"'))
+def all_start_with(world: World, prefix: str) -> None:
+    names = [e["name"] for e in _suggested(world, "fields") + _suggested(world, "protocols")]
+    assert names
+    assert all(n.lower().startswith(prefix.lower()) for n in names), names
+
+
+@then("the first field suggestion has a description")
+def first_has_description(world: World) -> None:
+    assert _suggested(world, "fields")[0]["desc"]
+
+
+@then(parsers.parse("there are {count:d} field suggestions"))
+def field_count(world: World, count: int) -> None:
+    assert len(_suggested(world, "fields")) == count
+
+
+@then("the suggestions are marked as truncated")
+def truncated(world: World) -> None:
+    assert world.suggestions is not None
+    assert world.suggestions["truncated"] is True
