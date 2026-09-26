@@ -21,6 +21,14 @@ by **tshark** (Wireshark's command-line tool), so results match Wireshark exactl
   by your Lua dissectors): field and protocol names with their type and
   description, then operators (`==`, `contains`, `&&`, …) after a field.
   `Tab` takes the first suggestion, `↑`/`↓` + `Enter` pick one, `Ctrl+Space` asks explicitly.
+- **AI help for display filters** (optional, through VS Code's Language Model
+  API and GitHub Copilot): click ✨ in the filter bar, describe the packets you
+  want ("DNS queries that got no answer"), press Enter, and pick one of up to
+  three suggestions. It goes into the filter bar; Enter applies it as usual.
+  Every suggestion is checked with tshark first, and invalid ones are dropped.
+  Also available as *PCAP: Suggest Display Filter…* and as `@pcap` in the chat
+  view, with an *Apply* button. The ✨ action only appears when a model is
+  available; see the privacy note below.
 - **Saved and recent filters** in the filter bar's ★ menu (or `↓` on an empty
   filter bar). Saved filters live in the `pcapViewer.savedFilters` setting, so
   they can be personal (user settings) or shared with a project (workspace settings).
@@ -107,6 +115,7 @@ tshark built with them (`tshark --version` lists "with Zstandard", "with LZ4").
 | PCAP: Apply Display Filter | `Ctrl+/` (`Cmd+/`) | Prompt for a filter (validated) and apply it |
 | PCAP: Clear Display Filter | | |
 | PCAP: Save Display Filter… | | Save the current filter under a name |
+| PCAP: Suggest Display Filter… | | Describe the packets; pick an AI-suggested, tshark-checked filter (also ✨ in the filter bar and `@pcap` in chat) |
 | PCAP: Saved Display Filters | | Apply or delete saved filters |
 | PCAP: Go to Packet | `Ctrl+G` (`Cmd+G`) | Jump to a frame number |
 | PCAP: Follow TCP / UDP / TLS / HTTP Stream | | Follow the selected packet's stream (also in the packet list's right-click menu) |
@@ -142,6 +151,7 @@ filter bar restores the applied filter.
 | `pcapViewer.savedFilters` | Named filters: `{ "name": "Web", "filter": "http \|\| tls" }` |
 | `pcapViewer.coloringRules` | Coloring rules, first match wins: `{ "name": "DNS", "filter": "dns", "foreground": "#12272e", "background": "#c8e2ff" }` |
 | `pcapViewer.colorize` | Color the packet list (default `true`) |
+| `pcapViewer.ai.enabled` | Offer AI help for display filters when a language model is available (default `true`) |
 | `pcapViewer.maxCachedFrames` | Backend cache budget for filter results / sort orders |
 | `pcapViewer.requestTimeoutSeconds` | Timeout for quick requests (long ones are cancellable instead) |
 
@@ -329,6 +339,14 @@ See `CLAUDE.md` for architecture notes and design decisions.
 - Packet contents are untrusted: the webview inserts them only as text (never
   `innerHTML`) and runs under a strict Content-Security-Policy with a per-load nonce.
 - The webview can only call a fixed allow-list of backend methods.
+- **AI help sends no packet data.** A request to the language model contains
+  only your description, the current display filter, the names of the
+  protocols in the capture (from the protocol hierarchy) and the names,
+  types and descriptions of Wireshark fields that match words of your
+  request. Addresses, payloads and other packet contents are never sent.
+  Requests go through VS Code's Language Model API, so VS Code asks for your
+  consent first, and your Copilot plan and policies apply. Turn it off with
+  `"pcapViewer.ai.enabled": false`.
 - CSV exports prefix cells that a spreadsheet would run as a formula (`=`,
   `+`, `@`, `-`…) with `'`, since packet text is attacker-controlled.
 

@@ -129,6 +129,11 @@
         "category": "PCAP"
       },
       {
+        "command": "pcapViewer.suggestFilter",
+        "title": "Suggest Display Filter\u2026",
+        "category": "PCAP"
+      },
+      {
         "command": "pcapViewer.followStream",
         "title": "Follow Stream\u2026",
         "category": "PCAP"
@@ -342,6 +347,10 @@
         },
         {
           "command": "pcapViewer.toggleColoring",
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
+        },
+        {
+          "command": "pcapViewer.suggestFilter",
           "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
         }
       ]
@@ -600,6 +609,11 @@
           "default": 60,
           "minimum": 5,
           "markdownDescription": "Timeout for quick backend requests (packet detail, validation). Long operations (open, filter, sort) are not timed out but can be cancelled."
+        },
+        "pcapViewer.ai.enabled": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Offer AI help for display filters (the filter bar's \u2728 action, *PCAP: Suggest Display Filter\u2026* and `@pcap` in chat) through VS Code's Language Model API (GitHub Copilot). Only your request, the current filter and protocol/field names are sent; packet contents never are. Suggestions are checked with tshark before they are shown."
         }
       }
     },
@@ -607,6 +621,15 @@
       {
         "language": "lua",
         "path": "./snippets/lua-dissector.json"
+      }
+    ],
+    "chatParticipants": [
+      {
+        "id": "pcapViewer.pcap",
+        "name": "pcap",
+        "fullName": "PCAP Viewer",
+        "description": "Ask for a Wireshark display filter for the open capture",
+        "isSticky": false
       }
     ]
   },

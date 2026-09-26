@@ -4,6 +4,7 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 import { BackendClient, ErrorCodes, RpcError, findPython } from "./backendClient";
 import { Settings, readSettings } from "./config";
+import type { FilterAssistant, SuggestOutcome } from "./ai";
 import { ColoringResult, HostToWebview, OpenResult, WEBVIEW_RPC_METHODS, WebviewToHost } from "./messages";
 import { saveFilterInteractive, showSavedFilters } from "./commands/savedFilters";
 import { FollowPanel } from "./panels/followPanel";
@@ -34,10 +35,11 @@ export class PcapEditorProvider implements vscode.CustomReadonlyEditorProvider<P
   constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly log: vscode.LogOutputChannel,
+    private readonly assistant: FilterAssistant,
   ) {}
 
-  static register(context: vscode.ExtensionContext, log: vscode.LogOutputChannel): PcapEditorProvider {
-    const provider = new PcapEditorProvider(context, log);
+  static register(context: vscode.ExtensionContext, log: vscode.LogOutputChannel, assistant: FilterAssistant): PcapEditorProvider {
+    const provider = new PcapEditorProvider(context, log, assistant);
     const options = { webviewOptions: { retainContextWhenHidden: true }, supportsMultipleEditorsPerDocument: true };
     context.subscriptions.push(
       vscode.window.registerCustomEditorProvider(PcapEditorProvider.viewType, provider, options),
@@ -51,7 +53,7 @@ export class PcapEditorProvider implements vscode.CustomReadonlyEditorProvider<P
   }
 
   resolveCustomEditor(document: PcapDocument, panel: vscode.WebviewPanel): void {
-    const session = new PcapEditorSession(this.context, document.uri, panel, this.log);
+    const session = new PcapEditorSession(this.context, document.uri, panel, this.log, this.assistant);
     this.sessions.add(session);
     this.active = session;
     panel.onDidChangeViewState(() => {
@@ -108,6 +110,8 @@ export class PcapEditorSession {
   private disposed = false;
   private loadSeq = 0;
   private coloring?: { id: number; client: BackendClient };
+  /** In-flight "Ask AI" requests from the webview, by webview request id. */
+  private readonly aiRequests = new Map<number, vscode.CancellationTokenSource>();
   private readonly ready: Promise<void>;
 
   constructor(
@@ -115,6 +119,7 @@ export class PcapEditorSession {
     readonly uri: vscode.Uri,
     readonly panel: vscode.WebviewPanel,
     private readonly log: vscode.LogOutputChannel,
+    private readonly assistant: FilterAssistant,
   ) {
     const webviewRoot = vscode.Uri.joinPath(context.extensionUri, "src", "webview");
     panel.webview.options = { enableScripts: true, localResourceRoots: [webviewRoot] };
@@ -129,6 +134,7 @@ export class PcapEditorSession {
         void this.onMessage(msg);
       }),
     );
+    this.disposables.push(assistant.onDidChangeAvailability(() => void this.postAiAvailability()));
     void this.ready.then(() => this.load());
   }
 
@@ -219,6 +225,7 @@ export class PcapEditorSession {
         elapsedMs: Date.now() - started,
       });
       void this.applyColoring();
+      void this.postAiAvailability();
     } catch (err) {
       if (seq !== this.loadSeq || this.disposed) {
         return;
@@ -353,6 +360,11 @@ export class PcapEditorSession {
       case "colorize":
         await vscode.commands.executeCommand("pcapViewer.colorizeWithFilter", msg.filter);
         return;
+      case "aiSuggest":
+        return this.aiSuggest(msg.id, msg.request);
+      case "aiCancel":
+        this.aiRequests.get(msg.id)?.cancel();
+        return;
       case "exportBytes":
         await vscode.commands.executeCommand("pcapViewer.exportPacketBytes", msg.frame);
         return;
@@ -461,6 +473,37 @@ export class PcapEditorSession {
     });
   }
 
+  // ------------------------------------------------------------------ AI filter help
+
+  private async postAiAvailability(): Promise<void> {
+    this.post({ type: "aiAvailable", available: !!this.info && (await this.assistant.isAvailable()) });
+  }
+
+  /** Validated display filters for a natural-language request (see ai.ts; no packet data is sent). */
+  async suggestFilters(request: string, token: vscode.CancellationToken): Promise<SuggestOutcome> {
+    const client = this.client;
+    if (!client?.running || !this.info) {
+      return { suggestions: [], rejected: [], message: "Wait for the capture to finish loading." };
+    }
+    const outcome = await this.assistant.suggest(client, request, this.filter, token);
+    if (outcome.unavailable) {
+      this.post({ type: "aiAvailable", available: false });
+    }
+    return outcome;
+  }
+
+  private async aiSuggest(id: number, request: string): Promise<void> {
+    const cts = new vscode.CancellationTokenSource();
+    this.aiRequests.set(id, cts);
+    try {
+      const outcome = await this.suggestFilters(request, cts.token);
+      this.post({ type: "aiSuggestions", id, suggestions: outcome.suggestions, message: outcome.message });
+    } finally {
+      this.aiRequests.delete(id);
+      cts.dispose();
+    }
+  }
+
   // ------------------------------------------------------------------ commands
 
   applyFilter(expr: string): void {
@@ -528,6 +571,9 @@ export class PcapEditorSession {
     this.info = undefined;
     this.coloring = undefined;
     this.inflight.clear();
+    for (const cts of this.aiRequests.values()) {
+      cts.cancel();
+    }
     if (client) {
       await client.dispose();
     }

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Optional AI help for display filters (VS Code Language Model API / Copilot):
+  ✨ in the filter bar, *PCAP: Suggest Display Filter…* and `@pcap` in chat.
+  Suggestions are validated with tshark; no packet data is sent.
+
 - Opens more capture file types by default: gzip/zstd/lz4-compressed pcap and
   pcapng, `.ntar`, `tcpdump -C` rotated files (`*.pcap1`…), snoop, ERF,
   PacketLogger and btsnoop. Generic extensions (`*.1`, `.log`, `.dmp`, `.trc`,
