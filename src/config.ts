@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { ColumnSetting, SavedFilter, normalizeColumns, normalizeSavedFilters, resolveLuaScripts } from "./settingsModel";
+import { ColumnSetting, SavedFilter, configTargetFor, normalizeColumns, normalizeSavedFilters, resolveLuaScripts } from "./settingsModel";
 
 export const SECTION = "pcapViewer";
 
@@ -18,7 +18,7 @@ export interface Settings {
 
 export function readSettings(scope?: vscode.Uri): Settings {
   const cfg = vscode.workspace.getConfiguration(SECTION, scope);
-  const baseDir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  const baseDir = workspaceDirFor(scope);
   const lua = resolveLuaScripts(cfg.get<string[]>("luaScripts", []), cfg.get<string>("dissectorsFolder", ""), baseDir);
   return {
     pythonPath: cfg.get<string>("pythonPath", "").trim(),
@@ -45,15 +45,30 @@ export const RELOAD_KEYS = [
   "maxCachedFrames",
 ].map((k) => `${SECTION}.${k}`);
 
-/** Update a setting where it is currently defined (workspace if set there, else user). */
-export async function updateSetting(key: string, value: unknown): Promise<void> {
-  const cfg = vscode.workspace.getConfiguration(SECTION);
-  const inspected = cfg.inspect(key);
-  const target =
-    inspected?.workspaceFolderValue !== undefined
-      ? vscode.ConfigurationTarget.WorkspaceFolder
-      : inspected?.workspaceValue !== undefined
-        ? vscode.ConfigurationTarget.Workspace
-        : vscode.ConfigurationTarget.Global;
+/**
+ * Folder that relative setting paths resolve against: the workspace folder
+ * containing `scope` (multi-root aware), else the first workspace folder.
+ */
+export function workspaceDirFor(scope?: vscode.Uri): string | undefined {
+  const folder = scope ? vscode.workspace.getWorkspaceFolder(scope) : undefined;
+  return (folder ?? vscode.workspace.workspaceFolders?.[0])?.uri.fsPath;
+}
+
+/** A setting's effective value for `scope` (a capture's URI respects folder overrides). */
+export function getSetting<T>(key: string, fallback: T, scope?: vscode.Uri): T {
+  return vscode.workspace.getConfiguration(SECTION, scope).get<T>(key, fallback);
+}
+
+/**
+ * Update a setting where it is currently defined for `scope` (folder,
+ * workspace, else user), so the new value is the one `scope` sees.
+ */
+export async function updateSetting(key: string, value: unknown, scope?: vscode.Uri): Promise<void> {
+  const cfg = vscode.workspace.getConfiguration(SECTION, scope);
+  const target = {
+    workspaceFolder: vscode.ConfigurationTarget.WorkspaceFolder,
+    workspace: vscode.ConfigurationTarget.Workspace,
+    global: vscode.ConfigurationTarget.Global,
+  }[configTargetFor(cfg.inspect(key), !!scope && !!vscode.workspace.getWorkspaceFolder(scope))];
   await cfg.update(key, value, target);
 }

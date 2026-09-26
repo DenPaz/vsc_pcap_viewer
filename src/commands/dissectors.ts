@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as vscode from "vscode";
-import { SECTION, readSettings, updateSetting } from "../config";
+import { SECTION, getSetting, readSettings, updateSetting } from "../config";
 import { luaDissectorTemplate, validatePort, validateProtocolName } from "../luaTemplate";
 import type { PcapEditorProvider, PcapEditorSession } from "../pcapEditor";
 import { DecodeAsRule, parseDecodeAsRule, resolveDissectorsFolder, upsertDecodeAsRule } from "../settingsModel";
@@ -48,18 +48,27 @@ export async function reloadDissectors(provider: PcapEditorProvider, log: vscode
     void vscode.window.showInformationMessage("Open a capture to load the dissectors into.");
     return;
   }
-  const settings = readSettings();
-  const backend = sessions.find((s) => s.backend?.running)?.backend;
-  if (backend && settings.luaScripts.length) {
+  // Each capture resolves its own settings (multi-root folders can differ);
+  // check every distinct script set once, with a backend that will load it.
+  const checked = new Set<string>();
+  const scripts = new Set<string>();
+  for (const s of sessions) {
+    const lua = readSettings(s.uri).luaScripts;
+    lua.forEach((f) => scripts.add(f));
+    const key = JSON.stringify(lua);
+    if (!lua.length || checked.has(key) || !s.backend?.running) {
+      continue;
+    }
+    checked.add(key);
     try {
-      const check = await backend.request<DissectorCheck>("check_dissectors", { lua: settings.luaScripts }, { timeoutMs: 60_000 });
+      const check = await s.backend.request<DissectorCheck>("check_dissectors", { lua }, { timeoutMs: 60_000 });
       reportDissectorCheck(check, log);
     } catch (err) {
       log.warn(`dissector check failed: ${(err as Error).message}`);
     }
   }
   await Promise.all(sessions.map((s) => s.load()));
-  const n = settings.luaScripts.length;
+  const n = scripts.size;
   vscode.window.setStatusBarMessage(`Reloaded ${sessions.length} capture(s) with ${n} Lua dissector${n === 1 ? "" : "s"}`, 4000);
 }
 
@@ -283,8 +292,9 @@ export async function decodeAs(provider: PcapEditorProvider, frame?: number): Pr
     return undefined;
   }
   const rule: DecodeAsRule = { layer, value, protocol: proto.label };
-  const current = vscode.workspace.getConfiguration(SECTION).get<string[]>("decodeAs", []);
-  await updateSetting("decodeAs", upsertDecodeAsRule(current, rule));
+  // Read and write for the capture's own folder (multi-root: rules can differ per folder).
+  const current = getSetting<string[]>("decodeAs", [], session.uri);
+  await updateSetting("decodeAs", upsertDecodeAsRule(current, rule), session.uri);
   return rule;
 }
 
@@ -293,10 +303,12 @@ const DELETE_BUTTON: vscode.QuickInputButton = { iconPath: new vscode.ThemeIcon(
 /** "PCAP: Manage Decode As Rules": list rules, remove with the trash button, or add one. */
 export async function manageDecodeAs(provider: PcapEditorProvider): Promise<void> {
   type Item = vscode.QuickPickItem & { rule?: string; add?: boolean };
+  // Rules as seen by the active capture (its workspace folder), if any.
+  const scope = provider.activeSession?.uri;
   const qp = vscode.window.createQuickPick<Item>();
   qp.title = "Decode As Rules";
   const build = () => {
-    const rules = vscode.workspace.getConfiguration(SECTION).get<string[]>("decodeAs", []);
+    const rules = getSetting<string[]>("decodeAs", [], scope);
     qp.items = [
       ...rules.map((r) => {
         const parsed = parseDecodeAsRule(r);
@@ -313,10 +325,11 @@ export async function manageDecodeAs(provider: PcapEditorProvider): Promise<void
   };
   build();
   qp.onDidTriggerItemButton(async ({ item }) => {
-    const rules = vscode.workspace.getConfiguration(SECTION).get<string[]>("decodeAs", []);
+    const rules = getSetting<string[]>("decodeAs", [], scope);
     await updateSetting(
       "decodeAs",
       rules.filter((r) => r !== item.rule),
+      scope,
     );
     build();
   });
@@ -343,8 +356,9 @@ export function registerDissectorCommands(context: vscode.ExtensionContext, prov
       if (!provider.allSessions.length || !doc.fileName.toLowerCase().endsWith(".lua")) {
         return;
       }
-      const loaded = readSettings().luaScripts.map((s) => path.normalize(s));
-      if (loaded.includes(path.normalize(doc.fileName))) {
+      const saved = path.normalize(doc.fileName);
+      const loaded = provider.allSessions.some((s) => readSettings(s.uri).luaScripts.some((f) => path.normalize(f) === saved));
+      if (loaded) {
         void vscode.window
           .showInformationMessage(`${path.basename(doc.fileName)} saved.`, "Reload Dissectors")
           .then((choice) => choice && vscode.commands.executeCommand("pcapViewer.reloadDissectors"));

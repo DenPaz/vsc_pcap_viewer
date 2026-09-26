@@ -161,6 +161,20 @@ export function resolveDissectorsFolder(folder: string | undefined, baseDir: str
   return path.normalize(path.isAbsolute(expanded) ? expanded : baseDir ? path.join(baseDir, expanded) : expanded);
 }
 
+export type ConfigTarget = "workspaceFolder" | "workspace" | "global";
+
+/**
+ * Where to write a setting so the change is actually seen: the most specific
+ * scope that currently defines it (a folder override would otherwise keep
+ * shadowing a workspace or user value). Folder scope needs a resource scope.
+ */
+export function configTargetFor(inspected: { workspaceFolderValue?: unknown; workspaceValue?: unknown } | undefined, scoped: boolean): ConfigTarget {
+  if (scoped && inspected?.workspaceFolderValue !== undefined) {
+    return "workspaceFolder";
+  }
+  return inspected?.workspaceValue !== undefined ? "workspace" : "global";
+}
+
 /** Most-recent-first history without duplicates, capped at `max`. */
 export function pushHistory(history: readonly string[], expr: string, max = 50): string[] {
   const trimmed = expr.trim();

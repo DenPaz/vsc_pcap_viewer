@@ -140,6 +140,11 @@ UI behaviour stays in the Chromium test (`test/webview/e2e.test.js`).
   first suggestion. Operators are only offered right after a space (or on
   `Ctrl+Space`). Context detection (`lib.completionContext`) is heuristic:
   field / comparison operator / logical operator / none (strings, values).
+- **Per-capture settings**: `luaScripts`, `dissectorsFolder`, `decodeAs` and
+  `prefs` are `resource`-scoped and always read with the capture's URI
+  (`readSettings(session.uri)`, `getSetting`), so multi-root folders can differ.
+  Writes go through `updateSetting(key, value, scope)`, which targets the most
+  specific level that already defines the key (`configTargetFor`).
 - **Saved filters** are the `pcapViewer.savedFilters` setting (not
   `globalState`): user vs workspace scope gives "global or workspace"
   persistence, and they sync and can be edited in settings.json. Recent-filter
