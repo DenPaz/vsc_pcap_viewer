@@ -139,6 +139,11 @@
     /** Quick (approximate) detail from frame `after` on (0 = never), dissecting `window` packets (pcapViewer.quickDetail). */
     quickDetail: { after: 20000, window: 300 },
     /** @type {number | null} */ quickRequest: null,
+    /** Streaming open: the index pass still runs (rows keep arriving; filters and sorting wait). */
+    indexing: false,
+    /** @type {number | null} */ indexFraction: null,
+    /** A filter applied while indexing: applied when indexing finishes. */
+    /** @type {string | null} */ pendingFilter: null,
     /** @type {number | null} */ timeRef: null,
     markCount: 0,
     /** Back/forward history over jumps (links, go to, find, marks, conversation). */
@@ -240,6 +245,12 @@
       case "quickDetail":
         state.quickDetail = msg.quickDetail;
         break;
+      case "indexProgress":
+        onIndexProgress(msg.frames, msg.fraction);
+        break;
+      case "indexDone":
+        onIndexDone(msg.info, msg.error);
+        break;
       case "command":
         runCommand(msg.command);
         break;
@@ -282,6 +293,9 @@
     state.total = msg.info.frames;
     state.matchCount = msg.info.frames;
     state.filterId = msg.info.filterId;
+    state.indexing = !!msg.info.indexing;
+    state.indexFraction = null;
+    state.pendingFilter = null;
     state.ready = true;
     setHistory(msg.history);
     state.savedFilters = msg.savedFilters || [];
@@ -454,9 +468,58 @@
     resetView({ keepSelection: true });
   }
 
+  /** More rows are indexed (streaming open): grow the unfiltered list. @param {number} frames @param {number | null} fraction */
+  function onIndexProgress(frames, fraction) {
+    if (!state.indexing || !state.info) {
+      return;
+    }
+    state.info.frames = frames;
+    state.indexFraction = fraction;
+    if (!state.appliedFilter) {
+      state.total = frames;
+      state.matchCount = frames;
+      // The last page was cut short where indexing had got to: fetch it again.
+      const prefix = `${state.viewKey}#`;
+      for (const [key, page] of [...state.pages.entries()]) {
+        if (key.startsWith(prefix) && page.length < PAGE_SIZE) {
+          state.pages.delete(key);
+        }
+      }
+      updateSpacer();
+      scheduleRender();
+    }
+    updateStatus();
+  }
+
+  /** The index pass ended (streaming open). @param {any} info @param {string | undefined} error */
+  function onIndexDone(info, error) {
+    state.indexing = false;
+    state.indexFraction = null;
+    state.info = info;
+    if (!state.appliedFilter) {
+      state.total = info.frames;
+      state.matchCount = info.frames;
+    }
+    updateSpacer();
+    refreshRows(); // columns and time formats that waited for the whole index
+    updateStatus();
+    if (error) {
+      showNotice(`Indexing stopped after ${info.frames.toLocaleString()} packets: ${error}`);
+    }
+    const pending = state.pendingFilter;
+    state.pendingFilter = null;
+    if (pending !== null) {
+      void applyFilter(pending);
+    }
+  }
+
   /** @param {string} field */
   function toggleSort(field) {
     if (!state.ready) {
+      return;
+    }
+    if (state.indexing) {
+      showNotice("Sorting is available when indexing finishes.");
       return;
     }
     if (!state.sort || state.sort.field !== field) {
@@ -1788,6 +1851,13 @@
     if (!state.ready) {
       return;
     }
+    if (state.indexing && expr) {
+      // A filter needs every packet: apply it when indexing finishes.
+      state.pendingFilter = expr;
+      showNotice(`The filter is applied when indexing finishes (${(state.info?.frames ?? 0).toLocaleString()} packets so far).`);
+      return;
+    }
+    state.pendingFilter = null;
     if (state.filterRequest !== null) {
       cancelRpc(state.filterRequest);
     }
@@ -2883,6 +2953,10 @@
       return;
     }
     const parts = [`Packets: ${info.frames.toLocaleString()}`];
+    if (state.indexing) {
+      const pct = state.indexFraction !== null ? ` (${Math.round(state.indexFraction * 100)}%)` : "";
+      parts[0] = `Indexing… ${info.frames.toLocaleString()} packets so far${pct}`;
+    }
     if (state.appliedFilter) {
       const pct = info.frames ? ((state.matchCount / info.frames) * 100).toFixed(1) : "0";
       parts.push(`Displayed: ${state.matchCount.toLocaleString()} (${pct}%)`);

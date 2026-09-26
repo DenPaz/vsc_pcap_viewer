@@ -16,7 +16,6 @@ import argparse
 import gzip
 import random
 import struct
-from compression import zstd
 from pathlib import Path
 
 from scapy.layers.dns import DNS, DNSQR, DNSRR
@@ -352,6 +351,22 @@ def btsnoop_file() -> bytes:
     return bytes(out)
 
 
+def zstd_compress(data: bytes) -> bytes:
+    """``compression.zstd`` is optional in CPython builds: Pythons compiled without
+    the libzstd headers (e.g. pyenv without libzstd-dev) lack ``_zstd``, so it is
+    imported only for the .zst fixtures, and ``--large`` works without it."""
+    try:
+        from compression import zstd  # noqa: PLC0415 - optional module, see above
+    except ImportError as exc:
+        raise SystemExit(
+            f"This Python has no zstd support ({exc}), which the .zst fixtures need. "
+            "Rebuild it with the libzstd headers (e.g. 'sudo apt install libzstd-dev', "
+            "then 'pyenv install --force 3.14'), or use a uv-managed Python: "
+            "'uv venv --python 3.14 --python-preference only-managed' then 'uv sync'."
+        ) from exc
+    return zstd.compress(data)
+
+
 def format_fixtures() -> None:
     """Every extra file type the viewer registers for, from the base fixtures."""
     FORMATS.mkdir(exist_ok=True)
@@ -361,8 +376,8 @@ def format_fixtures() -> None:
         # Default editor: unambiguous capture files.
         "http.pcap.gz": gzip.compress(pcap, mtime=0),
         "mixed.pcapng.gz": gzip.compress(pcapng, mtime=0),
-        "http.pcap.zst": zstd.compress(pcap),
-        "mixed.pcapng.zst": zstd.compress(pcapng),
+        "http.pcap.zst": zstd_compress(pcap),
+        "mixed.pcapng.zst": zstd_compress(pcapng),
         "http.pcap.lz4": lz4_frame(pcap),
         "mixed.pcapng.lz4": lz4_frame(pcapng),
         "mixed.ntar": pcapng,  # pcapng's old extension

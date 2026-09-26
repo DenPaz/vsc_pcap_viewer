@@ -20,6 +20,7 @@ TSHARK_FAILED = -32002
 NOT_OPEN = -32003
 INVALID_FILTER = -32010
 UNSUPPORTED_FORMAT = -32011
+INDEXING = -32012
 
 
 class RpcError(Exception):
@@ -50,6 +51,19 @@ class UnsupportedFormatError(RpcError):
     """The file is not a capture tshark can read."""
 
     code = UNSUPPORTED_FORMAT
+
+
+class IndexingError(RpcError):
+    """Needs the whole capture indexed, and the (streaming) index pass is still running."""
+
+    code = INDEXING
+
+    def __init__(self, frames: int) -> None:
+        super().__init__(
+            f"The capture is still being indexed ({frames:,} packets so far); "
+            "this is available when indexing finishes.",
+            {"frames": frames},
+        )
 
 
 ProgressFn = Callable[[Mapping[str, Any]], None]

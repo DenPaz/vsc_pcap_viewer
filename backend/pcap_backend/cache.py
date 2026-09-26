@@ -24,16 +24,31 @@ class RowStore:
 
     Frame numbers from a capture file are dense (1..N), so the offset of frame
     ``n`` lives at index ``n - 1``.
+
+    Rows become readable in batches: :meth:`publish` flushes what was appended
+    and makes it visible (``len()``), so the packet list can page through a
+    capture while the index pass is still writing it (streaming open).
     """
 
-    def __init__(self, path: Path, fields: Sequence[str]) -> None:
+    def __init__(
+        self, path: Path, fields: Sequence[str], offsets: array[int] | None = None
+    ) -> None:
+        """A new, empty store at ``path``; or, with ``offsets``, a finished one
+        (a saved index: ``path`` holds exactly those rows, read-only)."""
         self.path = path
         self.fields: tuple[str, ...] = tuple(fields)
-        self._offsets = array("Q")
-        self._writer = path.open("wb")
-        self._pos = 0
         self._reader: BinaryIO | None = None
         self._lock = threading.Lock()
+        if offsets is None:
+            self._offsets = array("Q")
+            self._writer: BinaryIO | None = path.open("wb")
+            self._pos = 0
+            self._visible = 0
+        else:
+            self._offsets = offsets
+            self._writer = None
+            self._pos = path.stat().st_size
+            self._visible = len(offsets)
 
     def append(self, frame_number: int, line: bytes) -> None:
         """Append the row for ``frame_number`` (``line`` without trailing newline)."""
@@ -48,16 +63,39 @@ class RowStore:
         self._write(line)
 
     def _write(self, line: bytes) -> None:
+        assert self._writer is not None, "a loaded store is read-only"
         self._offsets.append(self._pos)
         self._writer.write(line)
         self._writer.write(b"\n")
         self._pos += len(line) + 1
 
+    def publish(self) -> int:
+        """Make every appended row readable; returns how many there are."""
+        with self._lock:
+            if self._writer is not None and not self._writer.closed:
+                self._writer.flush()
+            self._visible = len(self._offsets)
+            return self._visible
+
     def finish(self) -> None:
-        self._writer.close()
+        with self._lock:
+            if self._writer is not None and not self._writer.closed:
+                self._writer.close()
+            self._visible = len(self._offsets)
+
+    @property
+    def appended(self) -> int:
+        """Rows appended so far, published or not (the index pass's own count)."""
+        return len(self._offsets)
+
+    @property
+    def offsets(self) -> array[int]:
+        """Line offsets of the published rows (to save the index)."""
+        with self._lock:
+            return self._offsets[: self._visible]
 
     def __len__(self) -> int:
-        return len(self._offsets)
+        return self._visible
 
     def get(self, frame_number: int) -> list[str]:
         return self.get_many([frame_number])[0]
@@ -67,8 +105,9 @@ class RowStore:
         width = len(self.fields)
         with self._lock:
             fh = self._open_reader()
+            visible = self._visible
             for n in frame_numbers:
-                if not 1 <= n <= len(self._offsets):
+                if not 1 <= n <= visible:
                     rows.append([""] * width)
                     continue
                 fh.seek(self._offsets[n - 1])
@@ -79,10 +118,13 @@ class RowStore:
         return rows
 
     def column(self, idx: int) -> list[str]:
-        """Read column ``idx`` for every frame, streaming the file (used for sorting)."""
+        """Read column ``idx`` for every published frame, streaming the file (used for sorting)."""
         out: list[str] = []
+        limit = len(self)
         with self.path.open("rb") as fh:
             for raw in fh:
+                if len(out) >= limit:
+                    break
                 cells = raw.rstrip(b"\n").split(b"\t")
                 out.append(cells[idx].decode("utf-8", "replace") if idx < len(cells) else "")
         return out
@@ -94,7 +136,7 @@ class RowStore:
 
     def close(self) -> None:
         with self._lock:
-            if not self._writer.closed:
+            if self._writer is not None and not self._writer.closed:
                 self._writer.close()
             if self._reader is not None:
                 self._reader.close()

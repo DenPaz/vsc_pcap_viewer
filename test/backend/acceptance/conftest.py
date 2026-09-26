@@ -8,6 +8,7 @@ when tshark is missing (see ``test/backend/conftest.py``).
 import json
 import os
 import re
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -59,6 +60,7 @@ class World:
     found: dict[str, Any] | None = None
     time_ref: int | None = None
     time_format: str | None = None
+    cache_dir: Path | None = None
     coloring: dict[str, Any] | None = None
     error: Exception | None = None
 
@@ -109,6 +111,55 @@ def given_open(world: World, name: str) -> None:
     assert world.error is None, world.error
 
 
+@given("saved indexes are kept")
+def cache_on(world: World, tmp_path: Path) -> None:
+    world.cache_dir = tmp_path / "index-cache"
+
+
+@given("saved indexes are not kept")
+def cache_off(world: World) -> None:
+    world.cache_dir = None
+
+
+@given(parsers.re(r'the capture "(?P<name>[^"]+)" was opened before$'))
+def opened_before(world: World, name: str) -> None:
+    open_capture(world, name)
+    assert world.error is None, world.error
+    if world.cache_dir is not None:
+        for _ in range(100):  # the index is saved in the background
+            if list(world.cache_dir.glob("*/meta.json")):
+                break
+            time.sleep(0.05)
+
+
+@when(parsers.re(r'I open the capture "(?P<name>[^"]+)" again$'))
+def open_again(world: World, name: str) -> None:
+    open_capture(world, name)
+
+
+@when(
+    parsers.re(
+        r'I open the capture "(?P<name>[^"]+)" again with the preference '
+        r'"(?P<pref>[^"]+)" set to "(?P<value>[^"]*)"$'
+    )
+)
+def open_again_with_pref(world: World, name: str, pref: str, value: str) -> None:
+    open_capture(world, name, {pref: value})
+
+
+@then("it opens from the saved index")
+def from_saved(world: World) -> None:
+    assert world.error is None, world.error
+    assert world.info is not None and world.info.get("fromCache") is True
+
+
+@then("it is indexed again")
+def indexed_again(world: World) -> None:
+    assert world.error is None, world.error
+    assert world.info is not None and "fromCache" not in world.info
+    assert any(p.get("phase") == "index" for p in world.progress), "an index pass ran"
+
+
 @given(parsers.parse('the display filter "{expr}" is applied'))
 def given_filter(world: World, expr: str) -> None:
     world.filter_result = world.call(world.service.set_filter, {"expr": expr})
@@ -118,14 +169,18 @@ def given_filter(world: World, expr: str) -> None:
 # ---------------------------------------------------------------------- when
 
 
-@when(parsers.parse('I open the capture "{name}"'))
-def open_capture(world: World, name: str) -> None:
-    params = {
+@when(parsers.re(r'I open the capture "(?P<name>[^"]+)"$'))
+def open_capture(world: World, name: str, prefs: dict[str, Any] | None = None) -> None:
+    params: dict[str, Any] = {
         "path": str(FIXTURES / name),
         "lua": world.lua,
         "decodeAs": world.decode_as,
         "columns": world.columns,
     }
+    if prefs:
+        params["prefs"] = prefs
+    if world.cache_dir is not None:
+        params["cache"] = {"dir": str(world.cache_dir)}
     world.progress = []
     world.ctx.progress = lambda p: world.progress.append(dict(p))
     world.info = world.call(world.service.open, params)
@@ -425,7 +480,7 @@ def protocol_bytes_start(world: World, name: str, text: str) -> None:
 # ---------------------------------------------------------------------- autocomplete
 
 
-@given(parsers.parse('I open the capture "{name}"'))
+@given(parsers.re(r'I open the capture "(?P<name>[^"]+)"$'))
 def given_open_with_options(world: World, name: str) -> None:
     open_capture(world, name)
     assert world.error is None, world.error

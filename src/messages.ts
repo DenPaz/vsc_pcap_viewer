@@ -23,6 +23,10 @@ export interface OpenResult {
   columns: ColumnDescriptor[];
   /** Id of the initial (unfiltered) view; list_packets results carry the current one. */
   filterId: number;
+  /** Streaming open: the index pass is still running ("index" notifications follow). */
+  indexing?: boolean;
+  /** Opened from a saved index (no index pass). */
+  fromCache?: boolean;
 }
 
 /** Backend methods the webview may call directly (anything else is refused). */
@@ -119,6 +123,10 @@ export type HostToWebview =
   | { type: "columns"; columns: ColumnSetting[]; layout: ColumnLayout }
   | { type: "timeFormat"; format: TimeFormat }
   | { type: "quickDetail"; quickDetail: QuickDetail }
+  /** Streaming open: `frames` indexed so far (`fraction` when the format allows an estimate). */
+  | { type: "indexProgress"; frames: number; fraction: number | null }
+  /** The index pass ended: the final capture info (with `error` if it stopped early). */
+  | { type: "indexDone"; info: OpenResult; error?: string }
   | { type: "command"; command: ViewerCommand }
   | { type: "history"; history: string[] }
   | { type: "savedFilters"; savedFilters: SavedFilter[] }

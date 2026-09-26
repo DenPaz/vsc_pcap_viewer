@@ -53,6 +53,18 @@ by **tshark** (Wireshark's command-line tool), so results match Wireshark exactl
 - **Packet details**: collapsible protocol tree and hex/ASCII pane with
   **two-way highlighting** (select a field to see its bytes; click a byte to
   find its field), including reassembled data (e.g. HTTP over several TCP segments).
+- **Fast opening of big captures**: the first packets show within about half a
+  second while tshark indexes the rest; the status bar counts along
+  ("Indexing… 250,000 packets so far"). Filtering and sorting need every packet,
+  so a filter you apply meanwhile is applied when indexing finishes, and sorting
+  says it is waiting. The finished index is saved, so **reopening an unchanged
+  capture is instant** (0.01 s instead of ~30 s per million packets). It is
+  rebuilt when the file or anything that changes dissection changes (tshark
+  version, Lua scripts, Decode As rules, preferences, custom columns, your
+  Wireshark configuration). Saved indexes take about 100 MB per million
+  packets, are capped at 1 GB (`pcapViewer.indexCache.maxSizeMB`, least
+  recently opened first) and hold the packet list's text; turn them off with
+  `pcapViewer.indexCache.enabled` or delete them with *PCAP: Clear Index Cache*.
 - **Quick view of late packets**: a packet's exact details come from dissecting
   the capture up to it, which takes long near the end of a big capture (20 s at
   packet 1,000,000). From packet 20,000 on (`pcapViewer.quickDetail.after`), a
@@ -176,6 +188,7 @@ tshark built with them (`tshark --version` lists "with Zstandard", "with LZ4").
 | PCAP: Save Display Filter… | | Save the current filter under a name |
 | PCAP: Suggest Display Filter… | | Describe the packets; pick an AI-suggested, tshark-checked filter (also ✨ in the filter bar and `@pcap` in chat) |
 | PCAP: Ask Copilot About Selected Packets… | | Explain the selected packets in chat (`@pcap /explain`; sends packet data, asks first) |
+| PCAP: Clear Index Cache | | Delete the saved packet-list indexes |
 | PCAP: Saved Display Filters | | Apply or delete saved filters |
 | PCAP: Go to Packet | `Ctrl+G` (`Cmd+G`) | Jump to a frame number |
 | PCAP: Find Packet… / Find Next / Find Previous | `Ctrl+F`, `F3`, `Shift+F3` | Find by display filter, string or hex bytes |
@@ -231,6 +244,8 @@ the side bar or panel.
 | `pcapViewer.ai.allowPacketData` | Let *Ask Copilot About This Packet…* / `@pcap /explain` send packet rows and dissection trees (default `false`; asked once; user settings only) |
 | `pcapViewer.ai.allowPacketBytes` | Also send raw bytes when explaining packets (default `false`; user settings only) |
 | `pcapViewer.maxCachedFrames` | Backend cache budget for filter results / sort orders |
+| `pcapViewer.indexCache.enabled` | Save each capture's packet-list index so reopening it is instant (default `true`) |
+| `pcapViewer.indexCache.maxSizeMB` | Disk space the saved indexes may use (default `1024`) |
 | `pcapViewer.quickDetail.after` | From this packet number on, show a quick (approximate) view first (default `20000`; `0` = never) |
 | `pcapViewer.quickDetail.window` | How many packets the quick view dissects (default `300`) |
 | `pcapViewer.requestTimeoutSeconds` | Timeout for quick requests (long ones are cancellable instead) |
@@ -253,6 +268,9 @@ Webview (HTML/JS)  --postMessage-->  Extension host (TypeScript)
 
 - Opening a file runs one `tshark -T fields` pass and stores the list columns
   in a temporary file with an in-memory offset index (8 bytes per packet).
+  Rows are published in batches while the pass runs, so the list shows the
+  first ones right away; the finished file and offsets are saved in the
+  extension's storage and reused while nothing that changes them changed.
 - Applying a filter runs `tshark -Y <filter> -T fields -e frame.number` once
   and caches the matching frame numbers (4 bytes per match).
 - Selecting a packet runs `tshark -c N -Y frame.number==N -T pdml` (and `-x`
@@ -276,7 +294,8 @@ Measured with `test/perf/bench.py` on 1,000,000 synthetic packets (146 MB,
 
 | Operation | Time |
 |---|---|
-| Open (index pass) | 36 s (tshark-bound; progress shown, cancellable) |
+| Open (index pass) | 29–36 s (tshark-bound); the first rows show after 0.5 s |
+| Reopen an unchanged capture (saved index) | 0.01 s |
 | Fetch a 200-row page (any position) | < 1 ms |
 | 1000 random scroll pages | 0.09 s total |
 | Apply a filter | 26 s (one tshark pass; re-applying a cached filter is instant) |
@@ -413,6 +432,7 @@ uv run python -u test/perf/bench.py test/fixtures/large-1m.pcap --no-tcp-analysi
 | "tshark was not found" | Install tshark (step 1) or set `pcapViewer.tsharkPath`, e.g. `/usr/bin/tshark`. |
 | `tshark: You don't have permission to read the file "…"` although the file is yours | On Ubuntu with tshark 4.6, the AppArmor profile `/etc/apparmor.d/tshark` only lets tshark use `/tmp` and Wireshark's own folders. Allow your files with a local rule: `echo 'owner @{HOME}/** rw,' \| sudo tee -a /etc/apparmor.d/local/tshark` then `sudo apparmor_parser -r /etc/apparmor.d/tshark` (add e.g. `owner /media/** rw,` for other places). Check with `sudo aa-status \| grep tshark`; denials show in `journalctl -k \| grep 'profile="tshark"'`. A Snap-packaged tshark has similar limits: use the distribution's package instead. |
 | Cancelling a filter is slow, *PCAP: Show Log* says "could not stop tshark … Permission denied", or the kernel log shows `apparmor="DENIED" operation="signal" profile="tshark" … peer="vscode"` | The same AppArmor profile doesn't let tshark receive signals from the extension (VS Code runs under its own `vscode` profile; the tests run unconfined). The backend then closes tshark's output instead, so tshark stops at its next write, but a pass that writes nothing runs to its end. Allow the signals with two more local rules and reload: `printf '%s\n' 'signal (receive) peer=unconfined,' 'signal (receive) peer=vscode,' \| sudo tee -a /etc/apparmor.d/local/tshark` then `sudo apparmor_parser -r /etc/apparmor.d/tshark`. |
+| `make fixtures` fails with "No module named '_zstd'" | Your Python was built without zstd support (common with pyenv when `libzstd-dev` is missing); only the `.zst` test fixtures need it, so `make large-fixture` works anyway. Install `libzstd-dev` and rebuild it (`pyenv install --force 3.14`), or switch the venv to a uv-managed Python: `uv venv --python 3.14 --python-preference only-managed`, then `uv sync`. |
 | Lua dissector isn't applied | Check *PCAP: Show Log* for Lua errors. Don't run as root. Use *PCAP: Reload Capture* after editing the script. |
 | Opening a huge file is slow | Indexing speed is tshark's. Settings such as `"pcapViewer.prefs": { "tcp.analyze_sequence_numbers": false }` make it cheaper. |
 | `pnpm install` fails with "Ignored build scripts" | Use the pnpm version pinned in `package.json` (`corepack enable pnpm`). The build-script policy is in `pnpm-workspace.yaml`. |

@@ -19,6 +19,8 @@ export interface Settings {
   maxCachedFrames: number;
   requestTimeoutMs: number;
   quickDetail: QuickDetail;
+  /** Saved packet-list indexes (reopening skips the index pass); 0 bytes = off. */
+  indexCacheBytes: number;
 }
 
 export function readQuickDetail(scope?: vscode.Uri): QuickDetail {
@@ -50,6 +52,7 @@ export function readSettings(scope?: vscode.Uri): Settings {
     maxCachedFrames: cfg.get<number>("maxCachedFrames", 5_000_000),
     requestTimeoutMs: cfg.get<number>("requestTimeoutSeconds", 60) * 1000,
     quickDetail: readQuickDetail(scope),
+    indexCacheBytes: cfg.get<boolean>("indexCache.enabled", true) ? Math.max(0, cfg.get<number>("indexCache.maxSizeMB", 1024)) * 1024 * 1024 : 0,
   };
 }
 

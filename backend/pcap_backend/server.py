@@ -227,6 +227,7 @@ def main(argv: list[str] | None = None) -> int:
 
     service = PcapService(max_cached_frames=args.max_cached_frames)
     server = JsonRpcServer(sys.stdin.buffer, sys.stdout.buffer, rpc_methods(service))
+    service.notify = server.notify  # "index" progress of a streaming open
 
     def on_signal(signum: int, _frame: object) -> None:
         log.info("signal %s: shutting down", signum)
