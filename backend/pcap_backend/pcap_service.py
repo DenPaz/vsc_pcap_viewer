@@ -47,6 +47,7 @@ from .protocol import (
     NotOpenError,
     RequestContext,
     RpcError,
+    UnsupportedFormatError,
     param,
     str_list,
 )
@@ -89,8 +90,28 @@ _FIELD_NAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.\-]*$")
 _INVALID_FIELDS_RE = re.compile(r"Some fields aren't valid:\s*(?P<names>(?:\s*\S+)+)")
 _TRUNCATION_HINTS = ("cut short", "appears to be damaged", "corrupt", "truncated")
 
-# Per-record overhead used to estimate progress from frame lengths.
+# Per-record overhead used to estimate progress from frame lengths. Only valid
+# for uncompressed pcap/pcapng (recognised by magic number, whatever the file is
+# called); other formats and compressed files get indeterminate progress.
 _RECORD_OVERHEAD = {"pcap": 16, "pcapng": 32}
+_PCAP_MAGICS = frozenset(
+    bytes.fromhex(m)
+    for m in ("d4c3b2a1", "a1b2c3d4", "4d3cb2a1", "a1b23c4d", "34cdb2a1", "a1b2cd34")
+)
+_PCAPNG_MAGIC = bytes.fromhex("0a0d0d0a")
+_UNSUPPORTED_RE = re.compile(r"isn't a capture file in a format TShark understands")
+
+
+def sniff_format(path: Path) -> str | None:
+    """``"pcap"`` or ``"pcapng"`` for uncompressed files of those formats, else None."""
+    try:
+        with path.open("rb") as fh:
+            head = fh.read(4)
+    except OSError:
+        return None
+    if head in _PCAP_MAGICS:
+        return "pcap"
+    return "pcapng" if head == _PCAPNG_MAGIC else None
 
 
 def _fields_args(fields: Sequence[str]) -> list[str]:
@@ -345,7 +366,7 @@ class PcapService:
         pairs += [(fld, fld) for fld in custom]
         legacy = {c.field: c.legacy_field for c in BASE_COLUMNS}
         size = max(1, info.size)
-        overhead = _RECORD_OVERHEAD["pcapng" if path.suffix.lower() == ".pcapng" else "pcap"]
+        overhead = _RECORD_OVERHEAD.get(sniff_format(path) or "") if base else None
         for _attempt in range(3):
             self._store_seq += 1
             store_path = work_dir / f"rows-{self._store_seq}.tsv"
@@ -369,14 +390,14 @@ class PcapService:
                         continue
                     rest = line if base else (parts[1] if len(parts) > 1 else b"")
                     rows.append(number, rest)
-                    if base:
+                    if overhead:
                         cells = rest.split(b"\t", _LEN_IDX + 1)
                         if len(cells) > _LEN_IDX and cells[_LEN_IDX].isdigit():
                             bytes_seen += int(cells[_LEN_IDX]) + overhead
                     now = time.monotonic()
                     if now - last_emit >= PROGRESS_INTERVAL_S:
                         last_emit = now
-                        fraction = min(0.99, bytes_seen / size) if base else None
+                        fraction = min(0.99, bytes_seen / size) if overhead else None
                         ctx.progress({"phase": "index", "frames": number, "fraction": fraction})
             finally:
                 rows.finish()
@@ -386,9 +407,7 @@ class PcapService:
                 rejected = _rejected_fields(result.stderr)
                 if rejected and _drop_rejected(pairs, rejected, legacy, custom, info.warnings):
                     continue
-                raise tshark.error(
-                    result.stderr, result.returncode, f"tshark exited with code {result.returncode}"
-                )
+                raise _index_error(tshark, path, result)
             if bad_lines:
                 info.warnings.append(f"{bad_lines} unparseable line(s) in tshark output skipped")
             if result.stderr:
@@ -1086,6 +1105,18 @@ class PcapService:
 
 
 # ---------------------------------------------------------------------- helpers
+
+
+def _index_error(tshark: Tshark, path: Path, result: StreamResult) -> Exception:
+    """The error for an index pass that produced nothing."""
+    if _UNSUPPORTED_RE.search(result.stderr):
+        return UnsupportedFormatError(
+            f"{path.name} is not a capture file that tshark can read",
+            {"path": str(path), "stderr": result.stderr},
+        )
+    return tshark.error(
+        result.stderr, result.returncode, f"tshark exited with code {result.returncode}"
+    )
 
 
 def _parse_sort(raw: Any) -> tuple[str, bool] | None:

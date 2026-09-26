@@ -53,6 +53,7 @@ export const ErrorCodes = {
   TsharkFailed: -32002,
   NotOpen: -32003,
   InvalidFilter: -32010,
+  UnsupportedFormat: -32011,
   // Client-side codes.
   Timeout: -33001,
   BackendExited: -33002,

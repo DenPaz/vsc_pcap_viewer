@@ -118,6 +118,27 @@ UI behaviour stays in the Chromium test (`test/webview/e2e.test.js`).
   fields are dropped with a warning (tshark's "Some fields aren't valid" is parsed).
 - **Never duplicate `-e` fields**: tshark blanks the first copy of a duplicated
   field (found the hard way with `frame.number`).
+- **File types**: tshark detects the format from the content, so the file name
+  only picks the editor. Two `customEditors` contributions share one provider:
+  `pcapViewer.editor` (priority `default`) for unambiguous capture files
+  (pcap/pcapng/cap/ntar, `.gz`/`.zst`/`.lz4` compressed pcap(ng), `*.pcap[0-9]*`
+  tcpdump rotation, snoop, ERF, PacketLogger, btsnoop) and
+  `pcapViewer.editorOptional` (priority `option`: *Reopen Editor With…* only)
+  for generic extensions (`*.[0-9]`, `.log`, `.dmp`, `.trc`, `.ber`). VS Code
+  matches selectors against the basename, ignoring case
+  (`globMatchesResource`); the patterns were checked with VS Code's own
+  `glob.ts`, and the smoke test opens every `test/fixtures/formats/` file to
+  check which editor VS Code picks. `when` clauses use
+  `activeCustomEditorId =~ /^pcapViewer\.editor(Optional)?$/`. Every pattern
+  has a fixture (`test_every_file_pattern_has_a_fixture`); fixtures in other
+  formats are hand-written by `generate.py` (stdlib only: gzip, `compression.zstd`,
+  an LZ4 frame with stored blocks, snoop, ERF, PacketLogger, btsnoop, raw BER).
+  Open progress is estimated only for uncompressed pcap/pcapng recognised by
+  magic number (`sniff_format`); otherwise it's indeterminate (null fraction)
+  instead of stalling at 99%. "isn't a capture file in a format TShark
+  understands" becomes `UnsupportedFormatError` (-32011), shown in the viewer
+  with a *Reopen Editor With…* button. `exportFileName` strips compression and
+  format suffixes (`trace.pcap.gz` → `trace-filtered.pcapng`).
 - **Detail**: `tshark -r f -c N -Y frame.number==N -T pdml` plus `-x` in
   parallel. `-c N` stops reading after frame N (it counts packets *read*), so
   cost is proportional to N, and earlier packets are still dissected (TCP
@@ -229,7 +250,7 @@ UI behaviour stays in the Chromium test (`test/webview/e2e.test.js`).
   is untrusted); JSON is keyed by column id with numbers for numeric columns.
 - **Protocol**: JSON-RPC 2.0 framing (`"jsonrpc": "2.0"`), LSP-style
   cancellation code -32800; app codes in `backend/pcap_backend/protocol.py`
-  and mirrored in `src/backendClient.ts` (`ErrorCodes`). `open` returns the
+  and mirrored in `src/backendClient.ts` (`ErrorCodes`; -32011 unsupported format). `open` returns the
   initial `filterId`; every `list_packets` result carries the current one so
   the webview drops stale pages.
 

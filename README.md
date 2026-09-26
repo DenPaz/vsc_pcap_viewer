@@ -79,8 +79,28 @@ by **tshark** (Wireshark's command-line tool), so results match Wireshark exactl
 
 ## Usage
 
-Open any `.pcap`, `.pcapng` or `.cap` file. It opens in the PCAP Viewer by default
-(use *Reopen Editor With…* to switch).
+Open a capture file and it opens in the PCAP Viewer (use *Reopen Editor With…*
+to switch). tshark recognises the format from the file's content, so what the
+file is called only decides which editor VS Code offers:
+
+| Opens in the viewer by default | |
+|---|---|
+| `*.pcap`, `*.pcapng`, `*.cap`, `*.ntar` | pcap / pcapng (`.ntar` is pcapng's old extension) |
+| `*.pcap.gz`, `*.pcapng.gz`, `*.pcap.zst`, `*.pcapng.zst`, `*.pcap.lz4`, `*.pcapng.lz4` | compressed captures (gzip, Zstandard, LZ4), read directly |
+| `*.pcap0`, `*.pcap1`, … (`*.pcap[0-9]*`) | files rotated by `tcpdump -C` |
+| `*.snoop`, `*.erf` | Sun snoop, Endace ERF |
+| `*.pklg`, `*.btsnoop` | Bluetooth HCI logs (macOS PacketLogger, Android/Symbian btsnoop) |
+
+| Offered in *Reopen Editor With…* only | |
+|---|---|
+| `*.[0-9]` (`capture.1`), `*.log`, `*.dmp`, `*.trc`, `*.ber` | generic extensions that are sometimes captures (the viewer never takes these over from other editors) |
+
+Other formats Wireshark reads work as well when the file has one of these names
+(for example a Microsoft Network Monitor capture saved as `.cap`, or a Sniffer
+`.trc`). A file tshark doesn't recognise
+shows "*name* is not a capture file that tshark can read" in the viewer, with a
+button to reopen it in another editor. Reading zstd and LZ4 files needs a
+tshark built with them (`tshark --version` lists "with Zstandard", "with LZ4").
 
 | Command | Default key | Description |
 |---|---|---|

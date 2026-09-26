@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- Opens more capture file types by default: gzip/zstd/lz4-compressed pcap and
+  pcapng, `.ntar`, `tcpdump -C` rotated files (`*.pcap1`…), snoop, ERF,
+  PacketLogger and btsnoop. Generic extensions (`*.1`, `.log`, `.dmp`, `.trc`,
+  `.ber`) are offered in *Reopen Editor With…*.
+- Files tshark can't read show a clear message; open progress no longer
+  stalls at 99% for compressed files and other formats.
+- Export file names drop compression suffixes (`trace.pcap.gz` →
+  `trace-filtered.pcapng`).
+
 ## 0.1.0
 
 First release: every item of the project brief.

@@ -1,5 +1,6 @@
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
+import * as path from "node:path";
 import * as vscode from "vscode";
 import { BackendClient, ErrorCodes, RpcError, findPython } from "./backendClient";
 import { Settings, readSettings } from "./config";
@@ -22,7 +23,10 @@ class PcapDocument implements vscode.CustomDocument {
  * backend process (the backend keeps per-view filter/sort state).
  */
 export class PcapEditorProvider implements vscode.CustomReadonlyEditorProvider<PcapDocument> {
+  /** Default editor for unambiguous capture files (package.json customEditors). */
   static readonly viewType = "pcapViewer.editor";
+  /** Same editor, only offered in "Reopen Editor With…" for generic extensions (*.log, *.1…). */
+  static readonly optionalViewType = "pcapViewer.editorOptional";
 
   private readonly sessions = new Set<PcapEditorSession>();
   private active?: PcapEditorSession;
@@ -34,11 +38,10 @@ export class PcapEditorProvider implements vscode.CustomReadonlyEditorProvider<P
 
   static register(context: vscode.ExtensionContext, log: vscode.LogOutputChannel): PcapEditorProvider {
     const provider = new PcapEditorProvider(context, log);
+    const options = { webviewOptions: { retainContextWhenHidden: true }, supportsMultipleEditorsPerDocument: true };
     context.subscriptions.push(
-      vscode.window.registerCustomEditorProvider(PcapEditorProvider.viewType, provider, {
-        webviewOptions: { retainContextWhenHidden: true },
-        supportsMultipleEditorsPerDocument: true,
-      }),
+      vscode.window.registerCustomEditorProvider(PcapEditorProvider.viewType, provider, options),
+      vscode.window.registerCustomEditorProvider(PcapEditorProvider.optionalViewType, provider, options),
     );
     return provider;
   }
@@ -225,6 +228,10 @@ export class PcapEditorSession {
         await this.stopBackend();
         return;
       }
+      if (err instanceof RpcError && err.code === ErrorCodes.UnsupportedFormat) {
+        this.unsupportedFormat(err);
+        return;
+      }
       const setting = err instanceof RpcError && err.code === ErrorCodes.TsharkNotFound ? "tsharkPath" : undefined;
       this.fail(describeError(err), setting);
     }
@@ -261,6 +268,28 @@ export class PcapEditorSession {
         }
       },
     );
+  }
+
+  /** tshark doesn't recognise the file (e.g. a text *.log opened with "Reopen Editor With…"). */
+  private unsupportedFormat(err: RpcError): void {
+    const name = path.basename(this.uri.fsPath);
+    const stderr = (err.data as { stderr?: string } | undefined)?.stderr;
+    this.log.warn(`${this.uri.fsPath}: ${stderr ?? err.message}`);
+    this.post({
+      type: "error",
+      message:
+        `${name} is not a capture file that tshark can read.\n\n` +
+        "PCAP Viewer opens pcap and pcapng (also gzip, zstd or lz4 compressed) and the other capture formats Wireshark supports, " +
+        "such as snoop, ERF, btsnoop and PacketLogger. Use \"Reopen Editor With…\" to open this file with another editor.",
+      canReload: true,
+    });
+    void vscode.window.showWarningMessage(`PCAP Viewer: ${name} is not a capture file that tshark can read.`, "Reopen Editor With…").then((choice) => {
+      if (choice) {
+        // The command reopens the active editor: make it this one first.
+        this.panel.reveal(undefined, false);
+        void vscode.commands.executeCommand("workbench.action.reopenWithEditor");
+      }
+    });
   }
 
   private fail(message: string, setting?: "tsharkPath" | "pythonPath"): void {

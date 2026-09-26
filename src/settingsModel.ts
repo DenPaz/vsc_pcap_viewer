@@ -223,10 +223,17 @@ export function prependColoringRule(rules: unknown, rule: ColoringRule): unknown
   return [rule, ...(Array.isArray(rules) ? rules : [])];
 }
 
-/** Suggested export file next to the capture: `dir/stem-suffix.ext`. */
+const COMPRESSION_EXT = /\.(gz|zst|lz4)$/i;
+
+/** A capture's name without compression and format extensions: `trace.pcap.gz` → `trace`. */
+export function captureStem(capturePath: string): string {
+  const base = path.basename(capturePath).replace(COMPRESSION_EXT, "");
+  return base.replace(/\.[^.]+$/, "") || base;
+}
+
+/** Suggested export file next to the capture: `dir/stem-suffix.ext` (`trace.pcap.gz` → `trace-filtered.pcapng`). */
 export function exportFileName(capturePath: string, suffix: string, ext: string): string {
-  const parsed = path.parse(capturePath);
-  return path.join(parsed.dir, `${parsed.name}-${suffix}.${ext}`);
+  return path.join(path.dirname(capturePath), `${captureStem(capturePath)}-${suffix}.${ext}`);
 }
 
 export type ConfigTarget = "workspaceFolder" | "workspace" | "global";
