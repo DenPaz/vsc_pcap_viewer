@@ -1068,6 +1068,8 @@
       ["Follow TLS Stream", /TLS|SSL/.test(protocol) ? follow("tls") : null],
       ["Follow HTTP Stream", /HTTP/.test(protocol) ? follow("http") : null],
       ["-", null],
+      ["Decode As…", () => vscode.postMessage({ type: "decodeAs", frame: row.number })],
+      ["-", null],
       ["Copy Summary", () => copy(row.cells.join("\t"))],
       ["Copy Frame Number", () => copy(String(row.number))],
     ];

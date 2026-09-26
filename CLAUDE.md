@@ -167,6 +167,15 @@ UI behaviour stays in the Chromium test (`test/webview/e2e.test.js`).
   single-series SVG line in the theme's `--vscode-charts-blue` (no legend,
   hover crosshair, keyboard arrows/Home/End, the table below is the
   accessible view). Packets or bytes is a switch, never a second axis.
+- **Dissector check**: `check_dissectors` loads the Lua scripts against the
+  empty capture (no packets read) and returns tshark's `Lua:` stderr blocks
+  (exit code stays 0 on Lua errors). Lua shortens long chunk paths to
+  `...tail`, so the script is found by suffix (`script_in_lua_message`).
+  "Reload Dissectors" runs it first, then re-indexes every open capture.
+- **Decode As choices** come from tshark itself: an invalid `-d` rule makes it
+  print "Valid layer types are:" or "Valid protocols for layer type X are:"
+  lists (parsed by `parse_decode_as_choices`, cached). An unknown layer gets
+  the layer list back, which is detected and rejected.
 - **Protocol**: JSON-RPC 2.0 framing (`"jsonrpc": "2.0"`), LSP-style
   cancellation code -32800; app codes in `backend/pcap_backend/protocol.py`
   and mirrored in `src/backendClient.ts` (`ErrorCodes`). `open` returns the
@@ -185,12 +194,14 @@ this took the backend from 710 MB to 125 MB peak.
 
 ## Status
 
-Implemented: steps 1–5 of the brief (foundation, packet list with paging /
+Implemented: steps 1–6 of the brief (foundation, packet list with paging /
 virtualization / sorting / custom columns, detail tree + hex with two-way
 highlighting, display filters with validation, autocomplete, history, saved
 filters, apply-as-filter, follow TCP/UDP/TLS/HTTP stream, and statistics
 panels: conversations, endpoints, protocol hierarchy, IO graph, expert info,
 capture properties).
 
-Not yet: export, coloring rules, Lua management commands, Decode As UI
-(settings already work end-to-end), quick view for late packets in huge files.
+Also step 6: Lua dissector commands (new from template, reload with error
+check, open folder, reload offer on save) and a Decode As UI plus rule manager.
+
+Not yet: export, coloring rules, quick view for late packets in huge files.

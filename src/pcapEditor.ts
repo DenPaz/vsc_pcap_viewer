@@ -187,8 +187,17 @@ export class PcapEditorSession {
       for (const w of warnings) {
         this.log.warn(`${this.uri.fsPath}: ${w}`);
       }
-      if (warnings.length) {
-        void vscode.window.showWarningMessage(`PCAP Viewer: ${warnings[0]}${warnings.length > 1 ? ` (+${warnings.length - 1} more)` : ""}`, "Show Log").then((choice) => {
+      // Lua load errors are errors, not warnings: say so and point at the log.
+      const luaErrors = warnings.filter((w) => w.startsWith("Lua:"));
+      const others = warnings.filter((w) => !w.startsWith("Lua:"));
+      if (luaErrors.length) {
+        const first = luaErrors[0].split("\n")[0].replace(/^Lua: /, "");
+        void vscode.window
+          .showErrorMessage(`PCAP Viewer: Lua dissector error: ${first}${luaErrors.length > 1 ? ` (+${luaErrors.length - 1} more)` : ""}`, "Show Log")
+          .then((choice) => choice && this.log.show());
+      }
+      if (others.length) {
+        void vscode.window.showWarningMessage(`PCAP Viewer: ${others[0]}${others.length > 1 ? ` (+${others.length - 1} more)` : ""}`, "Show Log").then((choice) => {
           if (choice) {
             this.log.show();
           }
@@ -304,6 +313,9 @@ export class PcapEditorSession {
         return;
       case "follow":
         FollowPanel.show(this.context, this, msg.proto, msg.frame);
+        return;
+      case "decodeAs":
+        await vscode.commands.executeCommand("pcapViewer.decodeAs", msg.frame);
         return;
       case "copy":
         await vscode.env.clipboard.writeText(String(msg.text));

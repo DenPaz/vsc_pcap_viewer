@@ -126,6 +126,31 @@
         "category": "PCAP Statistics"
       },
       {
+        "command": "pcapViewer.reloadDissectors",
+        "title": "Reload Dissectors",
+        "category": "PCAP"
+      },
+      {
+        "command": "pcapViewer.newLuaDissector",
+        "title": "New Lua Dissector\u2026",
+        "category": "PCAP"
+      },
+      {
+        "command": "pcapViewer.openDissectorsFolder",
+        "title": "Open Dissectors Folder",
+        "category": "PCAP"
+      },
+      {
+        "command": "pcapViewer.decodeAs",
+        "title": "Decode As\u2026",
+        "category": "PCAP"
+      },
+      {
+        "command": "pcapViewer.manageDecodeAs",
+        "title": "Manage Decode As Rules",
+        "category": "PCAP"
+      },
+      {
         "command": "pcapViewer.manageColumns",
         "title": "Manage Custom Columns",
         "category": "PCAP"
@@ -205,6 +230,10 @@
         },
         {
           "command": "pcapViewer.statistics.captureProperties",
+          "when": "activeCustomEditorId == pcapViewer.editor || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
+        },
+        {
+          "command": "pcapViewer.decodeAs",
           "when": "activeCustomEditorId == pcapViewer.editor || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
         }
       ]

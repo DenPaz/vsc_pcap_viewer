@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { registerAnalysisCommands } from "./commands/analysis";
 import { registerColumnCommands } from "./commands/columns";
+import { registerDissectorCommands } from "./commands/dissectors";
 import { registerFilterCommands } from "./commands/filter";
 import { registerSavedFilterCommands } from "./commands/savedFilters";
 import { RELOAD_KEYS, SECTION, readSettings } from "./config";
@@ -23,6 +24,7 @@ export function activate(context: vscode.ExtensionContext): PcapViewerApi {
   registerColumnCommands(context, p);
   registerSavedFilterCommands(context, p);
   registerAnalysisCommands(context, p);
+  registerDissectorCommands(context, p, log);
   context.subscriptions.push(
     vscode.commands.registerCommand("pcapViewer.showLog", () => log.show()),
     vscode.workspace.onDidChangeConfiguration(async (e) => {

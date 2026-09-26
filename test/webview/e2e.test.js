@@ -66,7 +66,7 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
         hostLog.push(msg);
         savedFilters = [...savedFilters, { name: `Saved ${savedFilters.length}`, filter: msg.expr }];
         await post({ type: "savedFilters", savedFilters });
-      } else if (["manageSavedFilters", "filterApplied", "selection", "follow"].includes(msg.type)) {
+      } else if (["manageSavedFilters", "filterApplied", "selection", "follow", "decodeAs"].includes(msg.type)) {
         hostLog.push(msg);
       } else if (msg.type === "rpc") {
         const pending = client.send(msg.method, msg.params, { timeoutMs: 0 });
@@ -284,6 +284,9 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     ]);
     await page.click("#context-menu .item:has-text('Follow HTTP Stream')");
     assert.deepEqual(hostLog.at(-1), { type: "follow", proto: "http", frame: 4 });
+    await page.click("#list-rows .list-row >> nth=3", { button: "right" });
+    await page.click("#context-menu .item:has-text('Decode As')");
+    assert.deepEqual(hostLog.at(-1), { type: "decodeAs", frame: 4 });
   });
 
   test("no script errors or CSP violations", () => {

@@ -39,8 +39,15 @@ by **tshark** (Wireshark's command-line tool), so results match Wireshark exactl
   Expert Information and Capture File Properties. Each opens in a panel with
   sortable columns, CSV copy, and an option to limit it to the current display
   filter. Rows can apply or prepare a display filter, and expert rows jump to their packet.
-- **Lua dissectors**, **Decode As** (`-d`) rules and **preference overrides**
-  (`-o`) from settings, applied to every tshark call.
+- **Lua dissectors**: *PCAP: New Lua Dissector* scaffolds one in your
+  dissectors folder. *PCAP: Reload Dissectors* checks the scripts first, so
+  Lua errors appear immediately with a link to the line, then re-indexes open
+  captures. Saving a loaded script offers a reload.
+- **Decode As**: *PCAP: Decode As…* (also in the packet list's right-click menu)
+  suggests the selected packet's ports, offers tshark's own lists of layers and
+  protocols, and stores the rule in `pcapViewer.decodeAs`. *PCAP: Manage Decode
+  As Rules* removes rules. Rules, Lua scripts and **preference overrides**
+  (`-o`) apply to every tshark call.
 - Progress and cancellation while indexing large files; clear errors when
   tshark or Python is missing; no orphaned processes after closing.
 
@@ -70,7 +77,11 @@ Open any `.pcap`, `.pcapng` or `.cap` file. It opens in the PCAP Viewer by defau
 | PCAP: Follow TCP / UDP / TLS / HTTP Stream | | Follow the selected packet's stream (also in the packet list's right-click menu) |
 | PCAP Statistics: Conversations, Endpoints, Protocol Hierarchy, I/O Graph, Expert Information, Capture File Properties | | Open the report in a panel beside the capture |
 | PCAP: Manage Custom Columns | | Add or remove columns (searches tshark's field list) |
-| PCAP: Reload Capture | | Re-run tshark, e.g. after editing a Lua dissector |
+| PCAP: Reload Capture | | Re-run tshark on the current capture |
+| PCAP: Reload Dissectors | | Check the Lua dissectors for errors, then re-index all open captures |
+| PCAP: New Lua Dissector… | | Create a dissector from a template in the dissectors folder |
+| PCAP: Open Dissectors Folder | | Reveal (or set up) `pcapViewer.dissectorsFolder` |
+| PCAP: Decode As… / Manage Decode As Rules | | Add or remove `-d` rules (stored in settings) |
 | PCAP: Show Log | | Backend and tshark messages (Lua errors, warnings) |
 
 Keyboard: in the list use ↑/↓/PgUp/PgDn/Home/End, `Enter`/`→` to move to the
@@ -139,7 +150,7 @@ file up to that packet so reassembly stays correct (see the roadmap below).
 
 ## Roadmap
 
-Planned (see the project brief): Lua dissector management commands and a Decode As UI, export (filtered pcapng, CSV/JSON,
+Planned (see the project brief): export (filtered pcapng, CSV/JSON,
 bytes), coloring rules, and a faster "quick view" of late packets in huge captures.
 
 ## Running locally (Linux)
