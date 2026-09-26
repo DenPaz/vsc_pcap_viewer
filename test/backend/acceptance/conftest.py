@@ -50,6 +50,8 @@ class World:
     suggestions: dict[str, Any] | None = None
     followed: dict[str, Any] | None = None
     table: dict[str, Any] | None = None
+    check: dict[str, Any] | None = None
+    choices: dict[str, Any] | None = None
     error: Exception | None = None
 
     def call(self, fn: Any, params: dict[str, Any]) -> Any:
@@ -569,3 +571,61 @@ def expert_row(world: World, summary: str, severity: str, count: int, frames: st
 def property_is(world: World, key: str, value: str) -> None:
     rows = {r["cells"][0]: r["cells"][1] for r in _table(world)["rows"]}
     assert rows.get(key) == value, rows
+
+
+# ---------------------------------------------------------------------- dissector check / Decode As
+
+
+@given("a Lua dissector with a syntax error")
+def given_bad_lua(world: World, tmp_path: Path, request: pytest.FixtureRequest) -> None:
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        pytest.skip("tshark disables Lua dissectors when running as root")
+    script = tmp_path / "broken.lua"
+    script.write_text('local p = Proto("broken"\n')
+    world.lua.append(str(script))
+
+
+@when("I check the dissectors")
+def check_dissectors(world: World) -> None:
+    world.check = world.call(world.service.check_dissectors, {"lua": world.lua})
+
+
+@then(parsers.parse('a dissector error mentions "{text}" for that script'))
+def dissector_error(world: World, text: str) -> None:
+    assert world.error is None, world.error
+    assert world.check is not None
+    matches = [e for e in world.check["errors"] if text in e["message"]]
+    assert matches, world.check
+    assert matches[0].get("script") == world.lua[-1]
+
+
+@then("there are no dissector errors")
+def no_dissector_errors(world: World) -> None:
+    assert world.check is not None
+    assert world.check["errors"] == []
+
+
+@then(parsers.parse('a dissector warning mentions "{text}"'))
+def dissector_warning(world: World, text: str) -> None:
+    assert world.check is not None
+    assert any(text in w for w in world.check["warnings"]), world.check
+
+
+@when("I ask which layers can be decoded as another protocol")
+def ask_layers(world: World) -> None:
+    world.choices = world.call(world.service.decode_as_options, {})
+
+
+@when(parsers.parse('I ask which protocols "{layer}" can be decoded as'))
+def ask_protocols(world: World, layer: str) -> None:
+    world.choices = world.call(world.service.decode_as_options, {"layer": layer})
+
+
+@then(parsers.re(r'the choices include "(?P<name>[^"]+)"(?: described as "(?P<desc>[^"]+)")?$'))
+def choices_include(world: World, name: str, desc: str | None) -> None:
+    assert world.error is None, world.error
+    assert world.choices is not None
+    found = [c for c in world.choices["choices"] if c["name"] == name]
+    assert found, name
+    if desc:
+        assert found[0]["desc"] == desc

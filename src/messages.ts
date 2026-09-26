@@ -45,6 +45,7 @@ export type WebviewToHost =
   | { type: "filterApplied"; expr: string }
   | { type: "saveFilter"; expr: string }
   | { type: "selection"; frame: number | null }
+  | { type: "decodeAs"; frame: number }
   | { type: "follow"; proto: "tcp" | "udp" | "tls" | "http"; frame: number }
   | { type: "manageSavedFilters" }
   | { type: "copy"; text: string }

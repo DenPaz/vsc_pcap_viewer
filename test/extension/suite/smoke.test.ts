@@ -46,6 +46,11 @@ suite("PCAP Viewer smoke test", () => {
     const detail = await backend.request<{ tree: unknown[] }>("packet_detail", { number: 4 });
     assert.ok(detail.tree.length > 0);
 
+    const commands = await vscode.commands.getCommands(true);
+    for (const id of ["pcapViewer.reloadDissectors", "pcapViewer.newLuaDissector", "pcapViewer.openDissectorsFolder", "pcapViewer.decodeAs", "pcapViewer.manageDecodeAs"]) {
+      assert.ok(commands.includes(id), `${id} is registered`);
+    }
+
     // Follow stream and statistics panels talk to the same backend.
     await vscode.commands.executeCommand("pcapViewer.followTcpStream", 4);
     const follow = await waitFor(() => [...FollowPanel.panels][0]?.current);

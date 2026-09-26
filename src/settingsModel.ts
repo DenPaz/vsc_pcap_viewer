@@ -125,6 +125,42 @@ export function upsertSavedFilter(list: readonly SavedFilter[], entry: SavedFilt
   return copy;
 }
 
+/** A "Decode As" rule as stored in `pcapViewer.decodeAs`: `<layer>==<value>,<protocol>`. */
+export interface DecodeAsRule {
+  layer: string;
+  value: string;
+  protocol: string;
+}
+
+const DECODE_AS_RE = /^([A-Za-z0-9_][A-Za-z0-9_.-]*)(?:==|:)([^,\s]+),([A-Za-z0-9_.-]+)$/;
+
+export function parseDecodeAsRule(rule: string): DecodeAsRule | undefined {
+  const m = DECODE_AS_RE.exec(rule.trim());
+  return m ? { layer: m[1], value: m[2], protocol: m[3] } : undefined;
+}
+
+export function formatDecodeAsRule(rule: DecodeAsRule): string {
+  return `${rule.layer}==${rule.value},${rule.protocol}`;
+}
+
+/** Add a rule, replacing any existing rule for the same layer and value. */
+export function upsertDecodeAsRule(rules: readonly string[], rule: DecodeAsRule): string[] {
+  const kept = rules.filter((r) => {
+    const parsed = parseDecodeAsRule(r);
+    return !parsed || parsed.layer !== rule.layer || parsed.value !== rule.value;
+  });
+  return [...kept, formatDecodeAsRule(rule)];
+}
+
+/** Resolve `pcapViewer.dissectorsFolder` like the Lua scripts (relative to the workspace, ~ expanded). */
+export function resolveDissectorsFolder(folder: string | undefined, baseDir: string | undefined): string | undefined {
+  if (!folder || !folder.trim()) {
+    return undefined;
+  }
+  const expanded = expandHome(folder.trim());
+  return path.normalize(path.isAbsolute(expanded) ? expanded : baseDir ? path.join(baseDir, expanded) : expanded);
+}
+
 /** Most-recent-first history without duplicates, capped at `max`. */
 export function pushHistory(history: readonly string[], expr: string, max = 50): string[] {
   const trimmed = expr.trim();

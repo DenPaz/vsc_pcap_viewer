@@ -24,3 +24,28 @@ Feature: Dissector customisation
     Given the Lua dissector "backend/dissectors/missing.lua"
     When I open the capture "udp_custom.pcap"
     Then a warning mentions "Lua script not found"
+
+  @lua
+  Scenario: Lua syntax errors are reported by the dissector check
+    Given a Lua dissector with a syntax error
+    When I check the dissectors
+    Then a dissector error mentions "syntax error" for that script
+
+  Scenario: The dissector check reports missing scripts
+    Given the Lua dissector "backend/dissectors/missing.lua"
+    When I check the dissectors
+    Then there are no dissector errors
+    And a dissector warning mentions "Lua script not found"
+
+  Scenario: Decode As offers tshark's layer types
+    When I ask which layers can be decoded as another protocol
+    Then the choices include "tcp.port" described as "TCP port"
+    And the choices include "udp.port"
+
+  Scenario: Decode As offers the protocols valid for a layer
+    When I ask which protocols "tcp.port" can be decoded as
+    Then the choices include "http" described as "Hypertext Transfer Protocol"
+
+  Scenario: Decode As rejects an unknown layer
+    When I ask which protocols "no.such.layer" can be decoded as
+    Then the request fails with "unknown layer type"
