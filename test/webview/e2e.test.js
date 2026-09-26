@@ -297,10 +297,12 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     await page.fill("#filter-input", "tcp.len == 0");
     await page.click("#filter-saved");
     await page.click("#suggest .suggest-item:has-text('Save this filter')");
-    assert.deepEqual(hostLog.filter((m) => m.type === "saveFilter").pop(), { type: "saveFilter", expr: "tcp.len == 0" });
     await page.fill("#filter-input", "");
     await page.focus("#filter-input");
     await page.keyboard.press("ArrowDown"); // also opens the menu on an empty input
+    // The host answers asynchronously; the open menu refreshes when it does.
+    await page.waitForSelector("#suggest .suggest-item:has-text('Saved 1')");
+    assert.deepEqual(hostLog.filter((m) => m.type === "saveFilter").pop(), { type: "saveFilter", expr: "tcp.len == 0" });
     items = await suggestions();
     assert.ok(items.some((i) => i.label === "Saved 1" && i.desc === "tcp.len == 0"), JSON.stringify(items));
     await page.click("#suggest .suggest-item:has-text('Manage saved filters')");
