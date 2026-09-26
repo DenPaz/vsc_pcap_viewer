@@ -308,6 +308,30 @@ UI behaviour stays in the Chromium test (`test/webview/e2e.test.js`).
   transient. `@pcap` (package.json `chatParticipants`) is registered only if
   `vscode.chat.createChatParticipant` exists, and answers with validated filters
   plus `pcapViewer.applyFilter` buttons.
+- **Explaining packets** (`src/aiExplain.ts` pure, `FilterAssistant.explain` in
+  `src/ai.ts`, `src/commands/ai.ts`): the one AI feature that **sends packet
+  data**, so it is gated by `pcapViewer.ai.allowPacketData` (default false,
+  `scope: application` so a workspace can't enable it) with a one-time modal
+  consent (`PACKET_DATA_CONSENT`, which states the limits and is unit-tested
+  against them) that saves the setting. The row menu's *Ask Copilot About This
+  Packet…* / *…About N Selected Packets…* (shown only when `aiAvailable`) posts
+  `askAboutPackets`; the host runs `workbench.action.chat.open` with
+  `{query: "@pcap /explain 1-3 7"}` (`explainQuery`), falling back to a direct
+  `vscode.lm` request streamed into an untitled Markdown editor when the chat
+  API or command is missing or refuses. `/explain` (a `chatParticipants`
+  command) parses leading frames/ranges then a question (`parseExplainArgs`);
+  no frames = the selection. The backend supplies rows (`list_packets
+  {frames, inView: false}`: displayed or not) and `packet_detail` trees. The
+  prompt (`buildExplainPrompt`) holds the question, current filter, the row
+  (column titles) and each tree as indented labels, capped by `EXPLAIN_LIMITS`
+  (8 packets, 250 lines, depth 10, 160 chars/line, 48k chars overall: the tree
+  budget halves until it fits). **No raw bytes by default**: field `value`s are
+  never used, the hex dump only with `pcapViewer.ai.allowPacketBytes` (256
+  bytes/packet), and byte dumps in labels (`isByteDump`: hex strings of ≥ 8
+  bytes, payload fields) become "[N bytes not sent]". The prompt says the
+  data is untrusted. The answer streams as Markdown; ```filter blocks
+  (`extractFilters`) are validated with tshark and become *Apply filter*
+  buttons, plus *Go to packet N* for each packet explained.
 - **Navigation and customisation** (Wireshark-like; all over the *current view*,
   i.e. the filter and sort order, which only the backend knows in full):
   - *Find Packet* is backend `find_packet`. It turns the search into a display

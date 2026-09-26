@@ -38,6 +38,15 @@ by **tshark** (Wireshark's command-line tool), so results match Wireshark exactl
   Also available as *PCAP: Suggest Display Filter…* and as `@pcap` in the chat
   view, with an *Apply* button. The ✨ action only appears when a model is
   available; see the privacy note below.
+- **Ask Copilot about packets** (optional, off until you allow it): right-click
+  a packet for *Ask Copilot About This Packet…* (or *…About N Selected
+  Packets…*). It opens the chat view with `@pcap /explain 12 15-17`; you can
+  also type that yourself and add a question (`@pcap /explain 12 why the
+  reset?`). The answer streams in with *Go to packet* buttons and *Apply
+  filter* buttons for the display filters it suggests (checked with tshark).
+  Without the chat view, the answer opens in a Markdown editor instead. This
+  **sends packet data**, so the first time you are asked, and your choice is
+  saved in `pcapViewer.ai.allowPacketData`; see the privacy note below.
 - **Saved and recent filters** in the filter bar's ★ menu (or `↓` on an empty
   filter bar). Saved filters live in the `pcapViewer.savedFilters` setting, so
   they can be personal (user settings) or shared with a project (workspace settings).
@@ -157,6 +166,7 @@ tshark built with them (`tshark --version` lists "with Zstandard", "with LZ4").
 | PCAP: Clear Display Filter | | |
 | PCAP: Save Display Filter… | | Save the current filter under a name |
 | PCAP: Suggest Display Filter… | | Describe the packets; pick an AI-suggested, tshark-checked filter (also ✨ in the filter bar and `@pcap` in chat) |
+| PCAP: Ask Copilot About Selected Packets… | | Explain the selected packets in chat (`@pcap /explain`; sends packet data, asks first) |
 | PCAP: Saved Display Filters | | Apply or delete saved filters |
 | PCAP: Go to Packet | `Ctrl+G` (`Cmd+G`) | Jump to a frame number |
 | PCAP: Find Packet… / Find Next / Find Previous | `Ctrl+F`, `F3`, `Shift+F3` | Find by display filter, string or hex bytes |
@@ -208,7 +218,9 @@ the side bar or panel.
 | `pcapViewer.savedFilters` | Named filters: `{ "name": "Web", "filter": "http \|\| tls" }` |
 | `pcapViewer.coloringRules` | Coloring rules, first match wins: `{ "name": "DNS", "filter": "dns", "foreground": "#12272e", "background": "#c8e2ff" }` |
 | `pcapViewer.colorize` | Color the packet list (default `true`) |
-| `pcapViewer.ai.enabled` | Offer AI help for display filters when a language model is available (default `true`) |
+| `pcapViewer.ai.enabled` | Offer AI help when a language model is available (default `true`) |
+| `pcapViewer.ai.allowPacketData` | Let *Ask Copilot About This Packet…* / `@pcap /explain` send packet rows and dissection trees (default `false`; asked once; user settings only) |
+| `pcapViewer.ai.allowPacketBytes` | Also send raw bytes when explaining packets (default `false`; user settings only) |
 | `pcapViewer.maxCachedFrames` | Backend cache budget for filter results / sort orders |
 | `pcapViewer.requestTimeoutSeconds` | Timeout for quick requests (long ones are cancellable instead) |
 
@@ -397,7 +409,7 @@ See `CLAUDE.md` for architecture notes and design decisions.
 - Packet contents are untrusted: the webview inserts them only as text (never
   `innerHTML`) and runs under a strict Content-Security-Policy with a per-load nonce.
 - The webview can only call a fixed allow-list of backend methods.
-- **AI help sends no packet data.** A request to the language model contains
+- **AI filter help sends no packet data.** A request to the language model contains
   only your description, the current display filter, the names of the
   protocols in the capture (from the protocol hierarchy) and the names,
   types and descriptions of Wireshark fields that match words of your
@@ -405,6 +417,17 @@ See `CLAUDE.md` for architecture notes and design decisions.
   Requests go through VS Code's Language Model API, so VS Code asks for your
   consent first, and your Copilot plan and policies apply. Turn it off with
   `"pcapViewer.ai.enabled": false`.
+- **Explaining packets sends packet data, only if you allow it.** With
+  `pcapViewer.ai.allowPacketData` off (the default), *Ask Copilot About This
+  Packet…* and `@pcap /explain` first ask you. What is sent, for at most 8
+  packets at a time: their packet-list row (the columns you see) and their
+  dissection tree (field names and values, at most 250 lines each), plus your
+  question and the current display filter. Raw bytes (the hex dump, and
+  payload fields shown as bytes, which become "[N bytes not sent]") are not
+  sent unless `pcapViewer.ai.allowPacketBytes` is also on (then the first 256
+  bytes of each packet). Both settings can only be set in user settings, so a
+  workspace can't turn them on. The prompt tells the model that packet data is
+  untrusted.
 - CSV exports prefix cells that a spreadsheet would run as a formula (`=`,
   `+`, `@`, `-`…) with `'`, since packet text is attacker-controlled.
 

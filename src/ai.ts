@@ -1,13 +1,19 @@
 /**
- * Optional AI help for display filters through VS Code's Language Model API
- * (`vscode.lm`, stable since 1.90). Copilot's inline completions can't reach
- * the webview filter bar, so the extension host asks a chat model directly.
- * The prompt logic is in aiFilter.ts; only the request, the current filter,
- * protocol names and field names/descriptions are sent (never packet data).
+ * Optional AI help through VS Code's Language Model API (`vscode.lm`, stable
+ * since 1.90). Copilot's inline completions can't reach the webview filter
+ * bar, so the extension host asks a chat model directly.
+ *
+ * - Display filters (aiFilter.ts): only the request, the current filter,
+ *   protocol names and field names/descriptions are sent, never packet data.
+ * - Explaining packets (aiExplain.ts, `@pcap /explain`): sends the packets'
+ *   rows and dissection trees, so callers first get the user's consent
+ *   (`pcapViewer.ai.allowPacketData`, see commands/ai.ts). Raw bytes only
+ *   with `pcapViewer.ai.allowPacketBytes`.
  */
 import * as vscode from "vscode";
 import type { BackendClient } from "./backendClient";
 import { SECTION } from "./config";
+import { EXPLAIN_LIMITS, ExplainPacket, TreeNode, buildExplainPrompt, extractFilters } from "./aiExplain";
 import { ChatTurn, FieldInfo, FilterSuggestion, Rejected, extractKeywords, suggestFilters } from "./aiFilter";
 
 export interface SuggestOutcome {
@@ -21,6 +27,35 @@ export interface SuggestOutcome {
 
 const MODEL_SELECTOR: vscode.LanguageModelChatSelector = { vendor: "copilot" };
 const JUSTIFICATION = "PCAP Viewer turns your description into a Wireshark display filter. Only your request, the current filter and protocol/field names are sent.";
+const EXPLAIN_JUSTIFICATION = "PCAP Viewer explains the packets you picked. Their packet-list rows and dissection trees are sent.";
+
+/** What to explain (the caller has the user's consent to send packet data). */
+export interface ExplainRequest {
+  frames: number[];
+  question: string;
+  currentFilter: string;
+  /** Column title by field, for the packet-list row. */
+  titleOf: Record<string, string>;
+  customFields: string[];
+  includeBytes: boolean;
+}
+
+/** Where the answer goes while it streams (chat response, or an editor). */
+export interface ExplainSink {
+  progress(message: string): void;
+  markdown(text: string): void;
+}
+
+export interface ExplainOutcome {
+  /** The packets that were explained. */
+  frames: number[];
+  /** Display filters from the answer that tshark accepts. */
+  filters: string[];
+  /** Short user-facing note when nothing (or not everything) was explained. */
+  message?: string;
+  /** AI help can't be used right now (off, no model, no permission). */
+  unavailable?: boolean;
+}
 const FIELDS_PER_KEYWORD = 12;
 
 function lmApi(): typeof vscode.lm | undefined {
@@ -163,6 +198,84 @@ export class FilterAssistant implements vscode.Disposable {
       this.log.warn(`AI filter help failed: ${(err as Error)?.message ?? err}`);
     }
     return { suggestions: [], rejected: [], message: `AI request failed: ${(err as Error)?.message ?? err}` };
+  }
+
+  /**
+   * Explain packets: their rows (list_packets) and dissection trees
+   * (packet_detail) go into the prompt (aiExplain.ts caps them and leaves
+   * raw bytes out unless `includeBytes`), the answer streams into `sink`, and
+   * the ```filter blocks it contains are checked with tshark.
+   */
+  async explain(backend: BackendClient, req: ExplainRequest, sink: ExplainSink, token: vscode.CancellationToken): Promise<ExplainOutcome> {
+    const none = { frames: [], filters: [] };
+    if (!aiEnabled()) {
+      return { ...none, unavailable: true, message: "AI help is turned off (pcapViewer.ai.enabled)." };
+    }
+    const model = await this.model();
+    if (!model) {
+      return {
+        ...none,
+        unavailable: true,
+        message: this.blocked ? "AI help was not allowed to use the language model." : "No language model is available. Install and sign in to GitHub Copilot to use AI help.",
+      };
+    }
+    const included = req.frames.slice(0, EXPLAIN_LIMITS.maxPackets);
+    try {
+      sink.progress(`Reading packet${included.length === 1 ? "" : "s"} ${included.join(", ")}…`);
+      type Rows = { rows: { number: number; cells: string[] }[]; columns: string[] };
+      type Detail = { tree: TreeNode[]; sources: { name: string; hex: string }[] };
+      const [rows, details] = await untilCancelled(
+        Promise.all([
+          backend.request<Rows>("list_packets", { frames: included, inView: false, columns: req.customFields, timeFormat: "relative" }, { timeoutMs: 0 }),
+          Promise.all(included.map((number) => backend.request<Detail>("packet_detail", { number }, { timeoutMs: 0 }).catch(() => undefined))),
+        ]),
+        token,
+      );
+      const packets: ExplainPacket[] = [];
+      included.forEach((number, i) => {
+        const detail = details[i];
+        const row = rows.rows.find((r) => r.number === number);
+        if (detail && row) {
+          packets.push({ number, cells: row.cells, tree: detail.tree, hex: req.includeBytes ? detail.sources[0]?.hex : undefined });
+        }
+      });
+      if (!packets.length) {
+        return { ...none, message: `The capture has no packet ${req.frames.join(", ")}.` };
+      }
+      const prompt = buildExplainPrompt({
+        question: req.question,
+        currentFilter: req.currentFilter,
+        titles: rows.columns.map((f) => req.titleOf[f] ?? f),
+        packets,
+        omitted: req.frames.length - packets.length,
+        includeBytes: req.includeBytes,
+      });
+      sink.progress("Asking the language model…");
+      const response = await model.sendRequest([vscode.LanguageModelChatMessage.User(prompt)], { justification: EXPLAIN_JUSTIFICATION }, token);
+      let answer = "";
+      for await (const part of response.text) {
+        answer += part;
+        sink.markdown(part);
+      }
+      const filters: string[] = [];
+      for (const filter of extractFilters(answer)) {
+        const res = await backend.request<{ valid: boolean }>("validate_filter", { expr: filter }).catch(() => ({ valid: false }));
+        if (res.valid) {
+          filters.push(filter);
+        } else {
+          this.log.info(`AI explain: filter rejected by tshark: ${filter}`);
+        }
+      }
+      const skipped = req.frames.length - packets.length;
+      return {
+        frames: packets.map((p) => p.number),
+        filters,
+        message: skipped ? `${skipped} of the ${req.frames.length} packets were not included (at most ${EXPLAIN_LIMITS.maxPackets} at a time).` : undefined,
+      };
+    } catch (err) {
+      const failed = this.failure(err, token);
+      return { ...none, message: failed.message, unavailable: failed.unavailable };
+    }
   }
 
   /** Protocol names from the capture's protocol hierarchy (names only, no counts or data). */

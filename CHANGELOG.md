@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- *Ask Copilot About This Packet…* (and *…About N Selected Packets…*) in the
+  packet list, and `@pcap /explain <frames> [question]` in chat: the language
+  model explains the packets, with *Go to packet* and *Apply filter* buttons.
+  It sends the packets' rows and dissection trees (capped; no raw bytes unless
+  `pcapViewer.ai.allowPacketBytes`), only after a one-time consent that sets
+  `pcapViewer.ai.allowPacketData`.
+- Fixed: the busy bar kept spinning after sorting by a column.
+- Fixed: a notice (e.g. "Packet 4 is not displayed") shown right after applying a
+  filter could be wiped by the late validation of what was typed.
 - Cancelling works when tshark can't be killed: under Ubuntu's AppArmor tshark
   profile `kill()` is refused (`PermissionError`), which crashed cancellation
   and could leave tshark running. The backend now closes tshark's output

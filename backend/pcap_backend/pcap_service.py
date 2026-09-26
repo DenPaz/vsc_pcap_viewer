@@ -544,10 +544,11 @@ class PcapService:
 
         With ``frames`` (at most MAX_PAGE frame numbers) instead, the rows of
         those frames that are displayed, in view order (e.g. to copy a
-        multi-selection). ``columns`` is the full list of custom column fields
-        wanted after the seven base columns (default: the ones given to
-        ``open``). Fields not indexed yet are extracted with one extra tshark
-        pass, then cached.
+        multi-selection); with ``inView: false`` too, the rows of all of them
+        (in range) in the given order, displayed or not (e.g. to explain them).
+        ``columns`` is the full list of custom column fields wanted after the
+        seven base columns (default: the ones given to ``open``). Fields not
+        indexed yet are extracted with one extra tshark pass, then cached.
         """
         offset = param(params, "offset", int, 0)
         limit = param(params, "limit", int, 200)
@@ -565,7 +566,11 @@ class PcapService:
         self._ensure_columns(f, extra_fields, ctx)
         view_ordered = self._apply_sort(f, view, params, ctx)
 
-        if "frames" in params:
+        if "frames" in params and params.get("inView") is False:
+            n_frames = f.info.frames
+            asked = _frame_list(params, "frames", MAX_PAGE)
+            frames = [n for n in dict.fromkeys(asked) if 1 <= n <= n_frames]
+        elif "frames" in params:
             wanted = set(_frame_list(params, "frames", MAX_PAGE))
             frames = [n for n in view_ordered.frames() if n in wanted] if wanted else []
         else:

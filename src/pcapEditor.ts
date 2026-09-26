@@ -4,7 +4,7 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 import { BackendClient, ErrorCodes, RpcError, findPython } from "./backendClient";
 import { Settings, getSetting, readSettings, updateSetting } from "./config";
-import type { FilterAssistant, SuggestOutcome } from "./ai";
+import type { ExplainOutcome, ExplainSink, FilterAssistant, SuggestOutcome } from "./ai";
 import { ColoringResult, HostToWebview, OpenResult, ViewerCommand, WEBVIEW_RPC_METHODS, WebviewToHost } from "./messages";
 import { saveFilterInteractive, showSavedFilters } from "./commands/savedFilters";
 import { FollowPanel } from "./panels/followPanel";
@@ -402,6 +402,9 @@ export class PcapEditorSession {
       case "exportSelected":
         await vscode.commands.executeCommand("pcapViewer.exportSelected");
         return;
+      case "askAboutPackets":
+        await vscode.commands.executeCommand("pcapViewer.askAboutPackets", msg.frames.filter((n) => Number.isInteger(n)));
+        return;
       case "marks":
         this.markedCount = msg.count;
         return;
@@ -429,7 +432,7 @@ export class PcapEditorSession {
     const longRunning = method === "set_filter" || method === "list_packets" || method === "packet_detail";
     const pending = client.send(method, params ?? {}, {
       timeoutMs: longRunning ? 0 : undefined,
-      onProgress: (p) => this.post({ type: "progress", phase: p.phase, fraction: p.fraction, frames: p.frames, matched: p.matched }),
+      onProgress: (p) => this.post({ type: "progress", id, phase: p.phase, fraction: p.fraction, frames: p.frames, matched: p.matched }),
     });
     this.inflight.set(id, pending.id);
     try {
@@ -527,6 +530,31 @@ export class PcapEditorSession {
       this.post({ type: "aiAvailable", available: false });
     }
     return outcome;
+  }
+
+  /**
+   * Explain packets with the language model (ai.ts). Sends their rows and
+   * dissection trees: callers must have the user's consent (commands/ai.ts).
+   */
+  async explainPackets(frames: number[], question: string, includeBytes: boolean, sink: ExplainSink, token: vscode.CancellationToken): Promise<ExplainOutcome> {
+    const client = this.client;
+    if (!client?.running || !this.info) {
+      return { frames: [], filters: [], message: "Wait for the capture to finish loading." };
+    }
+    const custom = readSettings(this.uri).columns;
+    const titleOf: Record<string, string> = {};
+    for (const c of this.info.columns) {
+      titleOf[c.field] = c.title;
+    }
+    for (const c of custom) {
+      titleOf[c.field] = c.title || c.field;
+    }
+    return this.assistant.explain(
+      client,
+      { frames, question, currentFilter: this.filter, titleOf, customFields: custom.map((c) => c.field), includeBytes },
+      sink,
+      token,
+    );
   }
 
   private async aiSuggest(id: number, request: string): Promise<void> {
