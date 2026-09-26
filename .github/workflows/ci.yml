@@ -16,27 +16,35 @@ jobs:
           echo "wireshark-common wireshark-common/install-setuid boolean false" | sudo debconf-set-selections
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y tshark xvfb
+      # Python 3.14 on PATH for the extension (it looks for python3.14/python3);
+      # uv uses the same version from .python-version for the dev venv.
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
       - uses: astral-sh/setup-uv@v6
+      - uses: pnpm/action-setup@v4 # version from package.json "packageManager"
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
+          cache: pnpm
       - run: uv sync --locked
-      - run: npm ci
+      - run: pnpm install --frozen-lockfile
       - name: Lint
         run: |
-          npm run lint
+          pnpm run lint
           uv run ruff check
           uv run ruff format --check
           uv run mypy
       - name: Backend tests
         run: uv run pytest
       - name: Install Chromium for webview e2e
-        run: npx playwright-core install --with-deps chromium
+        run: pnpm exec playwright-core install --with-deps chromium
       - name: Unit + webview tests
-        run: npm run test:unit
+        run: pnpm run test:unit
       - name: VS Code smoke test
-        run: xvfb-run -a npm run test:extension
+        run: xvfb-run -a pnpm run test:extension
+      - name: Package
+        run: pnpm run package
 
   cross-platform:
     name: ${{ matrix.os }} (backend + unit)
@@ -47,14 +55,18 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version-file: .python-version
       - uses: astral-sh/setup-uv@v6
+      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
+          cache: pnpm
       - run: uv sync --locked
-      - run: npm ci
-      - run: npm run lint
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run lint
       # tshark-dependent tests skip when Wireshark is not installed.
       - run: uv run pytest
-      - run: npm run test:unit
+      - run: pnpm run test:unit
