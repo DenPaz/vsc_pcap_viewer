@@ -269,6 +269,7 @@
         },
         "pcapViewer.luaScripts": {
           "type": "array",
+          "scope": "resource",
           "items": {
             "type": "string"
           },
@@ -277,11 +278,13 @@
         },
         "pcapViewer.dissectorsFolder": {
           "type": "string",
+          "scope": "resource",
           "default": "",
           "markdownDescription": "Folder whose `*.lua` files are loaded as dissectors in addition to `#pcapViewer.luaScripts#`. Relative paths resolve against the first workspace folder."
         },
         "pcapViewer.decodeAs": {
           "type": "array",
+          "scope": "resource",
           "items": {
             "type": "string",
             "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.\\-]*(==|:)[^,\\s]+,[A-Za-z0-9_.\\-]+$",
@@ -292,6 +295,7 @@
         },
         "pcapViewer.prefs": {
           "type": "object",
+          "scope": "resource",
           "additionalProperties": {
             "type": [
               "string",

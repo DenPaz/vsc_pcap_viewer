@@ -1,6 +1,6 @@
 import * as assert from "node:assert/strict";
 import * as path from "node:path";
-import { normalizeColumns, normalizeSavedFilters, pushHistory, resolveLuaScripts, upsertSavedFilter } from "../../../src/settingsModel";
+import { configTargetFor, normalizeColumns, normalizeSavedFilters, pushHistory, resolveLuaScripts, upsertSavedFilter } from "../../../src/settingsModel";
 
 suite("settingsModel", () => {
   test("normalizeColumns accepts strings and objects, drops junk", () => {
@@ -66,5 +66,13 @@ suite("settingsModel", () => {
     ]);
     assert.deepEqual(upsertSavedFilter(list, { name: "C", filter: "c" }).map((f) => f.name), ["A", "B", "C"]);
     assert.equal(list[0].filter, "a"); // not mutated
+  });
+
+  test("configTargetFor writes where the setting is defined for the scope", () => {
+    assert.equal(configTargetFor({ workspaceFolderValue: ["a"], workspaceValue: ["b"] }, true), "workspaceFolder");
+    assert.equal(configTargetFor({ workspaceFolderValue: ["a"], workspaceValue: ["b"] }, false), "workspace");
+    assert.equal(configTargetFor({ workspaceValue: [] }, true), "workspace");
+    assert.equal(configTargetFor({}, true), "global");
+    assert.equal(configTargetFor(undefined, false), "global");
   });
 });
