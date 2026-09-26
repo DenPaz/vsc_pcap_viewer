@@ -117,8 +117,19 @@ def test_custom_columns(service: PcapService, fixtures: Path, ctx: RequestContex
     assert page["rows"][0]["cells"][-2:] == ["example.com", "0"]
     page = service.list_packets({"offset": 3, "limit": 1, "columns": []}, ctx)
     assert len(page["rows"][0]["cells"]) == 7
-    with pytest.raises(InvalidParamsError):
-        service.list_packets({"offset": 0, "limit": 1, "columns": ["bogus.field.x"]}, ctx)
+    # Unknown to tshark: blank cells and reported, not an error (and cached).
+    page = service.list_packets({"offset": 0, "limit": 1, "columns": ["bogus.field.x"]}, ctx)
+    assert page["rows"][0]["cells"][-1] == ""
+    assert page["rejectedColumns"] == ["bogus.field.x"]
+    page = service.list_packets(
+        {"offset": 0, "limit": 1, "columns": ["no.such.field", "tcp.stream"]}, ctx
+    )
+    assert page["rejectedColumns"] == ["no.such.field"]  # rejected at open, remembered
+    assert page["rows"][0]["cells"][-2:] == ["", "0"]
+    with pytest.raises(InvalidParamsError, match="unknown field"):
+        service.list_packets(
+            {"offset": 0, "limit": 1, "sort": {"field": "bogus.field.x", "desc": False}}, ctx
+        )
     with pytest.raises(InvalidParamsError):
         service.list_packets({"offset": 0, "limit": 1, "columns": ["-X"]}, ctx)
 

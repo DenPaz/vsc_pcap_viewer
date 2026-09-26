@@ -414,3 +414,9 @@ def field_count(world: World, count: int) -> None:
 def truncated(world: World) -> None:
     assert world.suggestions is not None
     assert world.suggestions["truncated"] is True
+
+
+@then(parsers.parse("the rejected columns are {columns}"))
+def rejected_columns(world: World, columns: str) -> None:
+    assert world.page is not None
+    assert world.page["rejectedColumns"] == items(columns)

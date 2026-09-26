@@ -211,3 +211,19 @@ suite("webview lib: autocomplete", () => {
     assert.equal(lib.friendlyType("FT_SOMETHING_NEW"), "something_new");
   });
 });
+
+suite("webview lib: columns", () => {
+  test("acceptedColumns keeps configured titles for accepted fields only", () => {
+    const configured = [
+      { field: "tcp.stream", title: "Stream" },
+      { field: "no.such.field", title: "Typo" },
+      { field: "http.host", title: "Host" },
+    ];
+    const accepted = [{ field: "tcp.stream" }, { field: "http.host" }];
+    assert.deepEqual(lib.acceptedColumns(configured, accepted), [
+      { field: "tcp.stream", title: "Stream" },
+      { field: "http.host", title: "Host" },
+    ]);
+    assert.deepEqual(lib.acceptedColumns(configured, []), []);
+  });
+});

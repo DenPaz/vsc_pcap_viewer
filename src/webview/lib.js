@@ -414,6 +414,18 @@
     return ft.replace(/^FT_/, "").toLowerCase();
   }
 
+  /**
+   * Custom columns to show: the configured ones (keeping their titles) that the
+   * backend accepted when opening the file. tshark drops unknown fields there.
+   *
+   * @param {{field: string, title: string}[]} configured
+   * @param {{field: string}[]} accepted column descriptors from `open` (base + custom)
+   */
+  function acceptedColumns(configured, accepted) {
+    const ok = new Set(accepted.map((c) => c.field));
+    return configured.filter((c) => ok.has(c.field));
+  }
+
   /** @param {string} hex */
   function hexToBytes(hex) {
     const out = new Uint8Array(hex.length >> 1);
@@ -467,6 +479,7 @@
     operatorSuggestions,
     applyCompletion,
     friendlyType,
+    acceptedColumns,
     hexToBytes,
     asciiChar,
     formatOffset,

@@ -134,6 +134,8 @@ class _Open:
     base: _Store
     extra: list[_Store] = field(default_factory=list)
     columns: list[str] = field(default_factory=list)  # custom column fields
+    # Fields tshark refused ("Some fields aren't valid"); never re-run tshark for them.
+    rejected: set[str] = field(default_factory=set)
 
 
 @dataclass(slots=True)
@@ -237,6 +239,7 @@ class PcapService:
         columns = [
             c for c in self._check_fields(str_list(params, "columns")) if c not in base_fields
         ]
+        requested_columns = list(columns)  # _index_pass removes fields tshark rejects
         tshark = self._require_tshark().with_options(options)
 
         with self._lock:
@@ -259,7 +262,14 @@ class PcapService:
             info.start_time = self._first_epoch(tshark, path, ctx.token)
 
         with self._lock:
-            self._file = _Open(path, tshark, info, base, columns=columns)
+            self._file = _Open(
+                path,
+                tshark,
+                info,
+                base,
+                columns=columns,
+                rejected={c for c in requested_columns if c not in columns},
+            )
             self._next_filter_id += 1
             everything = FrameIndex.all(info.frames)
             self._view = _View(self._next_filter_id, "", everything, None, everything)
@@ -501,6 +511,7 @@ class PcapService:
             view_ordered = view.ordered
 
         frames = view_ordered.slice(offset, limit)
+        rejected = [fld for fld in extra_fields if fld in f.rejected]
         n_base = len(BASE_COLUMNS)
         base_rows = f.base.rows.get_many(frames)
         extra_cols = [self._column_cells(f, fld, frames) for fld in extra_fields]
@@ -514,6 +525,8 @@ class PcapService:
             "total": len(view_ordered),
             "filterId": view.filter_id,
             "columns": [c.field for c in BASE_COLUMNS] + extra_fields,
+            # Unknown to tshark: their cells are blank; the UI should drop them.
+            "rejectedColumns": rejected,
         }
 
     def find_frame(self, params: dict[str, Any], _ctx: RequestContext) -> dict[str, Any]:
@@ -529,13 +542,18 @@ class PcapService:
         return None
 
     def _ensure_columns(self, f: _Open, fields: Sequence[str], ctx: RequestContext) -> None:
-        if all(self._locate(f, fld) is not None for fld in fields):
+        """Extract any not-yet-indexed fields (one tshark pass for all of them).
+
+        Fields tshark rejects are remembered in ``f.rejected`` instead of failing
+        the request, so one bad custom column can't break the packet list.
+        """
+        if all(fld in f.rejected or self._locate(f, fld) is not None for fld in fields):
             return
         with self._build_lock:
             self._build_columns(f, fields, ctx)
 
     def _build_columns(self, f: _Open, fields: Sequence[str], ctx: RequestContext) -> None:
-        missing = [fld for fld in fields if self._locate(f, fld) is None]
+        missing = [fld for fld in fields if fld not in f.rejected and self._locate(f, fld) is None]
         if not missing:
             return
         assert self._work_dir is not None
@@ -543,9 +561,7 @@ class PcapService:
         store = self._index_pass(f.tshark, f.path, self._work_dir, missing, f.info, ctx, base=False)
         with self._lock:
             f.extra.append(store)
-        dropped = [m for m in requested if m not in store.fields]
-        if dropped:
-            raise InvalidParamsError(f"unknown field(s): {', '.join(dropped)}")
+            f.rejected.update(m for m in requested if m not in store.fields)
 
     def _column_cells(self, f: _Open, fld: str, frames: Sequence[int]) -> list[str]:
         loc = self._locate(f, fld)
@@ -575,6 +591,8 @@ class PcapService:
         if cached is not None:
             return cached
         self._ensure_columns(f, [fld], ctx)
+        if fld in f.rejected:
+            raise InvalidParamsError(f"cannot sort by unknown field {fld!r}")
         ctx.progress({"phase": "sort", "fraction": None})
         values = self._sort_columns.get(fld)
         if values is None:

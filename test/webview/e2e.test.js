@@ -305,6 +305,20 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     assert.equal(hostLog.at(-1).type, "manageSavedFilters");
   });
 
+  test("an unknown custom column is dropped instead of breaking the list", async () => {
+    await post({
+      type: "columns",
+      columns: [
+        { field: "tcp.stream", title: "Stream" },
+        { field: "no.such.field", title: "Typo" },
+      ],
+    });
+    await page.waitForFunction(() => /no\.such\.field/.test(document.querySelector("#filter-error").textContent));
+    await page.waitForFunction(() => document.querySelectorAll("#list-rows .list-row:not(.loading)").length > 0);
+    const headers = await page.$$eval("#list-header > div", (cells) => cells.map((c) => c.firstChild.textContent));
+    assert.deepEqual(headers.slice(-2), ["Info", "Stream"]);
+  });
+
   test("no script errors or CSP violations", () => {
     assert.deepEqual(pageErrors, []);
     assert.deepEqual(cspViolations, []);

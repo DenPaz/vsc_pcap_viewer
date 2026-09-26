@@ -189,7 +189,8 @@
     state.info = msg.info;
     // The backend lists the seven base columns first, then any custom ones.
     state.baseColumns = msg.info.columns.slice(0, 7);
-    state.customColumns = msg.columns;
+    // Only columns tshark accepted; unknown fields were dropped (with a warning) at open.
+    state.customColumns = lib.acceptedColumns(msg.columns, msg.info.columns.slice(7));
     state.total = msg.info.frames;
     state.matchCount = msg.info.frames;
     state.filterId = msg.info.filterId;
@@ -314,6 +315,22 @@
     el.header.className = "list-row";
     // Row elements are rebuilt with the new column count on next render.
     el.rows.replaceChildren();
+  }
+
+  /**
+   * Remove custom columns tshark doesn't know (e.g. a typo added in settings
+   * while the file is open) and reload the visible pages without them.
+   * @param {string[]} fields
+   */
+  function dropColumns(fields) {
+    const bad = new Set(fields);
+    state.customColumns = state.customColumns.filter((c) => !bad.has(c.field));
+    if (state.sort && bad.has(state.sort.field)) {
+      state.sort = null;
+    }
+    showFilterError(`Unknown field${fields.length > 1 ? "s" : ""} removed from columns: ${fields.join(", ")}`, true);
+    rebuildColumns();
+    resetView({ keepSelection: true });
   }
 
   /** @param {string} field */
@@ -475,6 +492,10 @@
           state.inflightPages.delete(key);
           if (viewKey !== state.viewKey || res.filterId !== state.filterId) {
             return; // stale
+          }
+          if (res.rejectedColumns?.length) {
+            dropColumns(res.rejectedColumns);
+            return;
           }
           state.pages.set(key, res.rows);
           if (res.total !== state.total) {
