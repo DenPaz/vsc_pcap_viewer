@@ -227,6 +227,21 @@ pnpm install          # TypeScript toolchain, ESLint, mocha, vsce, Playwright
 pnpm run compile      # build the extension into out/
 ```
 
+The `Makefile` wraps these and the other tasks below (`make` lists them):
+
+| Command | Does |
+|---|---|
+| `make install` | `uv sync` and `pnpm install` |
+| `make update` | Upgrade all dev dependencies: `ncu -u` (within the limits in `.ncurc.cjs`), `pnpm install`, `uv lock --upgrade`, `uv sync` |
+| `make outdated` | Show available updates without changing anything |
+| `make compile` / `make watch` | Build the extension once / on every change |
+| `make lint` / `make format` | All linters / auto-fix what they can |
+| `make test` | Backend tests plus TS unit and webview tests (`make test-backend`, `make test-acceptance`, `make test-unit` for parts) |
+| `make test-extension` | VS Code smoke test (uses `xvfb-run` automatically when there's no display) |
+| `make check` | `lint` + `test`: what CI runs, except the smoke test |
+| `make fixtures` / `make perf` | Regenerate the test captures / benchmark the 1M-packet capture |
+| `make package` / `make clean` | Build the `.vsix` / remove build output and caches |
+
 ### 3. Run the extension
 
 **From source (for development).** Open the folder in VS Code with

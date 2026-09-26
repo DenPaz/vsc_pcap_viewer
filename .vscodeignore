@@ -16,6 +16,7 @@ test/**
 **/.pytest_cache/**
 eslint.config.mjs
 .ncurc.cjs
+Makefile
 tsconfig*.json
 pyproject.toml
 uv.lock
