@@ -1705,7 +1705,11 @@
       el.filterInput.classList.toggle("valid", res.valid);
       el.filterInput.classList.toggle("invalid", !res.valid);
       el.filterInput.title = res.valid ? "" : res.error;
-      showFilterError(res.valid ? "" : res.error);
+      if (!res.valid) {
+        showFilterError(res.error);
+      } else if (el.filterError.dataset.info !== "1") {
+        showFilterError(""); // a valid filter clears a validation error, not a notice
+      }
     } catch {
       /* validation is best-effort */
     }
@@ -1720,6 +1724,10 @@
     if (state.filterRequest !== null) {
       cancelRpc(state.filterRequest);
     }
+    // Applying validates too: drop the typing's pending validation, which would
+    // otherwise land later and clear whatever the message area shows by then.
+    window.clearTimeout(validateTimer);
+    state.validateSeq++;
     showFilterError("");
     const req = rpc("set_filter", { expr });
     state.filterRequest = req.id;

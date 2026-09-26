@@ -767,6 +767,20 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     await post({ type: "aiAvailable", available: false });
   });
 
+  test("a notice isn't wiped by the validation of a filter that was already applied", async () => {
+    await cleanView();
+    await rowEl(1).click();
+    await waitSelected(1);
+    // Enter right after typing: the typing's validation is still pending (250 ms).
+    await page.fill("#filter-input", "tcp");
+    await page.press("#filter-input", "Enter");
+    await command("nextMark"); // nothing is marked: a notice, right away
+    const notice = () => page.evaluate(() => document.getElementById("filter-error")?.textContent ?? "");
+    await page.waitForFunction(() => /No packets are marked/.test(document.getElementById("filter-error")?.textContent ?? ""));
+    await page.waitForTimeout(700); // past the stale validation
+    assert.match(await notice(), /No packets are marked/);
+  });
+
   test("the busy bar goes away once a sort is done", async () => {
     await cleanView();
     // First sort by Info: the backend builds the order and reports progress.
