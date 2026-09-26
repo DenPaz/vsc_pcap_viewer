@@ -43,6 +43,56 @@ class ToolError(Exception):
         self.returncode = returncode
 
 
+# --------------------------------------------------------------------------- sandboxing
+
+_PERMISSION_ERRORS = ("don't have permission", "Permission denied")
+APPARMOR_PROFILES = Path("/sys/kernel/security/apparmor/profiles")
+APPARMOR_TSHARK = Path("/etc/apparmor.d/tshark")
+
+APPARMOR_HINT = (
+    "tshark is confined by AppArmor (profile /etc/apparmor.d/tshark, shipped with Ubuntu's "
+    "apparmor package), which only lets it read and write files in /tmp and Wireshark's own "
+    "folders. Allow your captures with a local rule, then reload the profile:\n"
+    "  echo 'owner @{HOME}/** rw,' | sudo tee -a /etc/apparmor.d/local/tshark\n"
+    "  sudo apparmor_parser -r /etc/apparmor.d/tshark\n"
+    "Add a similar line for captures elsewhere (e.g. 'owner /media/** rw,')."
+)
+SNAP_HINT = (
+    "This tshark is a Snap package, which is sandboxed and has its own /tmp. Install tshark "
+    "from your distribution's packages instead (e.g. 'sudo apt install tshark') and set "
+    "'pcapViewer.tsharkPath' to it."
+)
+GENERIC_HINT = (
+    "tshark was not allowed to access a file that the extension can read. It may be "
+    "sandboxed (AppArmor, SELinux, Snap or Flatpak) or running as another user."
+)
+
+
+def apparmor_confines_tshark(
+    profiles: Path = APPARMOR_PROFILES, profile_file: Path = APPARMOR_TSHARK
+) -> bool:
+    """Whether AppArmor's ``tshark`` profile is loaded in enforce mode."""
+    try:
+        loaded = profiles.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        # securityfs isn't readable for everyone everywhere: fall back to the profile file.
+        return profile_file.is_file()
+    return any(line.startswith("tshark (enforce)") for line in loaded.split("\n"))
+
+
+def permission_hint(tshark: Path, stderr: str, profiles: Path = APPARMOR_PROFILES) -> str | None:
+    """Explain a tshark "permission" failure on a file the backend itself could access."""
+    if not any(p in stderr for p in _PERMISSION_ERRORS):
+        return None
+    if sys.platform.startswith("linux"):
+        if "/snap/" in str(tshark) or tshark.resolve().name == "snap":
+            return SNAP_HINT
+        # The AppArmor profile attaches to /usr/bin/tshark.
+        if tshark.resolve() == Path("/usr/bin/tshark") and apparmor_confines_tshark(profiles):
+            return APPARMOR_HINT
+    return GENERIC_HINT
+
+
 class ConfigError(ValueError):
     """Invalid user configuration (decode-as rule, preference key, script path...)."""
 
@@ -434,6 +484,14 @@ class Tshark:
             with _FOLDERS_LOCK:
                 _FOLDERS[self.path] = cached
         return cached
+
+    def error(self, stderr: str, returncode: int | None, default: str) -> ToolError:
+        """A ToolError for a failed run, explaining sandbox permission problems."""
+        message = stderr or default
+        hint = permission_hint(self.path, stderr)
+        if hint:
+            message = f"{message}\n\n{hint}"
+        return ToolError(message, stderr, returncode)
 
     def version(self) -> str:
         res = run([str(self.path), "--version"])

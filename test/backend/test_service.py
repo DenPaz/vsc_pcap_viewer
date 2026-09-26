@@ -1,6 +1,7 @@
 """Integration tests: PcapService against the fixture captures with a real tshark."""
 
 import os
+import sys
 import threading
 from pathlib import Path
 from typing import Any
@@ -16,7 +17,7 @@ from pcap_backend.pcap_service import (
     script_in_lua_message,
 )
 from pcap_backend.protocol import FilterError, InvalidParamsError, NotOpenError, RequestContext
-from pcap_backend.tshark import PROCESSES, ConfigError
+from pcap_backend.tshark import PROCESSES, ConfigError, ToolError
 
 pytestmark = pytest.mark.tshark
 
@@ -350,3 +351,44 @@ def test_script_in_lua_message_handles_shortened_paths() -> None:
     assert script_in_lua_message(["/a/x.lua", "/b/x.lua"], "Lua: ...x.lua:1: e") is None
     win = [r"C:\\Users\\me\\diss\\proto.lua"]
     assert script_in_lua_message(win, r"Lua: syntax error: ...me\\diss\\proto.lua:3: e") == win[0]
+
+
+@pytest.mark.skipif(
+    not hasattr(os, "geteuid") or os.geteuid() == 0, reason="root can read any file"
+)
+def test_open_unreadable_file_is_explained(
+    service: PcapService, fixtures: Path, ctx: RequestContext, tmp_path: Path
+) -> None:
+    capture = tmp_path / "secret.pcap"
+    capture.write_bytes((fixtures / "http.pcap").read_bytes())
+    capture.chmod(0)
+    try:
+        with pytest.raises(InvalidParamsError, match="permission denied"):
+            service.open({"path": str(capture)}, ctx)
+    finally:
+        capture.chmod(0o600)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="uses a shebang script as fake tshark")
+def test_sandboxed_tshark_failure_is_explained(
+    service: PcapService, fixtures: Path, ctx: RequestContext, tmp_path: Path
+) -> None:
+    """A tshark that may not read the capture (e.g. AppArmor) gets an actionable error."""
+    fake = tmp_path / "tshark"
+    fake.write_text(
+        f"#!{sys.executable}\n"
+        "import sys\n"
+        "if '--version' in sys.argv:\n"
+        "    print('TShark (Wireshark) 4.6.4.')\n"
+        "    sys.exit(0)\n"
+        "path = sys.argv[sys.argv.index('-r') + 1]\n"
+        "sys.stderr.write(f'tshark: You don\\'t have permission to read the file \"{path}\".\\n')\n"
+        "sys.exit(2)\n"
+    )
+    fake.chmod(0o755)
+    service.initialize({"tsharkPath": str(fake)}, ctx)
+    with pytest.raises(ToolError) as info:
+        service.open({"path": str(fixtures / "http.pcap")}, ctx)
+    message = str(info.value)
+    assert "You don't have permission to read the file" in message
+    assert "sandboxed" in message  # the hint follows tshark's own message
