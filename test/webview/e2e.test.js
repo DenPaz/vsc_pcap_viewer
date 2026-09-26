@@ -19,6 +19,9 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
   // What the stand-in host received / keeps (mirrors pcapEditor.ts behaviour).
   const hostLog = [];
   let savedFilters = [{ name: "Web", filter: "http" }];
+  // Stubbed "✨ Ask AI" answer (the real host validates suggestions with tshark first); null = never answer.
+  /** @type {{suggestions: {filter: string, explanation: string}[], message?: string} | null} */
+  let aiReply = null;
   const cspViolations = [];
   const pageErrors = [];
 
@@ -66,6 +69,13 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
         hostLog.push(msg);
         savedFilters = [...savedFilters, { name: `Saved ${savedFilters.length}`, filter: msg.expr }];
         await post({ type: "savedFilters", savedFilters });
+      } else if (msg.type === "aiSuggest") {
+        hostLog.push(msg);
+        if (aiReply) {
+          await post({ type: "aiSuggestions", id: msg.id, ...aiReply });
+        }
+      } else if (msg.type === "aiCancel") {
+        hostLog.push(msg);
       } else if (["manageSavedFilters", "filterApplied", "selection", "follow", "decodeAs", "colorize", "exportBytes"].includes(msg.type)) {
         hostLog.push(msg);
       } else if (msg.type === "rpc") {
@@ -314,6 +324,72 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
 
     await post({ type: "coloring", coloringId: 0, rules: [] }); // coloring turned off
     await page.waitForFunction(() => !document.querySelector("#list-rows .list-row.colored"));
+  });
+
+  const statusText = () => page.textContent("#status-left");
+
+  test("✨ Ask AI: describe the packets, pick a suggestion, Enter applies it", async () => {
+    await page.click("#filter-clear");
+    await page.waitForFunction(() => !/Displayed/.test(document.querySelector("#status-left").textContent));
+    assert.ok(await page.$eval("#filter-ai", (b) => b.classList.contains("hidden")), "hidden until the host says a model is available");
+    await post({ type: "aiAvailable", available: true });
+    await page.waitForSelector("#filter-ai:not(.hidden)");
+
+    await page.fill("#filter-input", "tcp"); // typed, not applied (its completions close in ask mode)
+    aiReply = {
+      suggestions: [
+        { filter: "tcp.flags.syn == 1", explanation: "Connection attempts: packets with the SYN flag set" },
+        { filter: "tcp.flags.reset == 1", explanation: "Connections that were reset" },
+      ],
+    };
+    await page.click("#filter-ai");
+    assert.equal(await page.inputValue("#filter-input"), "");
+    assert.match(await page.getAttribute("#filter-input", "placeholder"), /Describe the packets/);
+    await page.type("#filter-input", "tcp connection attempts");
+    await new Promise((r) => setTimeout(r, 150));
+    assert.ok(await page.$eval("#suggest", (s) => s.classList.contains("hidden")), "no field completions while describing");
+    await page.press("#filter-input", "Enter");
+    await page.waitForSelector("#suggest .suggest-item.kind-ai");
+    assert.equal(hostLog.filter((m) => m.type === "aiSuggest").at(-1).request, "tcp connection attempts");
+    const items = await page.$$eval("#suggest .suggest-item", (els) => els.map((e) => [e.querySelector(".suggest-label").textContent, e.querySelector(".suggest-desc").textContent]));
+    assert.deepEqual(items, [
+      ["tcp.flags.syn == 1", "Connection attempts: packets with the SYN flag set"],
+      ["tcp.flags.reset == 1", "Connections that were reset"],
+    ]);
+    assert.equal(await page.inputValue("#filter-input"), "tcp", "the filter text is back while choosing");
+
+    await page.click("#suggest .suggest-item >> nth=0");
+    assert.equal(await page.inputValue("#filter-input"), "tcp.flags.syn == 1");
+    assert.doesNotMatch(await statusText(), /Displayed/, "picking a suggestion doesn't apply it");
+    await page.press("#filter-input", "Enter");
+    await page.waitForFunction(() => /Displayed: 2/.test(document.querySelector("#status-left").textContent)); // SYN and SYN/ACK
+  });
+
+  test("✨ Ask AI: Esc cancels, no suggestions show a message, the action hides when unavailable", async () => {
+    aiReply = null; // the host doesn't answer: the request stays in flight
+    await page.click("#filter-ai");
+    await page.type("#filter-input", "something slow");
+    await page.press("#filter-input", "Enter");
+    await page.waitForFunction(() => /Asking the language model/.test(document.querySelector("#filter-error").textContent));
+    await page.press("#filter-input", "Escape");
+    const asked = hostLog.filter((m) => m.type === "aiSuggest").at(-1);
+    assert.deepEqual(hostLog.at(-1), { type: "aiCancel", id: asked.id });
+    assert.equal(await page.inputValue("#filter-input"), "tcp.flags.syn == 1", "Esc restores the filter");
+    assert.ok(await page.$eval("#filter-error", (e) => e.classList.contains("hidden")));
+
+    aiReply = { suggestions: [], message: "The language model didn't come up with a valid display filter." };
+    await page.click("#filter-ai");
+    await page.type("#filter-input", "gibberish");
+    await page.press("#filter-input", "Enter");
+    await page.waitForFunction(() => /didn't come up with a valid display filter/.test(document.querySelector("#filter-error").textContent));
+    assert.equal(await page.inputValue("#filter-input"), "tcp.flags.syn == 1");
+
+    await post({ type: "aiAvailable", available: false });
+    await page.waitForSelector("#filter-ai.hidden", { state: "attached" });
+    // Autocomplete works as before.
+    await page.fill("#filter-input", "");
+    await page.type("#filter-input", "tcp.fla");
+    await page.waitForSelector("#suggest .suggest-item.kind-field");
   });
 
   test("no script errors or CSP violations", () => {

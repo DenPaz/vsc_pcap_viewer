@@ -248,6 +248,27 @@ UI behaviour stays in the Chromium test (`test/webview/e2e.test.js`).
   a destination that is the open capture is refused (tshark would truncate
   its input). CSV cells that look like formulas get a `'` prefix (packet text
   is untrusted); JSON is keyed by column id with numbers for numeric columns.
+- **AI filter help** (`src/aiFilter.ts` pure, `src/ai.ts` host, `src/commands/ai.ts`):
+  Copilot's inline completions can't reach the webview, so the host uses
+  `vscode.lm.selectChatModels({ vendor: "copilot" })` (stable in 1.90 = our
+  `engines.vscode`; 1.90 has no system role, so the instructions are the first
+  user turn). The prompt holds only the request, the current filter, protocol
+  names (`stats phs` column 0, cached per backend) and field names/types/
+  descriptions (`field_index` prefix search on the request's keywords).
+  **Never packet data.** The model answers JSON `[{filter, explanation}]` (the
+  parser tolerates fences, prose and `{suggestions: [...]}`, max 3). Every filter
+  goes through the backend's `validate_filter`; if none is valid, there is one
+  retry that includes tshark's errors. Webview: ✨ puts the filter bar in "ask
+  mode" (the input holds a description: no validation or completions; Enter
+  asks, Esc cancels with `aiCancel`), and results reuse the suggestion dropdown
+  (mode `ai`). Picking one fills the bar without applying it. The host posts
+  `aiAvailable` after init and on `lm.onDidChangeChatModels` or setting changes.
+  No model, consent denied (`LanguageModelError` NoPermissions/Blocked) or
+  `pcapViewer.ai.enabled: false` hide the action. A failed or cancelled request
+  only shows a short message; the action stays, since those are usually
+  transient. `@pcap` (package.json `chatParticipants`) is registered only if
+  `vscode.chat.createChatParticipant` exists, and answers with validated filters
+  plus `pcapViewer.applyFilter` buttons.
 - **Protocol**: JSON-RPC 2.0 framing (`"jsonrpc": "2.0"`), LSP-style
   cancellation code -32800; app codes in `backend/pcap_backend/protocol.py`
   and mirrored in `src/backendClient.ts` (`ErrorCodes`; -32011 unsupported format). `open` returns the

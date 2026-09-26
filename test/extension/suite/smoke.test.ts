@@ -80,6 +80,7 @@ suite("PCAP Viewer smoke test", () => {
       "pcapViewer.colorizeWithFilter",
       "pcapViewer.toggleColoring",
       "pcapViewer.manageColoringRules",
+      "pcapViewer.suggestFilter",
     ]) {
       assert.ok(commands.includes(id), `${id} is registered`);
     }

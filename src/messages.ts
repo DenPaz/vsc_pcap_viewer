@@ -49,6 +49,9 @@ export type WebviewToHost =
   | { type: "follow"; proto: "tcp" | "udp" | "tls" | "http"; frame: number }
   | { type: "manageSavedFilters" }
   | { type: "colorize"; filter: string }
+  /** "✨ Ask AI": natural-language description of the wanted packets. */
+  | { type: "aiSuggest"; id: number; request: string }
+  | { type: "aiCancel"; id: number }
   | { type: "exportBytes"; frame: number }
   | { type: "copy"; text: string }
   | { type: "showLog" };
@@ -76,7 +79,11 @@ export type HostToWebview =
   | { type: "history"; history: string[] }
   | { type: "savedFilters"; savedFilters: SavedFilter[] }
   /** Row `color` values of list_packets results with this `coloringId` index `rules`. */
-  | { type: "coloring"; coloringId: number; rules: { name: string; foreground: string; background: string }[] };
+  | { type: "coloring"; coloringId: number; rules: { name: string; foreground: string; background: string }[] }
+  /** Whether to show the "✨ Ask AI" action (a language model is available and allowed). */
+  | { type: "aiAvailable"; available: boolean }
+  /** Validated suggestions for an aiSuggest request (empty with a `message` when there are none). */
+  | { type: "aiSuggestions"; id: number; suggestions: { filter: string; explanation: string }[]; message?: string };
 
 /** Result of the backend's set_coloring. */
 export interface ColoringResult {

@@ -32,6 +32,8 @@
     filterCancel: $("filter-cancel"),
     filterError: $("filter-error"),
     filterSaved: $("filter-saved"),
+    filterAi: $("filter-ai"),
+    filterField: $("filter-field"),
     suggest: $("suggest"),
     busyBar: $("busy-bar"),
     busyFill: $("busy-bar-fill"),
@@ -98,6 +100,8 @@
     /** @type {number | null} */ elapsedMs: null,
     /** Palette for rows whose list_packets result had this coloringId. */
     /** @type {{id: number, rules: ColorRule[]} | null} */ coloring: null,
+    /** "✨ Ask AI": available (host says a model can be used), asking (the input holds a description). */
+    ai: { available: false, asking: false, /** @type {number | null} */ request: null, savedText: "", /** @type {string[]} */ savedClasses: [] },
   };
 
   // ------------------------------------------------------------------ rpc
@@ -193,11 +197,18 @@
         state.coloring = msg.rules.length ? { id: msg.coloringId, rules: msg.rules } : null;
         refreshRows();
         break;
+      case "aiAvailable":
+        setAiAvailable(!!msg.available);
+        break;
+      case "aiSuggestions":
+        onAiSuggestions(msg);
+        break;
     }
   });
 
   /** @param {any} msg */
   function onInit(msg) {
+    leaveAskMode(true);
     state.info = msg.info;
     // The backend lists the seven base columns first, then any custom ones.
     state.baseColumns = msg.info.columns.slice(0, 7);
@@ -1303,10 +1314,15 @@
   }
 
   el.filterApply.addEventListener("click", () => {
+    if (state.ai.asking) {
+      askAi();
+      return;
+    }
     hideSuggest();
     void applyFilter(el.filterInput.value);
   });
   el.filterClear.addEventListener("click", () => {
+    leaveAskMode(false);
     el.filterInput.value = "";
     el.filterInput.classList.remove("valid", "invalid");
     hideSuggest();
@@ -1330,12 +1346,14 @@
    * - "complete": field/protocol/operator completions for the word at the cursor
    * - "saved": saved filters, recent filters and "Save current filter…"
    *
-   * @typedef {{label: string, detail?: string, desc?: string, kind: "field" | "protocol" | "operator" | "saved" | "recent" | "action", value: string}} SuggestItem
+   * - "ai": validated suggestions from "✨ Ask AI" (picking one fills the filter bar)
+   *
+   * @typedef {{label: string, detail?: string, desc?: string, kind: "field" | "protocol" | "operator" | "saved" | "recent" | "action" | "ai", value: string}} SuggestItem
    */
   const suggest = {
     /** @type {SuggestItem[]} */ items: [],
     index: -1,
-    /** @type {"complete" | "saved" | null} */ mode: null,
+    /** @type {"complete" | "saved" | "ai" | null} */ mode: null,
     /** @type {{kind: string, prefix: string, start: number, end: number} | null} */ ctx: null,
     seq: 0,
     /** @type {number | null} */ request: null,
@@ -1431,7 +1449,7 @@
 
   /**
    * @param {SuggestItem[]} items
-   * @param {"complete" | "saved"} mode
+   * @param {"complete" | "saved" | "ai"} mode
    * @param {any} ctx
    */
   function renderSuggest(items, mode, ctx) {
@@ -1522,6 +1540,14 @@
       void applyFilter(item.value);
       return;
     }
+    if (mode === "ai") {
+      // Into the filter bar, not applied: Enter applies as usual.
+      el.filterInput.value = item.value;
+      el.filterInput.focus();
+      el.filterInput.setSelectionRange(item.value.length, item.value.length);
+      validateSoon();
+      return;
+    }
     const res = lib.applyCompletion(el.filterInput.value, ctx, item.value, item.kind === "operator");
     el.filterInput.value = res.text;
     el.filterInput.focus();
@@ -1530,10 +1556,24 @@
   }
 
   el.filterInput.addEventListener("input", () => {
+    if (state.ai.asking) {
+      return; // a description, not a filter: no validation or completions
+    }
     validateSoon();
     suggestSoon(false);
   });
   el.filterInput.addEventListener("keydown", (e) => {
+    if (state.ai.asking) {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        askAi();
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        leaveAskMode(true);
+        showFilterError("");
+      }
+      return;
+    }
     const open = suggest.items.length > 0;
     if (e.key === " " && e.ctrlKey) {
       e.preventDefault();
@@ -1590,6 +1630,103 @@
     } else {
       el.filterInput.focus();
       showSavedMenu();
+    }
+  });
+
+  // ------------------------------------------------------------------ AI filter help
+
+  // "✨ Ask AI": the filter bar temporarily takes a description; the host asks
+  // the language model, validates the answers with tshark and sends back only
+  // valid filters, shown in the suggestion dropdown.
+  const FILTER_PLACEHOLDER = el.filterInput.placeholder;
+  const AI_PLACEHOLDER = "Describe the packets you want, e.g. DNS queries that got no answer (Enter to ask, Esc to cancel)";
+  let aiSeq = 0;
+
+  /** @param {boolean} available */
+  function setAiAvailable(available) {
+    state.ai.available = available;
+    el.filterAi.classList.toggle("hidden", !available);
+    if (!available && state.ai.asking) {
+      leaveAskMode(true);
+    }
+  }
+
+  function enterAskMode() {
+    if (!state.ai.available || state.ai.asking) {
+      return;
+    }
+    hideSuggest();
+    showFilterError("");
+    state.ai.asking = true;
+    state.ai.savedText = el.filterInput.value;
+    state.ai.savedClasses = ["valid", "invalid"].filter((c) => el.filterInput.classList.contains(c));
+    el.filterInput.classList.remove("valid", "invalid");
+    el.filterInput.value = "";
+    el.filterInput.placeholder = AI_PLACEHOLDER;
+    el.filterField.classList.add("ai-mode");
+    el.filterAi.setAttribute("aria-pressed", "true");
+    el.filterInput.focus();
+  }
+
+  /** @param {boolean} restore put the filter text (and its validity) back */
+  function leaveAskMode(restore) {
+    if (!state.ai.asking) {
+      return;
+    }
+    if (state.ai.request !== null) {
+      vscode.postMessage({ type: "aiCancel", id: state.ai.request });
+      state.ai.request = null;
+    }
+    state.ai.asking = false;
+    el.filterField.classList.remove("ai-mode", "ai-busy");
+    el.filterAi.setAttribute("aria-pressed", "false");
+    el.filterInput.placeholder = FILTER_PLACEHOLDER;
+    el.filterInput.readOnly = false;
+    if (restore) {
+      el.filterInput.value = state.ai.savedText;
+      el.filterInput.classList.add(...state.ai.savedClasses);
+    }
+  }
+
+  function askAi() {
+    const request = el.filterInput.value.trim();
+    if (!request || state.ai.request !== null) {
+      return;
+    }
+    state.ai.request = ++aiSeq;
+    el.filterField.classList.add("ai-busy");
+    el.filterInput.readOnly = true;
+    showFilterError("Asking the language model… (Esc to cancel)", true);
+    vscode.postMessage({ type: "aiSuggest", id: state.ai.request, request });
+  }
+
+  /** @param {{id: number, suggestions: {filter: string, explanation: string}[], message?: string}} msg */
+  function onAiSuggestions(msg) {
+    if (msg.id !== state.ai.request) {
+      return; // cancelled or superseded
+    }
+    state.ai.request = null;
+    leaveAskMode(true);
+    el.filterInput.focus();
+    if (!msg.suggestions.length) {
+      showFilterError(msg.message || "No display filter suggestions.", true);
+      return;
+    }
+    showFilterError("");
+    renderSuggest(
+      msg.suggestions.map((s) => ({ label: s.filter, detail: "AI", desc: s.explanation, kind: "ai", value: s.filter })),
+      "ai",
+      null,
+    );
+  }
+
+  el.filterAi.addEventListener("mousedown", (e) => e.preventDefault());
+  el.filterAi.addEventListener("click", () => {
+    if (state.ai.asking) {
+      leaveAskMode(true);
+      showFilterError("");
+    } else {
+      enterAskMode();
     }
   });
 
