@@ -59,11 +59,12 @@ def test_missing_lua_script_warns(tmp_path: Path) -> None:
 
 
 def test_argv_is_a_list_with_options_first() -> None:
-    t = Tshark(Path("/opt/tshark"), DissectionOptions.from_params(decode_as=["udp.port==1,dns"]))
+    exe = Path("/opt/tshark")  # str() is platform-specific (backslashes on Windows)
+    t = Tshark(exe, DissectionOptions.from_params(decode_as=["udp.port==1,dns"]))
     assert t.argv("-T", "pdml", capture="C:\\My Captures\\a b.pcap") == [
-        "/opt/tshark", "-d", "udp.port==1,dns", "-r", "C:\\My Captures\\a b.pcap", "-T", "pdml",
+        str(exe), "-d", "udp.port==1,dns", "-r", "C:\\My Captures\\a b.pcap", "-T", "pdml",
     ]  # fmt: skip
-    assert t.argv("-G", "fields", dissect=False) == ["/opt/tshark", "-G", "fields"]
+    assert t.argv("-G", "fields", dissect=False) == [str(exe), "-G", "fields"]
 
 
 def test_clean_stderr_drops_root_warning() -> None:
