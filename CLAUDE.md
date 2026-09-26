@@ -69,7 +69,8 @@ The `Makefile` wraps all of these (`make` lists the targets; `make check` = lint
   `coloring.py` (coloring rules → `colorfilters`), `navigation.py` (find
   expressions, hex parsing, frame-set filters, time formatting), `export.py` (destination
   checks, atomic output, CSV/JSON writers), `protocol.py` (error codes,
-  request context), `cancellation.py`.
+  request context), `cancellation.py`, `procs.py` (stopping children, also
+  when the kill is refused), `sandbox.py` (AppArmor/Snap detection and hints).
 - `backend/dissectors/example.lua` sample dissector (UDP/9999).
 - `test/backend` pytest; `test/backend/acceptance` pytest-bdd scenarios
   (`features/*.feature` = brief's acceptance criteria against the backend,
@@ -90,6 +91,9 @@ The `Makefile` wraps all of these (`make` lists the targets; `make check` = lint
 - Kill child processes on close: `BackendClient.stop()` closes stdin → backend
   cancels requests and kills tshark (`PROCESSES.kill_all`) → SIGTERM/SIGKILL
   (tree kill with `taskkill /T` on Windows) as fallbacks.
+- Never call `proc.kill()`/`terminate()` directly: use `procs.kill_process`
+  (never raises) and `procs.stop_process` (reaps, closes pipes). A sandbox can
+  refuse the signal (see *Sandboxed tshark*).
 
 ## Writing acceptance scenarios
 
@@ -150,6 +154,10 @@ UI behaviour stays in the Chromium test (`test/webview/e2e.test.js`).
   a field's `pos` refers to. Heuristic in `pdml.py`: top-level items after a
   `*.segments`/`*.fragments` node belong to the next `-x` source. Documented
   limitation for exotic multi-source packets (e.g. decrypted TLS + decompression).
+  The first source is always named "Frame" (`pdml.FRAME_SOURCE`): tshark 4.6
+  prints "Packet (N bytes):" where 4.2/4.4 print "Frame", and single-source
+  packets print no header at all, so the byte tabs and *Export Packet Bytes*
+  read the same across versions.
 - **Filter validation**: compile against a shared 24-byte empty pcap
   (`tshark -Y expr -r empty.pcap`), with the same `-X/-d/-o` options so Lua
   fields validate.
@@ -181,6 +189,22 @@ UI behaviour stays in the Chromium test (`test/webview/e2e.test.js`).
   (AppArmor profile loaded in enforce mode → local-rule instructions; Snap →
   use the distro package; else generic). Temp files (empty capture, coloring
   config) live in `/tmp`, which the profile allows.
+  The profile also only lets tshark receive signals from itself, so killing a
+  cancelled tshark raises `PermissionError` (kernel log: `operation="signal"
+  … peer="vscode"`, VS Code's own profile, or `peer="unconfined"` in the
+  tests). Hints and detection live in `sandbox.py`: `APPARMOR_HINT` suggests
+  `owner @{HOME}/** rw,`, `signal (receive) peer=unconfined,` and
+  `signal (receive) peer=vscode,` plus `apparmor_parser -r`, both for tshark
+  permission errors and (`kill_denied_hint`) for a refused kill, logged once
+  to stderr. Cancellation never depends on the signal (`procs.py`): the thread
+  that owns a process polls (`communicate(timeout)` in `run()`, a selector on
+  stdout in `stream_lines` on POSIX; Windows reads blocking, its kill always
+  works), and `stop_process` closes our end of stdout when the kill is refused,
+  so tshark's next write fails (the kernel's SIGPIPE isn't mediated) and it
+  exits. Anything still running after `STOP_TIMEOUT` goes to a reaper thread
+  (it stays in `PROCESSES` until reaped), so no pipe or `Popen` is leaked
+  (pytest turns ResourceWarning into errors). `test_procs.py` fakes the
+  refusal with real children whose `kill` raises `PermissionError`.
 - **Lua as root**: tshark refuses Lua when run as root; the backend warns. The
   Lua integration test skips as root (CI runs as a normal user).
 - **Field catalogue** (`fields.py`): `tshark -G fields` must be tshark's
@@ -213,7 +237,9 @@ UI behaviour stays in the Chromium test (`test/webview/e2e.test.js`).
 - **Statistics** parse tshark's human-readable `-z` reports into one generic
   table model (`stats.py`: columns, rows with optional `filter`/`frame`/`depth`),
   rendered by one panel (`src/webview/stats.js`). Sizes like "12 kB" are
-  converted with SI units. Expert info joins `-z expert` (severity/group/
+  converted with SI units. tshark 4.6 nests the protocol hierarchy one level
+  deeper (dns at depth 4, 4.2: 3), so tests check the parent row ("dns one
+  level below udp"), never absolute depths. Expert info joins `-z expert` (severity/group/
   protocol/count) with a `-T fields -e _ws.expert` pass (aggregator `\x1e`)
   to get frame numbers. Rows are matched by regex because multi-word groups
   ("Response code") overflow tshark's fixed-width column. The display-filter
@@ -314,9 +340,13 @@ UI behaviour stays in the Chromium test (`test/webview/e2e.test.js`).
     (`selectedIndex`/`selectedFrame`, the detail pane). Click selects one row;
     Ctrl/Cmd+click toggles; Shift+click and Shift+arrows select from the
     anchor (the last plain or Ctrl click) and take frames for rows not loaded
-    from `view_frames {offset, limit}`. Ctrl+A is a package.json keybinding
-    (VS Code's own webview select-all would otherwise run too) that selects
-    the view via `view_frames`, or the text of a focused input. Limits:
+    from `view_frames {offset, limit}`. Ctrl+A can't be a keybinding: VS Code's
+    webview doesn't stop the key, so Chromium selects the page's text, and
+    VS Code's Select All runs `execCommand("selectAll")` in the webview (found
+    in real VS Code; a package.json binding didn't win). Both fire a cancelable
+    `selectstart` on `<body>` (in an input the target is the input): the
+    webview cancels it and selects the view via `view_frames` (deduplicated,
+    since both can arrive). *PCAP: Select All Packets* has no key. Limits:
     `MAX_SELECTION` (1M frames) and 100k rows per copy. A new filter drops the
     selection; a new sort keeps it (same frames). Right-click inside the
     selection keeps it and the menu acts on all of it: mark (Ctrl+M: mark all

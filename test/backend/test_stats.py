@@ -98,6 +98,50 @@ def test_parse_protocol_hierarchy_percentages() -> None:
     assert table.rows[3]["filter"] == "arp"
 
 
+# test/fixtures/mixed.pcapng, as tshark 4.2.2 prints it.
+PHS_42 = """\
+eth                                      frames:26 bytes:2141
+  arp                                    frames:1 bytes:42
+  ip                                     frames:25 bytes:2099
+    icmp                                 frames:2 bytes:92
+    udp                                  frames:12 bytes:832
+      dns                                frames:6 bytes:502
+      data                               frames:6 bytes:330
+    tcp                                  frames:11 bytes:1175
+"""
+# tshark 4.6 puts everything below eth one level deeper (dns at depth 4). The
+# name of the extra level is not what matters here; "ethertype" stands in for it.
+PHS_46 = """\
+eth                                      frames:26 bytes:2141
+  ethertype                              frames:26 bytes:2141
+    arp                                  frames:1 bytes:42
+    ip                                   frames:25 bytes:2099
+      icmp                               frames:2 bytes:92
+      udp                                frames:12 bytes:832
+        dns                              frames:6 bytes:502
+        data                             frames:6 bytes:330
+      tcp                                frames:11 bytes:1175
+"""
+
+
+def _parent(rows: list[dict[str, object]], name: str) -> tuple[object, object, object]:
+    i = next(i for i, r in enumerate(rows) if r["cells"][0] == name)  # type: ignore[index]
+    depth = rows[i]["depth"]
+    up = next(r for r in reversed(rows[:i]) if r["depth"] < depth)  # type: ignore[operator]
+    return up["cells"][0], depth, rows[i]["cells"][2]  # type: ignore[index]
+
+
+def test_protocol_hierarchy_depth_differs_by_version_parent_does_not() -> None:
+    old = stats.parse_protocol_hierarchy(PHS_42).rows
+    new = stats.parse_protocol_hierarchy(PHS_46).rows
+    assert [r["cells"][0] for r in new][:3] == ["eth", "ethertype", "arp"]
+    assert _parent(old, "dns") == ("udp", 3, 6)
+    assert _parent(new, "dns") == ("udp", 4, 6)
+    # Percentages only count the top level, so the extra level changes nothing.
+    assert [r["cells"][1] for r in old if r["cells"][0] == "dns"] == [23.1]
+    assert [r["cells"][1] for r in new if r["cells"][0] == "dns"] == [23.1]
+
+
 IO = """\
 | Interval     | Frames | Bytes |
 |-------------------------------|

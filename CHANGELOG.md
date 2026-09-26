@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Cancelling works when tshark can't be killed: under Ubuntu's AppArmor tshark
+  profile `kill()` is refused (`PermissionError`), which crashed cancellation
+  and could leave tshark running. The backend now closes tshark's output
+  instead, reaps it, logs one warning, and the AppArmor hint suggests the
+  `signal (receive) peer=unconfined,` / `peer=vscode,` local rules.
+- tshark 4.6: the packet's own bytes are still labelled "Frame" (4.6 says
+  "Packet"); tests no longer depend on the protocol hierarchy's depth.
+- Ctrl+A in the packet list now selects every packet in VS Code (it used to
+  select the page's text).
 - Multi-select in the packet list: Shift+click / Shift+arrows ranges,
   Ctrl/Cmd+click, Ctrl+A, Esc. Mark, copy (rows or frame numbers) and export
   the selection (*Export Selected Packets…*; the CSV/JSON packet list can

@@ -6,18 +6,22 @@ string.
 """
 
 import atexit
+import contextlib
 import os
 import re
+import selectors
 import shutil
 import subprocess
 import sys
 import tempfile
 import threading
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Generator, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import procs
 from .cancellation import CancelledError, CancelToken
+from .sandbox import permission_hint
 
 IS_WINDOWS = sys.platform == "win32"
 
@@ -41,56 +45,6 @@ class ToolError(Exception):
         super().__init__(message)
         self.stderr = stderr
         self.returncode = returncode
-
-
-# --------------------------------------------------------------------------- sandboxing
-
-_PERMISSION_ERRORS = ("don't have permission", "Permission denied")
-APPARMOR_PROFILES = Path("/sys/kernel/security/apparmor/profiles")
-APPARMOR_TSHARK = Path("/etc/apparmor.d/tshark")
-
-APPARMOR_HINT = (
-    "tshark is confined by AppArmor (profile /etc/apparmor.d/tshark, shipped with Ubuntu's "
-    "apparmor package), which only lets it read and write files in /tmp and Wireshark's own "
-    "folders. Allow your captures with a local rule, then reload the profile:\n"
-    "  echo 'owner @{HOME}/** rw,' | sudo tee -a /etc/apparmor.d/local/tshark\n"
-    "  sudo apparmor_parser -r /etc/apparmor.d/tshark\n"
-    "Add a similar line for captures elsewhere (e.g. 'owner /media/** rw,')."
-)
-SNAP_HINT = (
-    "This tshark is a Snap package, which is sandboxed and has its own /tmp. Install tshark "
-    "from your distribution's packages instead (e.g. 'sudo apt install tshark') and set "
-    "'pcapViewer.tsharkPath' to it."
-)
-GENERIC_HINT = (
-    "tshark was not allowed to access a file that the extension can read. It may be "
-    "sandboxed (AppArmor, SELinux, Snap or Flatpak) or running as another user."
-)
-
-
-def apparmor_confines_tshark(
-    profiles: Path = APPARMOR_PROFILES, profile_file: Path = APPARMOR_TSHARK
-) -> bool:
-    """Whether AppArmor's ``tshark`` profile is loaded in enforce mode."""
-    try:
-        loaded = profiles.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        # securityfs isn't readable for everyone everywhere: fall back to the profile file.
-        return profile_file.is_file()
-    return any(line.startswith("tshark (enforce)") for line in loaded.split("\n"))
-
-
-def permission_hint(tshark: Path, stderr: str, profiles: Path = APPARMOR_PROFILES) -> str | None:
-    """Explain a tshark "permission" failure on a file the backend itself could access."""
-    if not any(p in stderr for p in _PERMISSION_ERRORS):
-        return None
-    if sys.platform.startswith("linux"):
-        if "/snap/" in str(tshark) or tshark.resolve().name == "snap":
-            return SNAP_HINT
-        # The AppArmor profile attaches to /usr/bin/tshark.
-        if tshark.resolve() == Path("/usr/bin/tshark") and apparmor_confines_tshark(profiles):
-            return APPARMOR_HINT
-    return GENERIC_HINT
 
 
 class ConfigError(ValueError):
@@ -242,16 +196,15 @@ class ProcessRegistry:
             self._procs.discard(proc)
 
     def kill_all(self) -> None:
+        """Kill every child (shutdown). A child that can't be signalled (AppArmor) is
+        stopped by the thread that owns it, which closes its pipes and reaps it."""
         with self._lock:
-            procs = list(self._procs)
+            live = list(self._procs)
             self._procs.clear()
-        for proc in procs:
-            if proc.poll() is None:
-                try:
-                    proc.kill()
+        for proc in live:
+            if procs.kill_process(proc):
+                with contextlib.suppress(subprocess.TimeoutExpired):
                     proc.wait(timeout=2)
-                except OSError, subprocess.TimeoutExpired:
-                    pass
 
     def __len__(self) -> int:
         with self._lock:
@@ -323,15 +276,26 @@ def run(
     try:
         token.register(proc)  # kills the process if the token is already cancelled
         try:
-            out, err = proc.communicate()
+            # Poll so cancellation works even if the kill is refused (AppArmor):
+            # communicate() can be retried after a timeout without losing output.
+            while True:
+                try:
+                    out, err = proc.communicate(timeout=procs.POLL_INTERVAL)
+                    break
+                except subprocess.TimeoutExpired:
+                    token.raise_if_cancelled()
         finally:
             token.unregister(proc)
     finally:
-        PROCESSES.discard(proc)
         if proc.returncode is None:
-            # Cancelled before communicate(): reap the killed process, close its pipes.
-            proc.kill()
-            proc.communicate()
+            # Cancelled: stop it, reap it and close its pipes.
+            if procs.kill_process(proc):
+                proc.communicate()
+                PROCESSES.discard(proc)
+            else:
+                procs.stop_process(proc, on_reaped=lambda: PROCESSES.discard(proc))
+        else:
+            PROCESSES.discard(proc)
     token.raise_if_cancelled()
     return RunResult(proc.returncode, out, clean_stderr(err.decode("utf-8", "replace")))
 
@@ -353,27 +317,58 @@ def stream_lines(
     PROCESSES.add(proc)
     collector = _StderrCollector(proc)
     collector.start()
+    lines = _lines(proc, token)
     try:
         token.register(proc)
-        assert proc.stdout is not None
-        for raw in proc.stdout:
+        for line in lines:
             result.lines += 1
-            yield raw.rstrip(b"\r\n")
-        proc.wait()
+            yield line
+        if not token.cancelled:
+            proc.wait()  # end of output: let it exit on its own (keeps its exit code)
     finally:
+        lines.close()
         token.unregister(proc)
-        if proc.poll() is None:
-            proc.kill()
-            proc.wait()
-        PROCESSES.discard(proc)
-        collector.join(timeout=5)
-        for pipe in (proc.stdout, proc.stderr):
-            if pipe is not None:
-                pipe.close()
+        # Stops it if it's still running (an early exit or a cancel), reaps it or
+        # leaves it to a reaper if it can't be stopped, and closes its pipes.
+        procs.stop_process(proc, [collector], on_reaped=lambda: PROCESSES.discard(proc))
         result.returncode = proc.returncode
         result.stderr = collector.text
     if token.cancelled:
         raise CancelledError("request cancelled")
+
+
+def _lines(proc: subprocess.Popen[bytes], token: CancelToken) -> Generator[bytes]:
+    """stdout lines without the line break; stops early once ``token`` is cancelled.
+
+    On POSIX the pipe is polled, so a cancel is noticed within POLL_INTERVAL
+    even when the child writes nothing and can't be killed (AppArmor). Windows
+    can't poll pipes, but there the kill always works and ends the read.
+    """
+    assert proc.stdout is not None
+    if IS_WINDOWS:
+        for raw in proc.stdout:
+            if token.cancelled:
+                return
+            yield raw.rstrip(b"\r\n")
+        return
+    fd = proc.stdout.fileno()
+    pending = b""
+    with selectors.DefaultSelector() as sel:
+        sel.register(fd, selectors.EVENT_READ)
+        while not token.cancelled:
+            if not sel.select(procs.POLL_INTERVAL):
+                continue
+            chunk = os.read(fd, 1 << 16)
+            if not chunk:
+                break
+            lines = (pending + chunk).split(b"\n")
+            pending = lines.pop()
+            for line in lines:
+                yield line.removesuffix(b"\r")
+        else:
+            return
+    if pending:
+        yield pending.removesuffix(b"\r")
 
 
 # --------------------------------------------------------------------------- tshark

@@ -121,6 +121,17 @@ def test_parse_hexdump_multi_source() -> None:
     assert frame.to_json()["hex"].endswith("4142")
 
 
+# tshark 4.6 names the packet's own bytes "Packet" (4.2/4.4: "Frame").
+HEX_MULTI_46 = HEX_MULTI.replace("Frame (18 bytes):", "Packet (18 bytes):")
+
+
+def test_parse_hexdump_first_source_is_frame_in_every_version() -> None:
+    assert HEX_MULTI_46.startswith("Packet (18 bytes):\n")
+    for text in (HEX_MULTI, HEX_MULTI_46):
+        assert [s.name for s in parse_hexdump(text)] == ["Frame", "Reassembled TCP"]
+    assert parse_hexdump(HEX_MULTI_46)[0].data == parse_hexdump(HEX_MULTI)[0].data
+
+
 def test_parse_hexdump_ignores_ascii_lookalikes() -> None:
     text = "0000  41 42 43 44 45 46 30 31 32 33 34 35 36 37 38 39   ABCDEF0123456789\n"
     (src,) = parse_hexdump(text)
