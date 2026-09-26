@@ -9,8 +9,6 @@ The committed fixtures are deterministic (fixed timestamps, addresses and
 sequence numbers) so that tests can assert on exact values.
 """
 
-from __future__ import annotations
-
 import argparse
 import random
 import struct

@@ -86,6 +86,90 @@ input:focus-visible {
   border-bottom: 1px solid var(--border);
 }
 
+#filter-field {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+}
+
+button.icon {
+  padding: 3px 7px;
+  color: var(--vscode-icon-foreground, var(--vscode-foreground));
+  background: transparent;
+  border-color: var(--vscode-input-border, transparent);
+}
+
+button.icon:hover {
+  background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground));
+}
+
+/* ------------------------------------------------------------------ suggestions */
+
+.suggest {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  right: 0;
+  z-index: 15;
+  max-height: 320px;
+  overflow-y: auto;
+  color: var(--vscode-editorSuggestWidget-foreground, var(--vscode-foreground));
+  background: var(--vscode-editorSuggestWidget-background, var(--vscode-editorWidget-background));
+  border: 1px solid var(--vscode-editorSuggestWidget-border, var(--border));
+  box-shadow: 0 2px 8px var(--vscode-widget-shadow, rgba(0, 0, 0, 0.36));
+  font-size: var(--mono-size);
+}
+
+.suggest-item {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 2px 8px;
+  line-height: 20px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.suggest-item.active,
+.suggest-item:hover {
+  color: var(--vscode-editorSuggestWidget-selectedForeground, var(--vscode-list-activeSelectionForeground));
+  background: var(--vscode-editorSuggestWidget-selectedBackground, var(--vscode-list-activeSelectionBackground));
+}
+
+.suggest-label {
+  font-family: var(--mono);
+  flex: none;
+}
+
+.suggest-item.kind-protocol .suggest-label {
+  font-weight: 600;
+}
+
+.suggest-item.kind-action .suggest-label {
+  font-family: var(--vscode-font-family);
+  font-style: italic;
+}
+
+.suggest-detail {
+  flex: none;
+  color: var(--vscode-editorSuggestWidget-highlightForeground, var(--vscode-textLink-foreground));
+  font-size: 0.9em;
+}
+
+.suggest-desc {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--vscode-descriptionForeground);
+}
+
+.suggest-item.kind-saved .suggest-desc,
+.suggest-item.kind-action .suggest-desc {
+  font-family: var(--mono);
+}
+
 #filter-input {
   flex: 1;
   min-width: 0;

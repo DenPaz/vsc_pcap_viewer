@@ -226,6 +226,206 @@
     return path.map((n) => n.name || n.label.replace(/\d+/g, "#")).join("/");
   }
 
+  // ---------------------------------------------------------------- autocomplete
+
+  /** Comparison operators offered after a field name. */
+  const COMPARISON_OPERATORS = [
+    { label: "==", desc: "Equal" },
+    { label: "!=", desc: "Not equal" },
+    { label: ">", desc: "Greater than" },
+    { label: "<", desc: "Less than" },
+    { label: ">=", desc: "Greater than or equal" },
+    { label: "<=", desc: "Less than or equal" },
+    { label: "contains", desc: "Protocol, field or slice contains a value" },
+    { label: "matches", desc: "Matches a case-insensitive Perl-compatible regular expression" },
+    { label: "in", desc: "Membership, e.g. tcp.port in {80 443 8080}" },
+    { label: "&&", desc: "Logical AND (the field just has to be present)" },
+    { label: "||", desc: "Logical OR (the field just has to be present)" },
+    { label: "and", desc: "Logical AND (the field just has to be present)" },
+    { label: "or", desc: "Logical OR (the field just has to be present)" },
+  ];
+
+  /** Logical operators offered after a complete comparison. */
+  const LOGICAL_OPERATORS = [
+    { label: "&&", desc: "Logical AND" },
+    { label: "||", desc: "Logical OR" },
+    { label: "and", desc: "Logical AND" },
+    { label: "or", desc: "Logical OR" },
+    { label: "^^", desc: "Logical XOR" },
+  ];
+
+  const WORD_CHARS = /[A-Za-z0-9_.-]/;
+  const LOGICAL_WORDS = new Set(["and", "or", "not", "xor", "&&", "||", "!", "^^", "("]);
+  const COMPARISON_WORDS = new Set(["==", "!=", ">", "<", ">=", "<=", "eq", "ne", "gt", "lt", "ge", "le", "contains", "matches", "in", "~", "===", "!==", "~="]);
+
+  /**
+   * Work out what can be completed at `cursor` in a display filter.
+   *
+   * - `field`: the cursor is in (or starting) a field/protocol name
+   * - `operator`: after a field name, a comparison operator is expected
+   * - `logical`: after a complete comparison, `&&`/`||` is expected
+   * - `none`: inside a string, a value, or anything else
+   *
+   * `start`/`end` delimit the word under the cursor, which a completion replaces.
+   *
+   * @param {string} text @param {number} cursor
+   * @returns {{kind: "field" | "operator" | "logical" | "none", prefix: string, start: number, end: number}}
+   */
+  function completionContext(text, cursor) {
+    const before = text.slice(0, cursor);
+    let start = cursor;
+    while (start > 0 && WORD_CHARS.test(before[start - 1])) {
+      start--;
+    }
+    let end = cursor;
+    while (end < text.length && WORD_CHARS.test(text[end])) {
+      end++;
+    }
+    const prefix = text.slice(start, cursor);
+    const none = { kind: /** @type {const} */ ("none"), prefix, start, end };
+    if (insideString(before)) {
+      return none;
+    }
+    const prev = previousToken(before.slice(0, start));
+    const prevIsValue = prev !== null && (/^["\d]/.test(prev) || prev === ")" || prev.startsWith("{") || /^[0-9a-f]{2}([:.-][0-9a-f]{2})+$/i.test(prev));
+    if (prev === null || LOGICAL_WORDS.has(prev.toLowerCase())) {
+      // Start of an expression: a field or protocol name, unless a value is being typed.
+      return /^\d/.test(prefix) ? none : { kind: "field", prefix, start, end };
+    }
+    if (COMPARISON_WORDS.has(prev.toLowerCase())) {
+      return none; // a value is expected here
+    }
+    if (prevIsValue) {
+      return { kind: "logical", prefix, start, end };
+    }
+    // The previous token is a field name (or a value typed without quotes, e.g. an IP
+    // or a bare string, which looks the same): after a field an operator is expected;
+    // after `field op value` a logical operator is.
+    const prevPrev = previousToken(before.slice(0, before.slice(0, start).trimEnd().length - prev.length));
+    if (prevPrev !== null && COMPARISON_WORDS.has(prevPrev.toLowerCase())) {
+      return { kind: "logical", prefix, start, end };
+    }
+    return { kind: "operator", prefix, start, end };
+  }
+
+  /** @param {string} before */
+  function insideString(before) {
+    let inside = false;
+    for (let i = 0; i < before.length; i++) {
+      if (before[i] === "\\" && inside) {
+        i++;
+      } else if (before[i] === '"') {
+        inside = !inside;
+      }
+    }
+    return inside;
+  }
+
+  /**
+   * Last complete token of `text` (ignoring trailing spaces), or null at the start.
+   * @param {string} text
+   * @returns {string | null}
+   */
+  function previousToken(text) {
+    const t = text.trimEnd();
+    if (!t) {
+      return null;
+    }
+    const m = t.match(/("(?:[^"\\]|\\.)*"|\{[^}]*\}|===|!==|==|!=|>=|<=|~=|&&|\|\||\^\^|[<>!~()]|[A-Za-z0-9_.:-]+)$/);
+    return m ? m[1] : t.slice(-1);
+  }
+
+  /**
+   * Static operator suggestions for an `operator`/`logical` context.
+   * @param {"operator" | "logical"} kind @param {string} prefix
+   */
+  function operatorSuggestions(kind, prefix) {
+    const list = kind === "operator" ? COMPARISON_OPERATORS : LOGICAL_OPERATORS;
+    const p = prefix.toLowerCase();
+    return list.filter((o) => o.label.startsWith(p));
+  }
+
+  /**
+   * Insert a completion, replacing the word under the cursor.
+   * Operators get spaces around them; field names are inserted as-is.
+   *
+   * @param {string} text
+   * @param {{start: number, end: number}} ctx
+   * @param {string} insert
+   * @param {boolean} isOperator
+   * @returns {{text: string, cursor: number}}
+   */
+  function applyCompletion(text, ctx, insert, isOperator) {
+    let head = text.slice(0, ctx.start);
+    let tail = text.slice(ctx.end);
+    let piece = insert;
+    if (isOperator) {
+      if (head && !/\s$/.test(head)) {
+        head += " ";
+      }
+      piece += " ";
+      tail = tail.replace(/^\s+/, "");
+    }
+    return { text: head + piece + tail, cursor: head.length + piece.length };
+  }
+
+  const FT_NAMES = {
+    FT_NONE: "label",
+    FT_PROTOCOL: "protocol",
+    FT_BOOLEAN: "boolean",
+    FT_CHAR: "character",
+    FT_STRING: "character string",
+    FT_STRINGZ: "character string",
+    FT_STRINGZPAD: "character string",
+    FT_STRINGZTRUNC: "character string",
+    FT_UINT_STRING: "character string",
+    FT_BYTES: "byte sequence",
+    FT_UINT_BYTES: "byte sequence",
+    FT_ETHER: "Ethernet (MAC) address",
+    FT_IPv4: "IPv4 address",
+    FT_IPv6: "IPv6 address",
+    FT_IPXNET: "IPX network number",
+    FT_FCWWN: "Fibre Channel WWN",
+    FT_ABSOLUTE_TIME: "date and time",
+    FT_RELATIVE_TIME: "time offset",
+    FT_FRAMENUM: "frame number",
+    FT_FLOAT: "floating point (single precision)",
+    FT_DOUBLE: "floating point (double precision)",
+    FT_GUID: "GUID",
+    FT_OID: "ASN.1 object identifier",
+    FT_REL_OID: "ASN.1 relative object identifier",
+    FT_EUI64: "EUI64 address",
+    FT_AX25: "AX.25 address",
+    FT_VINES: "VINES address",
+    FT_SYSTEM_ID: "OSI System-ID",
+    FT_PCRE: "regular expression",
+  };
+
+  /** Human-readable name for a tshark field type (FT_UINT16 -> "unsigned integer, 2 bytes"). @param {string} ft */
+  function friendlyType(ft) {
+    if (ft in FT_NAMES) {
+      return FT_NAMES[/** @type {keyof typeof FT_NAMES} */ (ft)];
+    }
+    const m = ft.match(/^FT_(U?)INT(\d+)$/);
+    if (m) {
+      const bytes = Number(m[2]) / 8;
+      return `${m[1] ? "unsigned" : "signed"} integer, ${bytes} byte${bytes === 1 ? "" : "s"}`;
+    }
+    return ft.replace(/^FT_/, "").toLowerCase();
+  }
+
+  /**
+   * Custom columns to show: the configured ones (keeping their titles) that the
+   * backend accepted when opening the file. tshark drops unknown fields there.
+   *
+   * @param {{field: string, title: string}[]} configured
+   * @param {{field: string}[]} accepted column descriptors from `open` (base + custom)
+   */
+  function acceptedColumns(configured, accepted) {
+    const ok = new Set(accepted.map((c) => c.field));
+    return configured.filter((c) => ok.has(c.field));
+  }
+
   /** @param {string} hex */
   function hexToBytes(hex) {
     const out = new Uint8Array(hex.length >> 1);
@@ -275,6 +475,11 @@
     combineFilter,
     findNodeForByte,
     nodeKey,
+    completionContext,
+    operatorSuggestions,
+    applyCompletion,
+    friendlyType,
+    acceptedColumns,
     hexToBytes,
     asciiChar,
     formatOffset,

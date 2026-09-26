@@ -16,10 +16,15 @@
 <body>
   <div id="app">
     <div id="filter-bar" role="search">
-      <label for="filter-input" class="visually-hidden">Display filter</label>
-      <input id="filter-input" type="text" spellcheck="false" autocomplete="off"
-             list="filter-history" placeholder="Apply a display filter … (Enter to apply)">
-      <datalist id="filter-history"></datalist>
+      <button id="filter-saved" type="button" class="icon" title="Saved and recent filters"
+              aria-haspopup="listbox" aria-controls="suggest">★</button>
+      <div id="filter-field">
+        <label for="filter-input" class="visually-hidden">Display filter</label>
+        <input id="filter-input" type="text" spellcheck="false" autocomplete="off"
+               role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="suggest"
+               placeholder="Apply a display filter … (Enter to apply, Ctrl+Space for suggestions)">
+        <div id="suggest" class="suggest hidden" role="listbox"></div>
+      </div>
       <button id="filter-apply" type="button" title="Apply display filter (Enter)">Apply</button>
       <button id="filter-clear" type="button" title="Clear display filter">Clear</button>
       <button id="filter-cancel" type="button" class="hidden" title="Cancel filtering">Cancel</button>

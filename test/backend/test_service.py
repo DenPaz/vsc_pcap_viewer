@@ -1,7 +1,5 @@
 """Integration tests: PcapService against the fixture captures with a real tshark."""
 
-from __future__ import annotations
-
 import os
 import threading
 from pathlib import Path
@@ -117,8 +115,19 @@ def test_custom_columns(service: PcapService, fixtures: Path, ctx: RequestContex
     assert page["rows"][0]["cells"][-2:] == ["example.com", "0"]
     page = service.list_packets({"offset": 3, "limit": 1, "columns": []}, ctx)
     assert len(page["rows"][0]["cells"]) == 7
-    with pytest.raises(InvalidParamsError):
-        service.list_packets({"offset": 0, "limit": 1, "columns": ["bogus.field.x"]}, ctx)
+    # Unknown to tshark: blank cells and reported, not an error (and cached).
+    page = service.list_packets({"offset": 0, "limit": 1, "columns": ["bogus.field.x"]}, ctx)
+    assert page["rows"][0]["cells"][-1] == ""
+    assert page["rejectedColumns"] == ["bogus.field.x"]
+    page = service.list_packets(
+        {"offset": 0, "limit": 1, "columns": ["no.such.field", "tcp.stream"]}, ctx
+    )
+    assert page["rejectedColumns"] == ["no.such.field"]  # rejected at open, remembered
+    assert page["rows"][0]["cells"][-2:] == ["", "0"]
+    with pytest.raises(InvalidParamsError, match="unknown field"):
+        service.list_packets(
+            {"offset": 0, "limit": 1, "sort": {"field": "bogus.field.x", "desc": False}}, ctx
+        )
     with pytest.raises(InvalidParamsError):
         service.list_packets({"offset": 0, "limit": 1, "columns": ["-X"]}, ctx)
 
@@ -255,6 +264,7 @@ def test_superseded_filter(opened: PcapService, ctx: RequestContext) -> None:
 
 
 def test_field_index(service: PcapService, ctx: RequestContext) -> None:
+    assert service.field_index({"limit": 0}, ctx)["fields"] == []  # cache warm-up
     res = service.field_index({"prefix": "ip.sr", "limit": 10}, ctx)
     names = [f["name"] for f in res["fields"]]
     assert "ip.src" in names

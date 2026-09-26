@@ -16,7 +16,14 @@ by **tshark** (Wireshark's command-line tool), so results match Wireshark exactl
   any tshark field (`tcp.stream`, `http.host`, …) via `pcapViewer.columns` or
   *PCAP: Manage Custom Columns*.
 - **Display filters** with Wireshark syntax, validated as you type (green/red),
-  inline error messages, and a history dropdown. Invalid filters are never applied.
+  with inline error messages. Invalid filters are never applied.
+- **Filter autocomplete** from tshark's own field list (including fields added
+  by your Lua dissectors): field and protocol names with their type and
+  description, then operators (`==`, `contains`, `&&`, …) after a field.
+  `Tab` takes the first suggestion, `↑`/`↓` + `Enter` pick one, `Ctrl+Space` asks explicitly.
+- **Saved and recent filters** in the filter bar's ★ menu (or `↓` on an empty
+  filter bar). Saved filters live in the `pcapViewer.savedFilters` setting, so
+  they can be personal (user settings) or shared with a project (workspace settings).
 - **Packet details**: collapsible protocol tree and hex/ASCII pane with
   **two-way highlighting** (select a field to see its bytes; click a byte to
   find its field), including reassembled data (e.g. HTTP over several TCP segments).
@@ -34,9 +41,9 @@ by **tshark** (Wireshark's command-line tool), so results match Wireshark exactl
   manager (`apt install tshark`, `brew install wireshark`,
   `choco install wireshark`). tshark is found on `PATH` or in the default
   install locations; otherwise set `pcapViewer.tsharkPath`.
-- **Python 3.10+** on `PATH` (`python3`, `python` or `py -3`), or set
-  `pcapViewer.pythonPath`. The backend only uses the standard library, so no
-  packages need to be installed.
+- **Python 3.14+** on `PATH` (`python3.14`, `python3`, `python`, or
+  `py -3.14` / `py -3` on Windows), or set `pcapViewer.pythonPath`. The backend
+  only uses the standard library, so no packages need to be installed.
 
 ## Usage
 
@@ -47,6 +54,8 @@ Open any `.pcap`, `.pcapng` or `.cap` file. It opens in the PCAP Viewer by defau
 |---|---|---|
 | PCAP: Apply Display Filter | `Ctrl+/` (`Cmd+/`) | Prompt for a filter (validated) and apply it |
 | PCAP: Clear Display Filter | | |
+| PCAP: Save Display Filter… | | Save the current filter under a name |
+| PCAP: Saved Display Filters | | Apply or delete saved filters |
 | PCAP: Go to Packet | `Ctrl+G` (`Cmd+G`) | Jump to a frame number |
 | PCAP: Manage Custom Columns | | Add or remove columns (searches tshark's field list) |
 | PCAP: Reload Capture | | Re-run tshark, e.g. after editing a Lua dissector |
@@ -61,12 +70,13 @@ filter bar restores the applied filter.
 | Setting | Description |
 |---|---|
 | `pcapViewer.tsharkPath` | Path to `tshark` (empty: auto-detect) |
-| `pcapViewer.pythonPath` | Python 3.10+ interpreter (empty: auto-detect) |
+| `pcapViewer.pythonPath` | Python 3.14+ interpreter (empty: auto-detect) |
 | `pcapViewer.luaScripts` | Lua dissectors, passed as `-X lua_script:<path>` |
 | `pcapViewer.dissectorsFolder` | Folder whose `*.lua` files are also loaded |
 | `pcapViewer.decodeAs` | Decode As rules, e.g. `"tcp.port==8080,http"` |
 | `pcapViewer.prefs` | Preference overrides, e.g. `{ "tcp.desegment_tcp_streams": false }` |
 | `pcapViewer.columns` | Extra columns: `"tcp.stream"` or `{ "field": "http.host", "title": "Host" }` |
+| `pcapViewer.savedFilters` | Named filters: `{ "name": "Web", "filter": "http \|\| tls" }` |
 | `pcapViewer.maxCachedFrames` | Backend cache budget for filter results / sort orders |
 | `pcapViewer.requestTimeoutSeconds` | Timeout for quick requests (long ones are cancellable instead) |
 
@@ -117,28 +127,114 @@ file up to that packet so reassembly stays correct (see the roadmap below).
 
 ## Roadmap
 
-Planned (see the project brief): filter autocomplete UI and saved filters,
-Follow TCP/UDP/TLS/HTTP stream, statistics (conversations, endpoints, protocol
+Planned (see the project brief): Follow TCP/UDP/TLS/HTTP stream, statistics (conversations, endpoints, protocol
 hierarchy, IO graph, expert info, capture properties), Lua dissector
 management commands and a Decode As UI, export (filtered pcapng, CSV/JSON,
 bytes), coloring rules, and a faster "quick view" of late packets in huge captures.
 
-## Development
+## Running locally (Linux)
+
+These steps take a fresh Linux machine to a running development copy of the
+extension. Commands are shown for Ubuntu/Debian, with Fedora and Arch
+equivalents where they differ. macOS and Windows work the same way once the
+tools below are installed.
+
+### 1. Install the tools
+
+| Tool | Why | Install |
+|---|---|---|
+| Git, VS Code ≥ 1.90 | source and editor | `sudo apt install git`, VS Code from [code.visualstudio.com](https://code.visualstudio.com/) (`.deb`/`.rpm`, Snap or Flatpak) |
+| tshark | dissection and filtering | `sudo apt install tshark` · Fedora: `sudo dnf install wireshark-cli` · Arch: `sudo pacman -S wireshark-cli` |
+| uv | Python toolchain; installs Python 3.14 | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
+| Python 3.14 | runs the backend | `uv python install 3.14` (puts `python3.14` in `~/.local/bin`) |
+| Node.js 22 | builds the extension | [nvm](https://github.com/nvm-sh/nvm): `nvm install 22`, or your distro/NodeSource package |
+| pnpm | JavaScript package manager | `corepack enable pnpm` (or `npm install -g pnpm`); the version is pinned in `package.json` |
+
+Notes:
+
+- When `apt install tshark` asks whether non-superusers should be able to
+  capture packets, either answer works: the viewer only reads files and never captures.
+- Make sure `~/.local/bin` is on your `PATH` (the uv installer offers to add
+  it). Otherwise VS Code won't find `python3.14`; see Troubleshooting below.
+- Don't run VS Code as root: tshark refuses to load Lua dissectors for root.
+
+Check the installs:
 
 ```sh
-uv sync            # Python dev tools (pytest, ruff, mypy, scapy) in .venv
-npm install        # TypeScript toolchain
-npm run compile    # build the extension
-uv run pytest      # backend tests + Gherkin acceptance scenarios (skip without tshark)
-npm run test:unit  # extension unit tests + webview tests (incl. headless Chromium)
-npm run test:extension   # VS Code smoke test (xvfb-run -a on headless Linux)
+tshark --version | head -1     # TShark (Wireshark) 4.x
+python3.14 --version           # Python 3.14.x
+node --version && pnpm --version
 ```
 
-The acceptance criteria are written as Gherkin scenarios in
-`test/backend/acceptance/features/` and run by pytest-bdd as part of `uv run pytest`.
+### 2. Get the code and install dependencies
 
-Press `F5` in VS Code ("Run Extension") to launch a development host with the
-`test/fixtures` folder open. See `CLAUDE.md` for architecture notes and design decisions.
+```sh
+git clone https://github.com/DenPaz/vsc_pcap_viewer.git
+cd vsc_pcap_viewer
+uv sync               # .venv with Python 3.14 + dev tools (pytest, pytest-bdd, ruff, mypy, scapy)
+pnpm install          # TypeScript toolchain, ESLint, mocha, vsce, Playwright
+pnpm run compile      # build the extension into out/
+```
+
+### 3. Run the extension
+
+**From source (for development).** Open the folder in VS Code with
+`code .` and press `F5` (the "Run Extension" launch configuration). A second
+VS Code window, the *Extension Development Host*, opens with
+`test/fixtures/` loaded. Open `http.pcap` or `mixed.pcapng` there to see the
+viewer. `pnpm run watch` rebuilds TypeScript on save; reload the host window
+with `Ctrl+R` to pick up changes. Webview files (`src/webview/`) need no build step.
+
+**As an installed extension.** Build a `.vsix` and install it into your normal VS Code:
+
+```sh
+pnpm run package
+code --install-extension pcap-viewer-0.1.0.vsix
+```
+
+Then open any `.pcap`/`.pcapng` file. Backend and tshark messages are shown in
+*PCAP: Show Log* (the "PCAP Viewer" output channel).
+
+### 4. Run the tests and checks
+
+```sh
+uv run pytest                  # backend tests + Gherkin acceptance scenarios (skip without tshark)
+pnpm run test:unit             # extension unit tests + webview tests
+pnpm run lint && uv run ruff check && uv run ruff format --check && uv run mypy
+```
+
+- The webview end-to-end test drives the real UI in headless Chromium. If
+  it reports no Chromium, install one with
+  `pnpm exec playwright-core install --with-deps chromium`.
+- The VS Code smoke test downloads VS Code and needs a display. On a desktop
+  run `pnpm run test:extension`. On a headless machine or over SSH, install
+  Xvfb (`sudo apt install xvfb`) and run `xvfb-run -a pnpm run test:extension`.
+- The acceptance criteria are written as Gherkin scenarios in
+  `test/backend/acceptance/features/`, run by pytest-bdd.
+
+### 5. Sample and large captures
+
+`test/fixtures/` has small captures (HTTP, DNS, TLS, a custom UDP protocol
+for `backend/dissectors/example.lua`, and a truncated file). To regenerate them,
+or to make a big capture for performance testing:
+
+```sh
+uv run python test/fixtures/generate.py
+uv run python test/fixtures/generate.py --large 1000000 test/fixtures/large-1m.pcap
+uv run python -u test/perf/bench.py test/fixtures/large-1m.pcap --no-tcp-analysis
+```
+
+### Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| "No Python 3.14+ interpreter found" | VS Code doesn't see `~/.local/bin`. Set `pcapViewer.pythonPath` to the output of `uv python find 3.14`, or start VS Code from a terminal where `python3.14` works. |
+| "tshark was not found" | Install tshark (step 1) or set `pcapViewer.tsharkPath`, e.g. `/usr/bin/tshark`. |
+| Lua dissector isn't applied | Check *PCAP: Show Log* for Lua errors. Don't run as root. Use *PCAP: Reload Capture* after editing the script. |
+| Opening a huge file is slow | Indexing speed is tshark's. Settings such as `"pcapViewer.prefs": { "tcp.analyze_sequence_numbers": false }` make it cheaper. |
+| `pnpm install` fails with "Ignored build scripts" | Use the pnpm version pinned in `package.json` (`corepack enable pnpm`). The build-script policy is in `pnpm-workspace.yaml`. |
+
+See `CLAUDE.md` for architecture notes and design decisions.
 
 ## Security
 

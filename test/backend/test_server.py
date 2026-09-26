@@ -1,7 +1,5 @@
 """JSON-RPC protocol tests: in-process with fake handlers, and end-to-end over stdio."""
 
-from __future__ import annotations
-
 import io
 import json
 import os
@@ -151,9 +149,11 @@ class _Client:
             self.notifications.append(reply)
 
     def close(self) -> int:
-        assert self.proc.stdin is not None
+        assert self.proc.stdin is not None and self.proc.stdout is not None
         self.proc.stdin.close()
-        return self.proc.wait(timeout=10)
+        code = self.proc.wait(timeout=10)
+        self.proc.stdout.close()
+        return code
 
 
 @pytest.mark.tshark

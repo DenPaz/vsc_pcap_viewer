@@ -87,6 +87,44 @@ function expandHome(p: string): string {
   return p;
 }
 
+export interface SavedFilter {
+  name: string;
+  filter: string;
+}
+
+/** Accept `[{ name, filter }]`; drop entries without both, and duplicate names (first wins). */
+export function normalizeSavedFilters(raw: unknown): SavedFilter[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const out: SavedFilter[] = [];
+  const seen = new Set<string>();
+  for (const item of raw) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    const name = (item as { name?: unknown }).name;
+    const filter = (item as { filter?: unknown }).filter;
+    if (typeof name !== "string" || typeof filter !== "string" || !name.trim() || !filter.trim() || seen.has(name.trim())) {
+      continue;
+    }
+    seen.add(name.trim());
+    out.push({ name: name.trim(), filter: filter.trim() });
+  }
+  return out;
+}
+
+/** Add or replace (by name) a saved filter, keeping the existing order. */
+export function upsertSavedFilter(list: readonly SavedFilter[], entry: SavedFilter): SavedFilter[] {
+  const i = list.findIndex((f) => f.name === entry.name);
+  if (i < 0) {
+    return [...list, entry];
+  }
+  const copy = [...list];
+  copy[i] = entry;
+  return copy;
+}
+
 /** Most-recent-first history without duplicates, capped at `max`. */
 export function pushHistory(history: readonly string[], expr: string, max = 50): string[] {
   const trimmed = expr.trim();

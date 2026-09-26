@@ -349,15 +349,23 @@ function waitFor(promise: Promise<void>, ms: number): Promise<boolean> {
 }
 
 /**
- * Find a Python >= 3.10 interpreter. `configured` wins when set; otherwise try
- * the usual launcher names for the platform. Returns the argv prefix to use.
+/** Minimum Python for the backend (keep in sync with `requires-python` in pyproject.toml). */
+export const MIN_PYTHON: readonly [number, number] = [3, 14];
+
+/**
+ * Find a Python >= {@link MIN_PYTHON} interpreter. `configured` wins when set;
+ * otherwise try the versioned launcher first (distros often ship an older
+ * `python3` next to `python3.14`), then the generic names. Returns the argv
+ * prefix to use.
  */
 export function findPython(configured: string | undefined): { python: string[]; version: string } | { error: string } {
+  const [minMajor, minMinor] = MIN_PYTHON;
+  const want = `${minMajor}.${minMinor}`;
   const candidates: string[][] = configured
     ? [[configured]]
     : process.platform === "win32"
-      ? [["py", "-3"], ["python"], ["python3"]]
-      : [["python3"], ["python"]];
+      ? [["py", `-${want}`], ["py", "-3"], ["python"], ["python3"]]
+      : [[`python${want}`], ["python3"], ["python"]];
   const tried: string[] = [];
   for (const [cmd, ...pre] of candidates) {
     tried.push([cmd, ...pre].join(" "));
@@ -372,10 +380,10 @@ export function findPython(configured: string | undefined): { python: string[]; 
     }
     const version = res.stdout.trim();
     const [major, minor] = version.split(".").map(Number);
-    if (major > 3 || (major === 3 && minor >= 10)) {
+    if (major > minMajor || (major === minMajor && minor >= minMinor)) {
       return { python: [cmd, ...pre], version };
     }
-    tried[tried.length - 1] += ` (found ${version}, need >= 3.10)`;
+    tried[tried.length - 1] += ` (found ${version}, need >= ${want})`;
   }
-  return { error: `No Python 3.10+ interpreter found. Tried: ${tried.join(", ")}. Set 'pcapViewer.pythonPath'.` };
+  return { error: `No Python ${want}+ interpreter found. Tried: ${tried.join(", ")}. Install Python ${want} or set 'pcapViewer.pythonPath'.` };
 }

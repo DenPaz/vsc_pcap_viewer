@@ -9,17 +9,12 @@
   packet details) by an explicit cost budget.
 """
 
-from __future__ import annotations
-
 import threading
 from array import array
 from collections import OrderedDict
 from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
-from typing import BinaryIO, Generic, TypeVar
-
-K = TypeVar("K")
-V = TypeVar("V")
+from typing import BinaryIO
 
 
 class RowStore:
@@ -202,7 +197,7 @@ def _is_number(v: str) -> bool:
     return True
 
 
-class LruCache(Generic[K, V]):
+class LruCache[K, V]:
     """Thread-safe LRU cache bounded by a total ``cost`` budget."""
 
     def __init__(self, budget: int, cost: Callable[[V], int] = lambda _v: 1) -> None:

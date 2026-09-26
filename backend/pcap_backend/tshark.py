@@ -5,8 +5,6 @@ Security rule for this module: commands are always argv lists handed to
 string.
 """
 
-from __future__ import annotations
-
 import atexit
 import os
 import re
@@ -202,7 +200,7 @@ class ProcessRegistry:
                 try:
                     proc.kill()
                     proc.wait(timeout=2)
-                except (OSError, subprocess.TimeoutExpired):
+                except OSError, subprocess.TimeoutExpired:
                     pass
 
     def __len__(self) -> int:
@@ -213,7 +211,7 @@ class ProcessRegistry:
 PROCESSES = ProcessRegistry()
 
 
-def _popen(argv: Sequence[str]) -> subprocess.Popen[bytes]:
+def _popen(argv: Sequence[str], env: Mapping[str, str] | None = None) -> subprocess.Popen[bytes]:
     # No console window flashing up for every tshark run on Windows.
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if IS_WINDOWS else 0
     return subprocess.Popen(
@@ -222,6 +220,7 @@ def _popen(argv: Sequence[str]) -> subprocess.Popen[bytes]:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         creationflags=flags,
+        env=None if env is None else dict(env),
     )
 
 
@@ -259,19 +258,30 @@ class _StderrCollector(threading.Thread):
         return clean_stderr(b"".join(self.chunks).decode("utf-8", "replace"))
 
 
-def run(argv: Sequence[str], token: CancelToken | None = None) -> RunResult:
-    """Run a command to completion, capturing output. Cancellable via ``token``."""
+def run(
+    argv: Sequence[str],
+    token: CancelToken | None = None,
+    env: Mapping[str, str] | None = None,
+) -> RunResult:
+    """Run a command to completion, capturing output. Cancellable via ``token``.
+
+    ``env`` replaces the environment when given (defaults to inheriting ours).
+    """
     token = token or CancelToken()
-    proc = _popen(argv)
+    proc = _popen(argv, env)
     PROCESSES.add(proc)
     try:
-        token.register(proc)
+        token.register(proc)  # kills the process if the token is already cancelled
         try:
             out, err = proc.communicate()
         finally:
             token.unregister(proc)
     finally:
         PROCESSES.discard(proc)
+        if proc.returncode is None:
+            # Cancelled before communicate(): reap the killed process, close its pipes.
+            proc.kill()
+            proc.communicate()
     token.raise_if_cancelled()
     return RunResult(proc.returncode, out, clean_stderr(err.decode("utf-8", "replace")))
 
@@ -303,8 +313,9 @@ def stream_lines(
             proc.wait()
         PROCESSES.discard(proc)
         collector.join(timeout=5)
-        if proc.stdout is not None:
-            proc.stdout.close()
+        for pipe in (proc.stdout, proc.stderr):
+            if pipe is not None:
+                pipe.close()
         result.returncode = proc.returncode
         result.stderr = collector.text
     if token.cancelled:
@@ -385,6 +396,27 @@ class Tshark:
             out += ["-r", capture]
         out += list(args)
         return out
+
+    def field_list(self, token: CancelToken | None = None) -> str:
+        """``tshark -G fields`` output, including fields of the configured Lua scripts.
+
+        ``-G`` must be tshark's first option and ignores ``-X lua_script:``, so
+        the Lua scripts are copied into a temporary plugin folder and a second
+        ``-G fields`` run is made with ``WIRESHARK_PLUGIN_DIR`` pointing at it.
+        That run replaces the global plugin folder, so the normal run is kept
+        too and the caller merges both.
+        """
+        outputs = [run([str(self.path), "-G", "fields"], token).stdout.decode("utf-8", "replace")]
+        scripts = [Path(s) for s in self.options.lua_scripts if Path(s).is_file()]
+        if scripts:
+            with tempfile.TemporaryDirectory(prefix="pcapviewer-lua-") as tmp:
+                for i, script in enumerate(scripts):
+                    # Numbered copies keep load order and avoid name clashes.
+                    shutil.copyfile(script, Path(tmp) / f"{i:03d}_{script.name}")
+                env = {**os.environ, "WIRESHARK_PLUGIN_DIR": tmp}
+                res = run([str(self.path), "-G", "fields"], token, env=env)
+                outputs.append(res.stdout.decode("utf-8", "replace"))
+        return "\n".join(outputs)
 
     def version(self) -> str:
         res = run([str(self.path), "--version"])

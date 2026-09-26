@@ -12,8 +12,6 @@ process per open editor). All heavy lifting is delegated to tshark:
   reassembly etc.) is still correct.
 """
 
-from __future__ import annotations
-
 import re
 import shutil
 import tempfile
@@ -29,6 +27,7 @@ from typing import Any
 from . import pdml
 from .cache import FrameIndex, LruCache, RowStore, sort_frames
 from .cancellation import CancelledError, CancelToken
+from .fields import FieldCatalog, parse_field_list
 from .protocol import (
     FilterError,
     InvalidParamsError,
@@ -133,6 +132,8 @@ class _Open:
     base: _Store
     extra: list[_Store] = field(default_factory=list)
     columns: list[str] = field(default_factory=list)  # custom column fields
+    # Fields tshark refused ("Some fields aren't valid"); never re-run tshark for them.
+    rejected: set[str] = field(default_factory=set)
 
 
 @dataclass(slots=True)
@@ -163,7 +164,7 @@ class PcapService:
         )
         self._sort_columns: LruCache[str, list[str]] = LruCache(2)
         self._details: LruCache[int, dict[str, Any]] = LruCache(detail_cache_size)
-        self._field_index: LruCache[tuple[str, ...], dict[str, Any]] = LruCache(2)
+        self._field_index: LruCache[tuple[str, ...], FieldCatalog] = LruCache(2)
         self._pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="svc")
 
     # ------------------------------------------------------------------ lifecycle
@@ -236,6 +237,7 @@ class PcapService:
         columns = [
             c for c in self._check_fields(str_list(params, "columns")) if c not in base_fields
         ]
+        requested_columns = list(columns)  # _index_pass removes fields tshark rejects
         tshark = self._require_tshark().with_options(options)
 
         with self._lock:
@@ -258,7 +260,14 @@ class PcapService:
             info.start_time = self._first_epoch(tshark, path, ctx.token)
 
         with self._lock:
-            self._file = _Open(path, tshark, info, base, columns=columns)
+            self._file = _Open(
+                path,
+                tshark,
+                info,
+                base,
+                columns=columns,
+                rejected={c for c in requested_columns if c not in columns},
+            )
             self._next_filter_id += 1
             everything = FrameIndex.all(info.frames)
             self._view = _View(self._next_filter_id, "", everything, None, everything)
@@ -371,7 +380,7 @@ class PcapService:
             res = run(
                 [str(tshark.capinfos), "-T", "-M", "-a", "-e", "-E", "-S", "-t", str(path)], token
             )
-        except (OSError, CancelledError):
+        except OSError, CancelledError:
             return {}
         return parse_capinfos(res.stdout.decode("utf-8", "replace"))
 
@@ -500,6 +509,7 @@ class PcapService:
             view_ordered = view.ordered
 
         frames = view_ordered.slice(offset, limit)
+        rejected = [fld for fld in extra_fields if fld in f.rejected]
         n_base = len(BASE_COLUMNS)
         base_rows = f.base.rows.get_many(frames)
         extra_cols = [self._column_cells(f, fld, frames) for fld in extra_fields]
@@ -513,6 +523,8 @@ class PcapService:
             "total": len(view_ordered),
             "filterId": view.filter_id,
             "columns": [c.field for c in BASE_COLUMNS] + extra_fields,
+            # Unknown to tshark: their cells are blank; the UI should drop them.
+            "rejectedColumns": rejected,
         }
 
     def find_frame(self, params: dict[str, Any], _ctx: RequestContext) -> dict[str, Any]:
@@ -528,13 +540,18 @@ class PcapService:
         return None
 
     def _ensure_columns(self, f: _Open, fields: Sequence[str], ctx: RequestContext) -> None:
-        if all(self._locate(f, fld) is not None for fld in fields):
+        """Extract any not-yet-indexed fields (one tshark pass for all of them).
+
+        Fields tshark rejects are remembered in ``f.rejected`` instead of failing
+        the request, so one bad custom column can't break the packet list.
+        """
+        if all(fld in f.rejected or self._locate(f, fld) is not None for fld in fields):
             return
         with self._build_lock:
             self._build_columns(f, fields, ctx)
 
     def _build_columns(self, f: _Open, fields: Sequence[str], ctx: RequestContext) -> None:
-        missing = [fld for fld in fields if self._locate(f, fld) is None]
+        missing = [fld for fld in fields if fld not in f.rejected and self._locate(f, fld) is None]
         if not missing:
             return
         assert self._work_dir is not None
@@ -542,9 +559,7 @@ class PcapService:
         store = self._index_pass(f.tshark, f.path, self._work_dir, missing, f.info, ctx, base=False)
         with self._lock:
             f.extra.append(store)
-        dropped = [m for m in requested if m not in store.fields]
-        if dropped:
-            raise InvalidParamsError(f"unknown field(s): {', '.join(dropped)}")
+            f.rejected.update(m for m in requested if m not in store.fields)
 
     def _column_cells(self, f: _Open, fld: str, frames: Sequence[int]) -> list[str]:
         loc = self._locate(f, fld)
@@ -574,6 +589,8 @@ class PcapService:
         if cached is not None:
             return cached
         self._ensure_columns(f, [fld], ctx)
+        if fld in f.rejected:
+            raise InvalidParamsError(f"cannot sort by unknown field {fld!r}")
         ctx.progress({"phase": "sort", "fraction": None})
         values = self._sort_columns.get(fld)
         if values is None:
@@ -627,26 +644,27 @@ class PcapService:
     def field_index(self, params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
         """Field/protocol names from ``tshark -G fields`` for autocomplete.
 
-        ``prefix`` filters by name prefix; ``limit`` caps the number of fields
-        returned (the full list has ~250k entries).
+        Case-insensitive ``prefix`` search; ``limit`` caps each list (the
+        catalogue has ~250k entries). Lua dissector fields are included because
+        the catalogue is built with the file's ``-X lua_script`` options. Call
+        with ``limit: 0`` to warm the cache without transferring anything.
         """
-        prefix = param(params, "prefix", str, "").lower()
-        limit = min(param(params, "limit", int, 200), 100_000)
+        prefix = param(params, "prefix", str, "")
+        limit = max(0, min(param(params, "limit", int, 200), 100_000))
+        catalog = self._catalog(ctx)
+        return catalog.search(prefix, limit)
+
+    def _catalog(self, ctx: RequestContext) -> FieldCatalog:
         tshark = self._file.tshark if self._file else self._require_tshark()
         key = tshark.options.lua_scripts
-        index = self._field_index.get(key)
-        if index is None:
-            res = run(tshark.argv("-G", "fields"), ctx.token)
-            index = parse_field_list(res.stdout.decode("utf-8", "replace"))
-            self._field_index.put(key, index)
-        protocols = [p for p in index["protocols"] if p["name"].lower().startswith(prefix)]
-        fields: list[dict[str, str]] = []
-        for fd in index["fields"]:
-            if fd["name"].lower().startswith(prefix):
-                fields.append(fd)
-                if len(fields) >= limit:
-                    break
-        return {"protocols": protocols[:limit], "fields": fields, "truncated": len(fields) >= limit}
+        catalog = self._field_index.get(key)
+        if catalog is None:
+            with self._build_lock:
+                catalog = self._field_index.get(key)
+                if catalog is None:
+                    catalog = FieldCatalog.parse(tshark.field_list(ctx.token))
+                    self._field_index.put(key, catalog)
+        return catalog
 
 
 # ---------------------------------------------------------------------- helpers
@@ -730,32 +748,6 @@ def parse_capinfos(text: str) -> dict[str, Any]:
     }
 
 
-def parse_field_list(text: str) -> dict[str, list[dict[str, str]]]:
-    """Parse ``tshark -G fields``.
-
-    Lines are ``P<TAB>name<TAB>abbrev`` or ``F<TAB>name<TAB>abbrev<TAB>type<TAB>proto<TAB>blurb``.
-    """
-    protocols: list[dict[str, str]] = []
-    fields: list[dict[str, str]] = []
-    for line in text.splitlines():
-        parts = line.split("\t")
-        if parts[0] == "P" and len(parts) >= 3:
-            protocols.append({"name": parts[2], "desc": parts[1]})
-        elif parts[0] == "F" and len(parts) >= 5:
-            fields.append(
-                {
-                    "name": parts[2],
-                    "desc": parts[1],
-                    "type": parts[3],
-                    "proto": parts[4],
-                    "blurb": parts[7] if len(parts) > 7 else "",
-                }
-            )
-    protocols.sort(key=lambda p: p["name"])
-    fields.sort(key=lambda fd: fd["name"])
-    return {"protocols": protocols, "fields": fields}
-
-
 def rpc_methods(service: PcapService) -> dict[str, Callable[[dict[str, Any], RequestContext], Any]]:
     return {
         "initialize": service.initialize,
@@ -771,4 +763,11 @@ def rpc_methods(service: PcapService) -> dict[str, Callable[[dict[str, Any], Req
     }
 
 
-__all__ = ["BASE_COLUMNS", "PcapService", "RpcError", "parse_capinfos", "rpc_methods"]
+__all__ = [
+    "BASE_COLUMNS",
+    "PcapService",
+    "RpcError",
+    "parse_capinfos",
+    "parse_field_list",
+    "rpc_methods",
+]

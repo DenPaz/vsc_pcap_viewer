@@ -4,6 +4,7 @@
  */
 import * as assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { BackendClient, ErrorCodes, Progress, RpcError, findPython } from "../../../src/backendClient";
 
@@ -14,8 +15,14 @@ const HAVE_TSHARK = spawnSync("tshark", ["--version"]).status === 0;
 const logs: string[] = [];
 const logger = { info: (m: string) => logs.push(m), warn: (m: string) => logs.push(m), error: (m: string) => logs.push(m) };
 
+/** PCAP_VIEWER_PYTHON, else the uv-managed .venv interpreter (Python 3.14 after `uv sync`). */
+function testPython(): string | undefined {
+  const venv = path.join(ROOT, ".venv", process.platform === "win32" ? "Scripts/python.exe" : "bin/python");
+  return process.env.PCAP_VIEWER_PYTHON ?? (fs.existsSync(venv) ? venv : undefined);
+}
+
 function makeClient(): BackendClient {
-  const py = findPython(process.env.PCAP_VIEWER_PYTHON);
+  const py = findPython(testPython());
   if ("error" in py) {
     throw new Error(py.error);
   }

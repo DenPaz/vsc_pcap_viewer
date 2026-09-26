@@ -29,3 +29,11 @@ Feature: Opening capture files
     When I open the capture "http.pcap"
     Then a warning mentions "no.such.field"
     And the columns end with "tcp.stream"
+
+  Scenario: An unknown custom column does not break the packet list
+    Given the custom columns "tcp.stream" and "no.such.field"
+    And I open the capture "http.pcap"
+    When I request 2 packets starting at row 0 with the custom columns "tcp.stream" and "no.such.field"
+    Then the rows are frames 1 and 2
+    And the custom column values are "0" and ""
+    And the rejected columns are "no.such.field"

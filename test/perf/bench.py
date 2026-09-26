@@ -9,8 +9,6 @@ Reports wall time for each operation and the backend's peak RSS (tshark runs
 as a child process and is reported separately).
 """
 
-from __future__ import annotations
-
 import argparse
 import resource
 import sys

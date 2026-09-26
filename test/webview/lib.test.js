@@ -141,3 +141,89 @@ suite("webview lib: bytes", () => {
     assert.equal(lib.formatBytes(1536), "1.5 KB");
   });
 });
+
+suite("webview lib: autocomplete", () => {
+  const ctx = (text, cursor = text.length) => lib.completionContext(text, cursor);
+
+  test("field context at the start and after logical operators", () => {
+    assert.deepEqual(ctx("ip.sr"), { kind: "field", prefix: "ip.sr", start: 0, end: 5 });
+    assert.equal(ctx("").kind, "field");
+    assert.deepEqual(ctx("tcp.port == 80 && ht"), { kind: "field", prefix: "ht", start: 18, end: 20 });
+    assert.equal(ctx("!ht").kind, "field");
+    assert.equal(ctx("frame.len > 100 || ").kind, "field");
+    assert.equal(ctx("(ht").kind, "field");
+    assert.equal(ctx("http and d").kind, "field");
+  });
+
+  test("the whole word under the cursor is replaced", () => {
+    assert.deepEqual(ctx("ip.src == 1", 4), { kind: "field", prefix: "ip.s", start: 0, end: 6 });
+  });
+
+  test("operator context after a field", () => {
+    assert.deepEqual(ctx("ip.src "), { kind: "operator", prefix: "", start: 7, end: 7 });
+    assert.deepEqual(ctx("ip.src co"), { kind: "operator", prefix: "co", start: 7, end: 9 });
+    assert.equal(ctx("http ").kind, "operator");
+  });
+
+  test("logical context after a complete comparison", () => {
+    for (const text of [
+      "ip.src == 10.0.0.1 ",
+      "ip.src == 10.0.0.1 a",
+      "(ip.src==1.2.3.4) ",
+      'http.host contains "x" ',
+      "tcp.port in {80 443} ",
+      "eth.src == 00:11:22:33:44:55 ",
+      "tcp.port == 80 ",
+    ]) {
+      assert.equal(ctx(text).kind, "logical", text);
+    }
+  });
+
+  test("no completions inside strings or where a value is expected", () => {
+    assert.equal(ctx('http.host == "ex').kind, "none");
+    assert.equal(ctx('http.host == "a \\" b').kind, "none");
+    assert.equal(ctx("ip.src == ").kind, "none");
+    assert.equal(ctx("ip.src == 10").kind, "none");
+    assert.equal(ctx("80").kind, "none");
+  });
+
+  test("operator suggestions filter by prefix", () => {
+    assert.deepEqual(lib.operatorSuggestions("operator", "co").map((o) => o.label), ["contains"]);
+    assert.deepEqual(lib.operatorSuggestions("logical", "").map((o) => o.label), ["&&", "||", "and", "or", "^^"]);
+    assert.deepEqual(lib.operatorSuggestions("operator", "!").map((o) => o.label), ["!="]);
+  });
+
+  test("applyCompletion inserts fields as-is and pads operators", () => {
+    assert.deepEqual(lib.applyCompletion("ip.sr", { start: 0, end: 5 }, "ip.src", false), { text: "ip.src", cursor: 6 });
+    assert.deepEqual(lib.applyCompletion("ip.src ", { start: 7, end: 7 }, "==", true), { text: "ip.src == ", cursor: 10 });
+    assert.deepEqual(lib.applyCompletion("ip.src co 1", { start: 7, end: 9 }, "contains", true), {
+      text: "ip.src contains 1",
+      cursor: 16,
+    });
+    assert.deepEqual(lib.applyCompletion("ip.s == 1", { start: 0, end: 4 }, "ip.src", false), { text: "ip.src == 1", cursor: 6 });
+  });
+
+  test("friendlyType", () => {
+    assert.equal(lib.friendlyType("FT_IPv4"), "IPv4 address");
+    assert.equal(lib.friendlyType("FT_UINT16"), "unsigned integer, 2 bytes");
+    assert.equal(lib.friendlyType("FT_INT8"), "signed integer, 1 byte");
+    assert.equal(lib.friendlyType("FT_STRING"), "character string");
+    assert.equal(lib.friendlyType("FT_SOMETHING_NEW"), "something_new");
+  });
+});
+
+suite("webview lib: columns", () => {
+  test("acceptedColumns keeps configured titles for accepted fields only", () => {
+    const configured = [
+      { field: "tcp.stream", title: "Stream" },
+      { field: "no.such.field", title: "Typo" },
+      { field: "http.host", title: "Host" },
+    ];
+    const accepted = [{ field: "tcp.stream" }, { field: "http.host" }];
+    assert.deepEqual(lib.acceptedColumns(configured, accepted), [
+      { field: "tcp.stream", title: "Stream" },
+      { field: "http.host", title: "Host" },
+    ]);
+    assert.deepEqual(lib.acceptedColumns(configured, []), []);
+  });
+});

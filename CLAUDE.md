@@ -8,16 +8,35 @@ user-facing description.
 
 | Task | Command |
 |---|---|
-| Install dev deps | `uv sync` and `npm install` |
-| Build extension | `npm run compile` (tsc → `out/`) |
-| Lint everything | `npm run lint && uv run ruff check && uv run ruff format --check && uv run mypy` |
+| Install dev deps | `uv sync` and `pnpm install` |
+| Build extension | `pnpm run compile` (tsc → `out/`) |
+| Lint everything | `pnpm run lint && uv run ruff check && uv run ruff format --check && uv run mypy` |
 | Backend tests | `uv run pytest` (tshark tests skip if tshark is missing) |
 | Acceptance scenarios only | `uv run pytest test/backend/acceptance` (pytest-bdd, Gherkin in `features/`) |
-| TS unit + webview tests | `npm run test:unit` (mocha; includes the Chromium e2e test of the webview) |
-| VS Code smoke test | `npm run test:extension` (downloads VS Code; use `xvfb-run -a` on headless Linux) |
+| TS unit + webview tests | `pnpm run test:unit` (mocha; includes the Chromium e2e test of the webview) |
+| VS Code smoke test | `pnpm run test:extension` (downloads VS Code; use `xvfb-run -a` on headless Linux) |
 | Regenerate fixtures | `uv run python test/fixtures/generate.py` |
 | Perf check | `uv run python test/fixtures/generate.py --large 1000000 test/fixtures/large-1m.pcap && uv run python -u test/perf/bench.py test/fixtures/large-1m.pcap` |
-| Package | `npm run package` (vsce) |
+| Package | `pnpm run package` (vsce, `--no-dependencies`) |
+
+## Toolchain
+
+- **Python 3.14** everywhere: `requires-python >=3.14`, ruff `py314`, mypy
+  `3.14`, `.python-version` (uv and CI's setup-python read it). The extension
+  enforces the same minimum (`MIN_PYTHON` in `src/backendClient.ts`) and tries
+  `python3.14` / `py -3.14` before generic names. Code uses 3.14 idioms: PEP 695
+  generics, no `from __future__ import annotations` (PEP 649 lazy annotations).
+- **pnpm** (version pinned by `packageManager` in package.json; use
+  `corepack enable pnpm`). pnpm refuses to install until every dependency with
+  an install script is allowed or denied: `pnpm-workspace.yaml` denies
+  `keytar` and `@vscode/vsce-sign` (vsce's publishing/signing helpers, unused).
+  `vsce package` runs with `--no-dependencies` because its dependency check
+  runs `npm list`, which doesn't understand pnpm's layout (the extension has
+  no runtime npm dependencies anyway). `.vscode/settings.json` makes VS Code's
+  npm tasks use pnpm.
+- Node tests that start the backend use `PCAP_VIEWER_PYTHON` if set, else the
+  uv `.venv` interpreter, so they run on 3.14 even when the system `python3` is older.
+- pytest turns `ResourceWarning` into errors: leaked tshark pipes are bugs.
 
 ## Layout
 
@@ -105,6 +124,22 @@ UI behaviour stays in the Chromium test (`test/webview/e2e.test.js`).
   range is compressed (`lib.computeWindow`) so >1.6M rows still scroll.
 - **Lua as root**: tshark refuses Lua when run as root; the backend warns. The
   Lua integration test skips as root (CI runs as a normal user).
+- **Field catalogue** (`fields.py`): `tshark -G fields` must be tshark's
+  *first* option (anything after it is a name filter), so it can't take
+  `-X lua_script:`. Lua fields are picked up by a second `-G fields` run with
+  `WIRESHARK_PLUGIN_DIR` pointing at a temp folder holding numbered copies of
+  the configured scripts; that run replaces the global plugin folder, so both
+  outputs are merged (deduplicated). Prefix search bisects a sorted,
+  lower-cased key list (~250k entries). The webview warms it after `init`.
+- **Autocomplete UX**: nothing is preselected, so `Enter` always applies the
+  filter unless a suggestion was picked with the arrows; `Tab` takes the
+  first suggestion. Operators are only offered right after a space (or on
+  `Ctrl+Space`). Context detection (`lib.completionContext`) is heuristic:
+  field / comparison operator / logical operator / none (strings, values).
+- **Saved filters** are the `pcapViewer.savedFilters` setting (not
+  `globalState`): user vs workspace scope gives "global or workspace"
+  persistence, and they sync and can be edited in settings.json. Recent-filter
+  history stays in `globalState` (50 entries).
 - **Protocol**: JSON-RPC 2.0 framing (`"jsonrpc": "2.0"`), LSP-style
   cancellation code -32800; app codes in `backend/pcap_backend/protocol.py`
   and mirrored in `src/backendClient.ts` (`ErrorCodes`). `open` returns the
@@ -123,11 +158,10 @@ this took the backend from 710 MB to 125 MB peak.
 
 ## Status
 
-Implemented: steps 1–3 of the brief (foundation, packet list with paging /
+Implemented: steps 1–4 of the brief (foundation, packet list with paging /
 virtualization / sorting / custom columns, detail tree + hex with two-way
-highlighting), plus filter validation, history (datalist) and tree
-context-menu "Apply/Prepare as Filter".
+highlighting, display filters with validation, autocomplete, history, saved
+filters and apply-as-filter from the tree).
 
-Not yet: autocomplete UI (backend `field_index` exists), saved filters,
-follow stream, statistics, export, coloring rules, Lua management commands,
-Decode As UI (settings already work end-to-end).
+Not yet: follow stream, statistics, export, coloring rules, Lua management
+commands, Decode As UI (settings already work end-to-end).

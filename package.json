@@ -61,6 +61,16 @@
         "category": "PCAP"
       },
       {
+        "command": "pcapViewer.saveFilter",
+        "title": "Save Display Filter\u2026",
+        "category": "PCAP"
+      },
+      {
+        "command": "pcapViewer.savedFilters",
+        "title": "Saved Display Filters",
+        "category": "PCAP"
+      },
+      {
         "command": "pcapViewer.manageColumns",
         "title": "Manage Custom Columns",
         "category": "PCAP"
@@ -93,6 +103,10 @@
         {
           "command": "pcapViewer.reload",
           "when": "activeCustomEditorId == pcapViewer.editor"
+        },
+        {
+          "command": "pcapViewer.saveFilter",
+          "when": "activeCustomEditorId == pcapViewer.editor"
         }
       ]
     },
@@ -117,7 +131,7 @@
           "type": "string",
           "default": "",
           "scope": "machine-overridable",
-          "markdownDescription": "Python 3.10+ interpreter used to run the backend. Empty: try `python3`/`python` (or `py -3` on Windows) from `PATH`."
+          "markdownDescription": "Python 3.14+ interpreter used to run the backend. Empty: try `python3.14`, `python3`, `python` (or `py -3.14` / `py -3` on Windows) from `PATH`."
         },
         "pcapViewer.tsharkPath": {
           "type": "string",
@@ -186,6 +200,26 @@
           "default": [],
           "markdownDescription": "Extra packet-list columns: any tshark field (e.g. `tcp.stream`, `http.host`) or `{ \"field\": \"http.host\", \"title\": \"Host\" }`."
         },
+        "pcapViewer.savedFilters": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "filter": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "filter"
+            ]
+          },
+          "default": [],
+          "markdownDescription": "Named display filters, e.g. `{ \"name\": \"Web\", \"filter\": \"http || tls\" }`. Shown in the filter bar's \u2605 menu and *PCAP: Saved Display Filters*. Set in user settings for all captures or in workspace settings to share with a project."
+        },
         "pcapViewer.maxCachedFrames": {
           "type": "integer",
           "default": 5000000,
@@ -208,15 +242,15 @@
     ]
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
+    "vscode:prepublish": "pnpm run compile",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "lint": "eslint src test && tsc -p tsconfig.webview.json",
-    "test": "npm run test:unit && npm run test:backend",
-    "test:unit": "npm run compile && mocha --ui tdd \"out/test/extension/unit/**/*.test.js\" \"test/webview/**/*.test.js\"",
+    "test": "pnpm run test:unit && pnpm run test:backend",
+    "test:unit": "pnpm run compile && mocha --ui tdd \"out/test/extension/unit/**/*.test.js\" \"test/webview/**/*.test.js\"",
     "test:backend": "uv run pytest",
-    "test:extension": "npm run compile && node ./out/test/extension/runTest.js",
-    "package": "vsce package"
+    "test:extension": "pnpm run compile && node ./out/test/extension/runTest.js",
+    "package": "vsce package --no-dependencies"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.0",
@@ -230,5 +264,6 @@
     "playwright-core": "^1.56.1",
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.46.0"
-  }
+  },
+  "packageManager": "pnpm@12.6.0"
 }

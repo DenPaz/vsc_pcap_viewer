@@ -65,6 +65,9 @@ const maybe = deps && HAVE_TSHARK ? suite : suite.skip;
 maybe("webview end-to-end (Chromium + real backend)", function () {
   this.timeout(60_000);
   let server, browser, page, client;
+  // What the stand-in host received / keeps (mirrors pcapEditor.ts behaviour).
+  const hostLog = [];
+  let savedFilters = [{ name: "Web", filter: "http" }];
   const cspViolations = [];
   const pageErrors = [];
 
@@ -73,7 +76,9 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
   suiteSetup(async function () {
     server = await serveWebview();
     const origin = `http://127.0.0.1:${server.address().port}`;
-    const py = deps.findPython(process.env.PCAP_VIEWER_PYTHON);
+    // PCAP_VIEWER_PYTHON, else the uv-managed .venv interpreter (Python 3.14 after `uv sync`).
+    const venv = path.join(ROOT, ".venv", process.platform === "win32" ? "Scripts/python.exe" : "bin/python");
+    const py = deps.findPython(process.env.PCAP_VIEWER_PYTHON ?? (fs.existsSync(venv) ? venv : undefined));
     client = new deps.BackendClient({
       python: py.python,
       backendDir: path.join(ROOT, "backend"),
@@ -105,7 +110,22 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
           { path: path.join(ROOT, "test", "fixtures", "http.pcap"), columns: ["tcp.stream"] },
           { timeoutMs: 0, onProgress: (p) => void post({ type: "progress", ...p }) },
         );
-        await post({ type: "init", info, columns: [{ field: "tcp.stream", title: "Stream" }], filter: "", history: [], elapsedMs: 12 });
+        await post({
+          type: "init",
+          info,
+          columns: [{ field: "tcp.stream", title: "Stream" }],
+          filter: "",
+          history: ["tcp.port == 80"],
+          savedFilters,
+          elapsedMs: 12,
+        });
+      } else if (msg.type === "saveFilter") {
+        // The real host asks for a name; the stand-in uses "Saved <n>".
+        hostLog.push(msg);
+        savedFilters = [...savedFilters, { name: `Saved ${savedFilters.length}`, filter: msg.expr }];
+        await post({ type: "savedFilters", savedFilters });
+      } else if (msg.type === "manageSavedFilters" || msg.type === "filterApplied") {
+        hostLog.push(msg);
       } else if (msg.type === "rpc") {
         const pending = client.send(msg.method, msg.params, { timeoutMs: 0 });
         pending.promise.then(
@@ -202,6 +222,105 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     await page.keyboard.press("Home");
     await page.keyboard.press("ArrowDown");
     await page.waitForFunction(() => document.querySelector("#list-rows .list-row.selected")?.dataset.index === "1");
+  });
+
+  const suggestions = () =>
+    page.$$eval("#suggest .suggest-item", (rows) =>
+      rows.map((r) => ({
+        label: r.querySelector(".suggest-label").textContent,
+        detail: r.querySelector(".suggest-detail")?.textContent ?? "",
+        desc: r.querySelector(".suggest-desc")?.textContent ?? "",
+      })),
+    );
+
+  test("autocomplete suggests fields with type and description", async () => {
+    await page.fill("#filter-input", "");
+    await page.focus("#filter-input");
+    await page.keyboard.type("ip.sr");
+    await page.waitForSelector("#suggest:not(.hidden) .suggest-item");
+    const items = await suggestions();
+    const src = items.find((i) => i.label === "ip.src");
+    assert.ok(src, JSON.stringify(items));
+    assert.equal(src.detail, "IPv4 address");
+    assert.match(src.desc, /Source Address/);
+    assert.ok(items.every((i) => i.label.startsWith("ip.sr")));
+    assert.equal(await page.getAttribute("#filter-input", "aria-expanded"), "true");
+    // Tab accepts the first (exact-prefix) suggestion.
+    await page.keyboard.press("Tab");
+    assert.equal(await page.inputValue("#filter-input"), "ip.src");
+    await page.waitForSelector("#suggest.hidden", { state: "attached" });
+  });
+
+  test("operators are offered after a field, then the filter applies", async () => {
+    await page.keyboard.type(" ");
+    await page.waitForSelector("#suggest:not(.hidden) .suggest-item");
+    const ops = (await suggestions()).map((i) => i.label);
+    assert.deepEqual(ops.slice(0, 3), ["==", "!=", ">"]);
+    assert.ok(ops.includes("contains"));
+    await page.keyboard.press("ArrowDown"); // Enter accepts once a suggestion is picked
+    await page.keyboard.press("Enter");
+    assert.equal(await page.inputValue("#filter-input"), "ip.src == ");
+    await page.keyboard.type("93.184.216.34");
+    await page.waitForSelector("#suggest.hidden", { state: "attached" }); // no suggestions for values
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(() => /Displayed: 5/.test(document.querySelector("#status-left").textContent));
+    assert.ok(hostLog.some((m) => m.type === "filterApplied" && m.expr === "ip.src == 93.184.216.34"));
+  });
+
+  test("arrow keys, Tab and Escape drive the dropdown", async () => {
+    await page.fill("#filter-input", "");
+    await page.keyboard.type("tcp.fl");
+    await page.waitForSelector("#suggest:not(.hidden) .suggest-item");
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("ArrowDown");
+    const second = (await suggestions())[1].label;
+    await page.keyboard.press("Tab");
+    assert.equal(await page.inputValue("#filter-input"), second);
+    await page.keyboard.type(" && udp.");
+    await page.waitForSelector("#suggest:not(.hidden) .suggest-item");
+    await page.keyboard.press("Escape");
+    await page.waitForSelector("#suggest.hidden", { state: "attached" });
+    assert.equal(await page.inputValue("#filter-input"), `${second} && udp.`); // first Escape only closes
+  });
+
+  test("saved and recent filters menu: apply, save and manage", async () => {
+    // Empty input: the ★ menu lists saved and recent filters.
+    await page.fill("#filter-input", "");
+    await page.click("#filter-saved");
+    let items = await suggestions();
+    assert.deepEqual(items.map((i) => i.label), ["Web", "tcp.port == 80", "Manage saved filters…"]);
+    await page.click("#suggest .suggest-item:has-text('Web')");
+    await page.waitForFunction(() => /Displayed: 2/.test(document.querySelector("#status-left").textContent));
+    assert.equal(await page.inputValue("#filter-input"), "http");
+
+    // Save the current filter; the host answers with the updated list.
+    await page.fill("#filter-input", "tcp.len == 0");
+    await page.click("#filter-saved");
+    await page.click("#suggest .suggest-item:has-text('Save this filter')");
+    await page.fill("#filter-input", "");
+    await page.focus("#filter-input");
+    await page.keyboard.press("ArrowDown"); // also opens the menu on an empty input
+    // The host answers asynchronously; the open menu refreshes when it does.
+    await page.waitForSelector("#suggest .suggest-item:has-text('Saved 1')");
+    assert.deepEqual(hostLog.filter((m) => m.type === "saveFilter").pop(), { type: "saveFilter", expr: "tcp.len == 0" });
+    items = await suggestions();
+    assert.ok(items.some((i) => i.label === "Saved 1" && i.desc === "tcp.len == 0"), JSON.stringify(items));
+    await page.click("#suggest .suggest-item:has-text('Manage saved filters')");
+    assert.equal(hostLog.at(-1).type, "manageSavedFilters");
+  });
+
+  test("an unknown custom column is dropped instead of breaking the list", async () => {
+    await post({
+      type: "columns",
+      columns: [
+        { field: "tcp.stream", title: "Stream" },
+        { field: "no.such.field", title: "Typo" },
+      ],
+    });
+    await page.waitForFunction(() => /no\.such\.field/.test(document.querySelector("#filter-error").textContent));
+    await page.waitForFunction(() => document.querySelectorAll("#list-rows .list-row:not(.loading)").length > 0);
+    const headers = await page.$$eval("#list-header > div", (cells) => cells.map((c) => c.firstChild.textContent));
+    assert.deepEqual(headers.slice(-2), ["Info", "Stream"]);
   });
 
   test("no script errors or CSP violations", () => {

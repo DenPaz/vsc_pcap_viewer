@@ -4,7 +4,8 @@ import * as vscode from "vscode";
 import { BackendClient, ErrorCodes, RpcError, findPython } from "./backendClient";
 import { Settings, readSettings } from "./config";
 import { HostToWebview, OpenResult, WEBVIEW_RPC_METHODS, WebviewToHost } from "./messages";
-import { ColumnSetting, pushHistory } from "./settingsModel";
+import { saveFilterInteractive, showSavedFilters } from "./commands/savedFilters";
+import { ColumnSetting, SavedFilter, pushHistory } from "./settingsModel";
 
 const HISTORY_KEY = "pcapViewer.filterHistory";
 
@@ -183,6 +184,7 @@ export class PcapEditorSession {
         columns: settings.columns,
         filter: this.filter,
         history: this.history(),
+        savedFilters: settings.savedFilters,
         elapsedMs: Date.now() - started,
       });
     } catch (err) {
@@ -275,6 +277,12 @@ export class PcapEditorSession {
           this.post({ type: "history", history });
         }
         return;
+      case "saveFilter":
+        await saveFilterInteractive(msg.expr, this);
+        return;
+      case "manageSavedFilters":
+        await showSavedFilters(this);
+        return;
       case "copy":
         await vscode.env.clipboard.writeText(String(msg.text));
         vscode.window.setStatusBarMessage("Copied to clipboard", 2000);
@@ -332,6 +340,10 @@ export class PcapEditorSession {
 
   setColumns(columns: ColumnSetting[]): void {
     this.post({ type: "columns", columns });
+  }
+
+  setSavedFilters(savedFilters: SavedFilter[]): void {
+    this.post({ type: "savedFilters", savedFilters });
   }
 
   async validateFilter(expr: string): Promise<string | undefined> {
