@@ -198,7 +198,7 @@ tools below are installed.
 | tshark | dissection and filtering | `sudo apt install tshark` · Fedora: `sudo dnf install wireshark-cli` · Arch: `sudo pacman -S wireshark-cli` |
 | uv | Python toolchain; installs Python 3.14 | `curl -LsSf https://astral.sh/uv/install.sh \| sh` |
 | Python 3.14 | runs the backend | `uv python install 3.14` (puts `python3.14` in `~/.local/bin`) |
-| Node.js 22 | builds the extension | [nvm](https://github.com/nvm-sh/nvm): `nvm install 22`, or your distro/NodeSource package |
+| Node.js 22.13+ | builds the extension (vsce 4, eslint 10 and @vscode/test-electron 3 need Node 22) | [nvm](https://github.com/nvm-sh/nvm): `nvm install 22`, or your distro/NodeSource package |
 | pnpm | JavaScript package manager | `corepack enable pnpm` (or `npm install -g pnpm`); the version is pinned in `package.json` |
 
 Notes:

@@ -34,6 +34,13 @@ user-facing description.
   runs `npm list`, which doesn't understand pnpm's layout (the extension has
   no runtime npm dependencies anyway). `.vscode/settings.json` makes VS Code's
   npm tasks use pnpm.
+- **Dependency updates**: `pnpm dlx npm-check-updates -u` reads `.ncurc.cjs`:
+  `@types/vscode` is never bumped (it must not exceed `engines.vscode`, or vsce
+  refuses to package; raise both together), `@types/node` stays on Node 20
+  (VS Code 1.90's extension host), and peer ranges are respected
+  (typescript-eslint caps TypeScript, so TS 7 waits). mocha 12 is ESM-only:
+  the VS Code smoke suite loads it with `await import("mocha")`. Node ≥ 22.13
+  is needed for the dev tools. Python dev tools: `uv lock --upgrade`.
 - Node tests that start the backend use `PCAP_VIEWER_PYTHON` if set, else the
   uv `.venv` interpreter, so they run on 3.14 even when the system `python3` is older.
 - pytest turns `ResourceWarning` into errors: leaked tshark pipes are bugs.
