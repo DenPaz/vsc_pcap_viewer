@@ -60,6 +60,7 @@ export class FollowPanel {
     this.disposables.push(
       this.panel.webview.onDidReceiveMessage((msg: FromPanel) => void this.onMessage(msg)),
       this.panel.onDidDispose(() => this.dispose()),
+      this.panel.onDidChangeViewState((e) => e.webviewPanel.active && session.activate()),
       session.onDidDispose(() => this.panel.dispose()),
     );
   }

@@ -54,6 +54,9 @@ export class PcapEditorProvider implements vscode.CustomReadonlyEditorProvider<P
         this.active = session;
       }
     });
+    // Focusing one of this capture's statistics/follow panels makes it the
+    // target of capture commands too (not whichever editor was focused last).
+    session.onDidActivate(() => (this.active = session));
     panel.onDidDispose(() => {
       this.sessions.delete(session);
       if (this.active === session) {
@@ -87,6 +90,9 @@ export class PcapEditorSession {
   private readonly disposeEmitter = new vscode.EventEmitter<void>();
   /** Fires when the editor closes (auxiliary panels close with it). */
   readonly onDidDispose = this.disposeEmitter.event;
+  private readonly activateEmitter = new vscode.EventEmitter<void>();
+  /** Fires when one of this capture's auxiliary panels gains focus. */
+  readonly onDidActivate = this.activateEmitter.event;
   private client?: BackendClient;
   private info?: OpenResult;
   private filter = "";
@@ -351,6 +357,11 @@ export class PcapEditorSession {
     this.post({ type: "prepareFilter", expr });
   }
 
+  /** Called by this capture's panels when they gain focus. */
+  activate(): void {
+    this.activateEmitter.fire();
+  }
+
   /** Bring the capture editor to the front (e.g. after a panel applied a filter). */
   reveal(): void {
     this.panel.reveal(undefined, false);
@@ -414,6 +425,7 @@ export class PcapEditorSession {
     this.loadSeq++;
     this.disposeEmitter.fire();
     this.disposeEmitter.dispose();
+    this.activateEmitter.dispose();
     for (const d of this.disposables) {
       d.dispose();
     }

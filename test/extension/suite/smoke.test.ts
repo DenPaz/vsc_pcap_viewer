@@ -53,7 +53,15 @@ suite("PCAP Viewer smoke test", () => {
     assert.deepEqual(follow.bytes, [90, 491]);
     session.reveal();
     await vscode.commands.executeCommand("pcapViewer.statistics.conversations");
-    await waitFor(() => (StatsPanel.all.some((p) => p.kind === "conversations") ? true : undefined));
+    const stats = await waitFor(() => StatsPanel.all.find((p) => p.kind === "conversations" && p.session === session));
+
+    // With a second capture focused, focusing the first capture's panel must
+    // make the first capture the target of capture commands again.
+    const other = vscode.Uri.file(path.join(FIXTURES, "dns.pcap"));
+    await vscode.commands.executeCommand("vscode.openWith", other, "pcapViewer.editor");
+    await waitFor(() => (api.provider.activeSession?.uri.fsPath === other.fsPath ? true : undefined));
+    stats.panel.reveal(undefined, false);
+    await waitFor(() => (api.provider.activeSession === session ? true : undefined));
 
     // Closing the editor must stop the backend process (and close its panels).
     await vscode.commands.executeCommand("workbench.action.closeAllEditors");
