@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import pdml
+from . import pdml, stats
 from .cache import FrameIndex, LruCache, RowStore, sort_frames
 from .cancellation import CancelledError, CancelToken
 from .fields import FieldCatalog, parse_field_list
@@ -639,6 +639,142 @@ class PcapService:
         self._details.put(number, detail)
         return detail
 
+    # ------------------------------------------------------------------ follow stream
+
+    def follow_stream(self, params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
+        """Reassembled payload of one TCP/UDP/TLS/HTTP stream (``-z follow,<proto>,raw``).
+
+        Give ``stream`` (the ``tcp.stream``/``udp.stream`` number) or ``frame``
+        (a packet in the stream). Returns ``segments`` of ``{dir, hex}`` where
+        ``dir`` 0 is the side that sent first (node 0) and 1 the other side.
+        Output beyond ``maxBytes`` of payload is cut off (``truncated``).
+        """
+        proto = param(params, "proto", str).lower()
+        if proto not in stats.FOLLOW_PROTOCOLS:
+            raise InvalidParamsError(f"proto must be one of {', '.join(stats.FOLLOW_PROTOCOLS)}")
+        f = self._require_file()
+        max_bytes = max(1024, min(param(params, "maxBytes", int, 16 << 20), 256 << 20))
+        if params.get("stream") is not None:
+            stream = param(params, "stream", int)
+            if stream < 0:
+                raise InvalidParamsError("stream must be >= 0")
+        else:
+            stream = self._stream_of(f, proto, param(params, "frame", int), ctx)
+
+        argv = f.tshark.argv("-q", "-z", f"follow,{proto},raw,{stream}", capture=str(f.path))
+        result = StreamResult()
+        lines: list[str] = []
+        size = 0
+        truncated = False
+        ctx.progress({"phase": "follow", "fraction": None})
+        for raw in stream_lines(argv, result, ctx.token):
+            line = raw.decode("utf-8", "replace")
+            size += len(line) // 2
+            if size > max_bytes:
+                truncated = True
+                break  # closing the generator kills tshark
+            lines.append(line)
+        if not lines and result.returncode not in (0, None):
+            raise ToolError(
+                result.stderr or "tshark follow failed", result.stderr, result.returncode
+            )
+        followed = stats.parse_follow_raw("\n".join(lines))
+        followed.update({"proto": proto, "stream": stream, "truncated": truncated})
+        if not followed["segments"] and proto == "tls":
+            followed["hint"] = (
+                "No decrypted TLS data. Provide session keys via the "
+                '"tls.keylog_file" preference (pcapViewer.prefs) to follow TLS.'
+            )
+        return followed
+
+    def _stream_of(self, f: _Open, proto: str, frame: int, ctx: RequestContext) -> int:
+        if not 1 <= frame <= f.info.frames:
+            raise InvalidParamsError(f"frame {frame} out of range 1..{f.info.frames}")
+        fld = "udp.stream" if proto == "udp" else "tcp.stream"
+        self._ensure_columns(f, [fld], ctx)  # one extra pass, then cached
+        value = self._column_cells(f, fld, [frame])[0].split(",")[0]
+        if not value.isdigit():
+            label = "UDP" if proto == "udp" else "TCP"
+            raise InvalidParamsError(f"packet {frame} is not part of a {label} stream")
+        return int(value)
+
+    # ------------------------------------------------------------------ statistics
+
+    def stats(self, params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
+        """Statistics tables from tshark's ``-z`` reports.
+
+        ``kind``: ``conversations`` / ``endpoints`` (with ``type`` eth, ip, ipv6,
+        tcp, udp), ``phs`` (protocol hierarchy), ``io`` (with optional
+        ``interval`` in seconds), ``expert`` or ``properties`` (capinfos).
+        ``filter`` limits the statistics to packets matching a display filter.
+        """
+        kind = param(params, "kind", str)
+        f = self._require_file()
+        flt = param(params, "filter", str, "").strip()
+        if flt and kind != "properties":
+            error = f.tshark.validate_filter(flt, ctx.token)
+            if error:
+                raise FilterError(error, {"expr": flt})
+        suffix = f",{flt}" if flt else ""
+        ctx.progress({"phase": "stats", "fraction": None})
+        match kind:
+            case "conversations" | "endpoints":
+                typ = param(params, "type", str, "tcp")
+                if typ not in stats.CONV_TYPES:
+                    raise InvalidParamsError(f"type must be one of {', '.join(stats.CONV_TYPES)}")
+                tap = "conv" if kind == "conversations" else "endpoints"
+                text = self._tap(f, f"{tap},{typ}{suffix}", ctx)
+                parse = (
+                    stats.parse_conversations if kind == "conversations" else stats.parse_endpoints
+                )
+                table = parse(text, typ)
+                table.extra["type"] = typ
+            case "phs":
+                table = stats.parse_protocol_hierarchy(self._tap(f, f"io,phs{suffix}", ctx))
+            case "io":
+                duration = (
+                    f.info.end_time - f.info.start_time
+                    if f.info.end_time is not None and f.info.start_time is not None
+                    else None
+                )
+                interval = param(params, "interval", float, 0.0) or stats.io_interval(duration)
+                if not 0.000001 <= interval <= 86400:
+                    raise InvalidParamsError("interval must be between 1 µs and 1 day")
+                text = self._tap(f, f"io,stat,{interval:g}{suffix}", ctx)
+                table = stats.parse_io_stat(text, interval)
+            case "expert":
+                fields_args = ["-T", "fields", "-e", "frame.number", "-e", "_ws.expert"]
+                fields_args += [
+                    "-E",
+                    "aggregator=\x1e",
+                    "-Y",
+                    f"_ws.expert && ({flt})" if flt else "_ws.expert",
+                ]
+                fields_future = self._pool.submit(
+                    run, f.tshark.argv(*fields_args, capture=str(f.path)), ctx.token
+                )
+                # "comment" is the lowest severity, i.e. everything.
+                summary = self._tap(f, f"expert,comment{suffix}", ctx)
+                fields_text = fields_future.result().stdout.decode("utf-8", "replace")
+                table = stats.parse_expert(summary, fields_text)
+            case "properties":
+                if f.tshark.capinfos is None:
+                    raise ToolError("capinfos (part of Wireshark) was not found")
+                res = run([str(f.tshark.capinfos), str(f.path)], ctx.token)
+                table = stats.parse_capinfos_properties(res.stdout.decode("utf-8", "replace"))
+            case _:
+                raise InvalidParamsError(f"unknown statistics kind {kind!r}")
+        result = table.to_json()
+        result["filter"] = flt
+        return result
+
+    def _tap(self, f: _Open, spec: str, ctx: RequestContext) -> str:
+        res = run(f.tshark.argv("-q", "-z", spec, capture=str(f.path)), ctx.token)
+        text = res.stdout.decode("utf-8", "replace")
+        if res.returncode != 0 and not text.strip():
+            raise ToolError(res.stderr or f"tshark -z {spec} failed", res.stderr, res.returncode)
+        return text
+
     # ------------------------------------------------------------------ fields
 
     def field_index(self, params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
@@ -759,6 +895,8 @@ def rpc_methods(service: PcapService) -> dict[str, Callable[[dict[str, Any], Req
         "find_frame": service.find_frame,
         "packet_detail": service.packet_detail,
         "field_index": service.field_index,
+        "follow_stream": service.follow_stream,
+        "stats": service.stats,
         "close": service.close,
     }
 

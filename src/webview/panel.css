@@ -1,0 +1,295 @@
+/* Auxiliary panels (statistics, follow stream). Extends styles.css; theme tokens only. */
+body.panel {
+  overflow: auto;
+}
+
+body.panel #app {
+  height: auto;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 14px 16px;
+}
+
+.panel-title {
+  margin: 0;
+  font-size: 1.15em;
+  font-weight: 600;
+}
+
+.panel-subtitle {
+  color: var(--vscode-descriptionForeground);
+  font-family: var(--mono);
+  font-size: var(--mono-size);
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+
+.toolbar label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.toolbar .spacer {
+  flex: 1;
+}
+
+.toolbar code {
+  font-family: var(--mono);
+  font-size: var(--mono-size);
+  color: var(--vscode-textPreformat-foreground, inherit);
+}
+
+select,
+input[type="number"] {
+  font: inherit;
+  color: var(--vscode-dropdown-foreground, var(--vscode-input-foreground));
+  background: var(--vscode-dropdown-background, var(--vscode-input-background));
+  border: 1px solid var(--vscode-dropdown-border, var(--vscode-input-border, transparent));
+  padding: 2px 4px;
+  border-radius: 2px;
+}
+
+input[type="number"] {
+  width: 6em;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.notice {
+  padding: 4px 8px;
+  border-left: 3px solid var(--vscode-editorWarning-foreground, var(--vscode-focusBorder));
+  background: var(--vscode-textBlockQuote-background, transparent);
+}
+
+.notice.error {
+  border-left-color: var(--vscode-errorForeground);
+  white-space: pre-wrap;
+  font-family: var(--mono);
+  font-size: var(--mono-size);
+}
+
+.status {
+  color: var(--vscode-descriptionForeground);
+}
+
+/* ------------------------------------------------------------------ tables */
+
+table.stats {
+  border-collapse: collapse;
+  width: 100%;
+  font-family: var(--mono);
+  font-size: var(--mono-size);
+}
+
+table.stats th,
+table.stats td {
+  padding: 2px 8px;
+  text-align: left;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--border);
+}
+
+table.stats th {
+  position: sticky;
+  top: 0;
+  font-family: var(--vscode-font-family);
+  font-weight: 600;
+  background: var(--vscode-editor-background);
+  cursor: pointer;
+  user-select: none;
+}
+
+table.stats th:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+
+table.stats .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+table.stats tbody tr {
+  cursor: default;
+}
+
+table.stats tbody tr:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+
+table.stats tbody tr.selected {
+  color: var(--vscode-list-activeSelectionForeground);
+  background: var(--vscode-list-activeSelectionBackground);
+}
+
+table.stats td.wrap {
+  white-space: normal;
+}
+
+.sev {
+  display: inline-block;
+  min-width: 5.5em;
+}
+
+.sev::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--vscode-descriptionForeground);
+}
+
+.sev-Error::before {
+  background: var(--vscode-errorForeground);
+}
+
+.sev-Warning::before {
+  background: var(--vscode-editorWarning-foreground);
+}
+
+.sev-Note::before {
+  background: var(--vscode-editorInfo-foreground);
+}
+
+/* ------------------------------------------------------------------ IO chart */
+
+.chart {
+  position: relative;
+  width: 100%;
+  outline: none;
+}
+
+.chart:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+}
+
+.chart svg {
+  display: block;
+  width: 100%;
+  overflow: visible;
+}
+
+.chart .grid line {
+  stroke: var(--vscode-editorWidget-border, var(--border));
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+
+.chart .axis text {
+  fill: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.chart .series-area {
+  fill: var(--vscode-charts-blue, #3794ff);
+  fill-opacity: 0.1;
+  stroke: none;
+}
+
+.chart .series-line {
+  fill: none;
+  stroke: var(--vscode-charts-blue, #3794ff);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.chart .crosshair {
+  stroke: var(--vscode-descriptionForeground);
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+
+.chart .marker {
+  fill: var(--vscode-charts-blue, #3794ff);
+  stroke: var(--vscode-editor-background);
+  stroke-width: 2;
+}
+
+.chart .tooltip {
+  position: absolute;
+  pointer-events: none;
+  padding: 4px 8px;
+  white-space: nowrap;
+  color: var(--vscode-editorHoverWidget-foreground, var(--vscode-foreground));
+  background: var(--vscode-editorHoverWidget-background, var(--vscode-editorWidget-background));
+  border: 1px solid var(--vscode-editorHoverWidget-border, var(--border));
+}
+
+.chart .tooltip strong {
+  display: block;
+  font-size: 1.1em;
+  font-variant-numeric: tabular-nums;
+}
+
+.chart .tooltip span {
+  color: var(--vscode-descriptionForeground);
+}
+
+/* ------------------------------------------------------------------ follow stream */
+
+.follow-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  font-family: var(--mono);
+  font-size: var(--mono-size);
+}
+
+.follow-legend .key {
+  display: inline-block;
+  width: 14px;
+  height: 3px;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+.dir0 .key,
+.segment.dir0 {
+  border-color: var(--vscode-charts-red, #f14c4c);
+}
+
+.dir1 .key,
+.segment.dir1 {
+  border-color: var(--vscode-charts-blue, #3794ff);
+}
+
+.follow-legend .key {
+  /* width/style only: the shorthand would reset the direction colour above */
+  border-top-width: 3px;
+  border-top-style: solid;
+}
+
+.follow-body {
+  font-family: var(--mono);
+  font-size: var(--mono-size);
+}
+
+.segment {
+  margin: 0 0 2px;
+  padding: 1px 8px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  border-left: 3px solid;
+}
+
+.segment.dir0 {
+  background: color-mix(in srgb, var(--vscode-charts-red, #f14c4c) 8%, transparent);
+}
+
+.segment.dir1 {
+  background: color-mix(in srgb, var(--vscode-charts-blue, #3794ff) 8%, transparent);
+}

@@ -160,6 +160,11 @@
         el.filterInput.value = msg.expr;
         void applyFilter(msg.expr);
         break;
+      case "prepareFilter":
+        el.filterInput.value = msg.expr;
+        el.filterInput.focus();
+        validateSoon();
+        break;
       case "focusFilter":
         el.filterInput.focus();
         el.filterInput.select();
@@ -590,6 +595,7 @@
   let detailTimer = 0;
   /** @param {number} frame */
   function selectFrame(frame) {
+    reportSelection(frame);
     state.selectedFrame = frame;
     updateStatus();
     window.clearTimeout(detailTimer);
@@ -674,7 +680,22 @@
     }
   }
 
+  /**
+   * Tell the host which packet is selected (for "Follow Stream" etc.).
+   * Tracked separately from state.selectedFrame, which selectIndex sets early.
+   * @param {number | null} frame
+   */
+  function reportSelection(frame) {
+    if (frame !== reportedFrame) {
+      reportedFrame = frame;
+      vscode.postMessage({ type: "selection", frame });
+    }
+  }
+  /** @type {number | null} */
+  let reportedFrame = null;
+
   function clearDetail() {
+    reportSelection(null);
     state.detail = null;
     state.selectedNodeId = null;
     nodeIndex.clear();
@@ -1024,6 +1045,34 @@
   });
 
   // ------------------------------------------------------------------ context menu
+
+  // Packet list: follow the selected packet's stream.
+  el.rows.addEventListener("contextmenu", (e) => {
+    const rowEl = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (e.target).closest(".list-row"));
+    if (!rowEl || rowEl.dataset.index === undefined) {
+      return;
+    }
+    e.preventDefault();
+    selectIndex(Number(rowEl.dataset.index));
+    const row = rowAt(Number(rowEl.dataset.index));
+    if (!row) {
+      return;
+    }
+    const protocol = (row.cells[4] || "").toUpperCase();
+    /** @param {"tcp" | "udp" | "tls" | "http"} proto */
+    const follow = (proto) => () => vscode.postMessage({ type: "follow", proto, frame: row.number });
+    /** @type {[string, (() => void) | null][]} */
+    const items = [
+      ["Follow TCP Stream", follow("tcp")],
+      ["Follow UDP Stream", follow("udp")],
+      ["Follow TLS Stream", /TLS|SSL/.test(protocol) ? follow("tls") : null],
+      ["Follow HTTP Stream", /HTTP/.test(protocol) ? follow("http") : null],
+      ["-", null],
+      ["Copy Summary", () => copy(row.cells.join("\t"))],
+      ["Copy Frame Number", () => copy(String(row.number))],
+    ];
+    showMenu(e.clientX, e.clientY, items);
+  });
 
   el.tree.addEventListener("contextmenu", (e) => {
     const row = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (e.target).closest(".node-row"));

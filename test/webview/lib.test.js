@@ -227,3 +227,50 @@ suite("webview lib: columns", () => {
     assert.deepEqual(lib.acceptedColumns(configured, []), []);
   });
 });
+
+suite("webview lib: follow stream and statistics helpers", () => {
+  test("bytesToAscii keeps text, newlines and tabs; drops CR before LF", () => {
+    assert.equal(lib.bytesToAscii(new Uint8Array([0x47, 0x0d, 0x0a, 0x00, 0x09, 0xc8, 0x0d])), "G\n.\t..");
+  });
+
+  test("hexDump lays out 16 bytes per line with offsets and ASCII", () => {
+    const dump = lib.hexDump(new Uint8Array([...Buffer.from("HTTP/1.1 200 OK\r\nX")]), 16);
+    assert.deepEqual(dump.split("\n"), [
+      "00000010  48 54 54 50 2f 31 2e 31  20 32 30 30 20 4f 4b 0d  HTTP/1.1 200 OK.",
+      "00000020  0a 58                                             .X",
+    ]);
+    assert.equal(lib.hexDump(new Uint8Array([])), "");
+  });
+
+  test("streamFilter", () => {
+    assert.equal(lib.streamFilter("tcp", 3), "tcp.stream eq 3");
+    assert.equal(lib.streamFilter("http", 0), "tcp.stream eq 0");
+    assert.equal(lib.streamFilter("udp", 7), "udp.stream eq 7");
+  });
+
+  test("formatCell", () => {
+    assert.equal(lib.formatCell(1234567), "1,234,567");
+    assert.equal(lib.formatCell(0.0001234567), "0.000123");
+    assert.equal(lib.formatCell("x"), "x");
+    assert.equal(lib.formatCell(undefined), "");
+  });
+
+  test("sortRows is stable, numeric for numbers, natural for text", () => {
+    const rows = [{ cells: ["b", 2] }, { cells: ["A", 10] }, { cells: ["a", 1] }, { cells: ["x10", 3] }, { cells: ["x9", 3] }];
+    assert.deepEqual(lib.sortRows(rows, 0, false).map((r) => r.cells[0]), ["A", "a", "b", "x9", "x10"]);
+    assert.deepEqual(lib.sortRows(rows, 1, true).map((r) => r.cells[1]), [10, 3, 3, 2, 1]);
+    assert.deepEqual(lib.sortRows(rows, 1, true).map((r) => r.cells[0]).slice(1, 3), ["x10", "x9"]); // ties keep order
+  });
+
+  test("tableToCsv quotes where needed", () => {
+    assert.equal(lib.tableToCsv([{ label: "a" }, { label: "b,c" }], [{ cells: [1, 'x"y'] }, { cells: ["line\nbreak", null] }]), 'a,"b,c"\n1,"x""y"\n"line\nbreak",');
+  });
+
+  test("niceTicks covers the maximum with 1-2-5 steps", () => {
+    assert.deepEqual(lib.niceTicks(561), [0, 200, 400, 600]);
+    assert.deepEqual(lib.niceTicks(1000), [0, 500, 1000]);
+    assert.deepEqual(lib.niceTicks(5), [0, 2, 4, 6]);
+    assert.deepEqual(lib.niceTicks(0), [0, 1]);
+    assert.deepEqual(lib.niceTicks(0.9), [0, 0.5, 1]);
+  });
+});

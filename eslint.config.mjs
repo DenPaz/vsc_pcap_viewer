@@ -70,6 +70,7 @@ export default tseslint.config(
         process: "readonly",
         __dirname: "readonly",
         URL: "readonly",
+        Buffer: "readonly",
       },
     },
   },

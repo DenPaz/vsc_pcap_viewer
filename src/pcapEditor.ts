@@ -5,6 +5,7 @@ import { BackendClient, ErrorCodes, RpcError, findPython } from "./backendClient
 import { Settings, readSettings } from "./config";
 import { HostToWebview, OpenResult, WEBVIEW_RPC_METHODS, WebviewToHost } from "./messages";
 import { saveFilterInteractive, showSavedFilters } from "./commands/savedFilters";
+import { FollowPanel } from "./panels/followPanel";
 import { ColumnSetting, SavedFilter, pushHistory } from "./settingsModel";
 
 const HISTORY_KEY = "pcapViewer.filterHistory";
@@ -53,6 +54,9 @@ export class PcapEditorProvider implements vscode.CustomReadonlyEditorProvider<P
         this.active = session;
       }
     });
+    // Focusing one of this capture's statistics/follow panels makes it the
+    // target of capture commands too (not whichever editor was focused last).
+    session.onDidActivate(() => (this.active = session));
     panel.onDidDispose(() => {
       this.sessions.delete(session);
       if (this.active === session) {
@@ -76,7 +80,19 @@ export class PcapEditorProvider implements vscode.CustomReadonlyEditorProvider<P
   }
 }
 
+let nextSessionId = 1;
+
 export class PcapEditorSession {
+  /** Unique per editor panel (keys the statistics panels). */
+  readonly id = nextSessionId++;
+  /** Frame currently selected in the packet list, if any. */
+  selectedFrame: number | null = null;
+  private readonly disposeEmitter = new vscode.EventEmitter<void>();
+  /** Fires when the editor closes (auxiliary panels close with it). */
+  readonly onDidDispose = this.disposeEmitter.event;
+  private readonly activateEmitter = new vscode.EventEmitter<void>();
+  /** Fires when one of this capture's auxiliary panels gains focus. */
+  readonly onDidActivate = this.activateEmitter.event;
   private client?: BackendClient;
   private info?: OpenResult;
   private filter = "";
@@ -283,6 +299,12 @@ export class PcapEditorSession {
       case "manageSavedFilters":
         await showSavedFilters(this);
         return;
+      case "selection":
+        this.selectedFrame = typeof msg.frame === "number" ? msg.frame : null;
+        return;
+      case "follow":
+        FollowPanel.show(this.context, this, msg.proto, msg.frame);
+        return;
       case "copy":
         await vscode.env.clipboard.writeText(String(msg.text));
         vscode.window.setStatusBarMessage("Copied to clipboard", 2000);
@@ -328,6 +350,21 @@ export class PcapEditorSession {
 
   applyFilter(expr: string): void {
     this.post({ type: "applyFilter", expr });
+  }
+
+  /** Put a filter in the filter bar without applying it ("Prepare as Filter"). */
+  prepareFilter(expr: string): void {
+    this.post({ type: "prepareFilter", expr });
+  }
+
+  /** Called by this capture's panels when they gain focus. */
+  activate(): void {
+    this.activateEmitter.fire();
+  }
+
+  /** Bring the capture editor to the front (e.g. after a panel applied a filter). */
+  reveal(): void {
+    this.panel.reveal(undefined, false);
   }
 
   focusFilter(): void {
@@ -386,6 +423,9 @@ export class PcapEditorSession {
     }
     this.disposed = true;
     this.loadSeq++;
+    this.disposeEmitter.fire();
+    this.disposeEmitter.dispose();
+    this.activateEmitter.dispose();
     for (const d of this.disposables) {
       d.dispose();
     }
