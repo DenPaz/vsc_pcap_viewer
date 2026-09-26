@@ -571,12 +571,18 @@ def stats_row_filter(world: World, n: int, flt: str) -> None:
     assert _table(world)["rows"][n - 1].get("filter") == flt
 
 
-@then(parsers.parse('the statistics include "{proto}" at depth {depth:d} with {packets:d} packets'))
-def phs_includes(world: World, proto: str, depth: int, packets: int) -> None:
+@then(parsers.re(r'the statistics include "(?P<proto>[^"]+)" with (?P<packets>\d+) packets$'))
+def phs_includes(world: World, proto: str, packets: str) -> None:
     rows = [r for r in _table(world)["rows"] if r["cells"][0] == proto]
     assert rows, proto
-    assert rows[0]["depth"] == depth
-    assert _stats_cell(world, rows[0], "Packets") == packets
+    assert _stats_cell(world, rows[0], "Packets") == int(packets)
+
+
+@then(parsers.re(r"the top level of the hierarchy covers (?P<packets>\d+) packets$"))
+def phs_top_level(world: World, packets: str) -> None:
+    """Depth 0 is eth in tshark 4.2 and a "frame" row above it in 4.6."""
+    top = [r for r in _table(world)["rows"] if r["depth"] == 0]
+    assert top and sum(_stats_cell(world, r, "Packets") for r in top) == int(packets)
 
 
 @then(

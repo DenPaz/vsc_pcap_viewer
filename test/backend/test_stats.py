@@ -109,19 +109,11 @@ eth                                      frames:26 bytes:2141
       data                               frames:6 bytes:330
     tcp                                  frames:11 bytes:1175
 """
-# tshark 4.6 puts everything below eth one level deeper (dns at depth 4). The
-# name of the extra level is not what matters here; "ethertype" stands in for it.
-PHS_46 = """\
-eth                                      frames:26 bytes:2141
-  ethertype                              frames:26 bytes:2141
-    arp                                  frames:1 bytes:42
-    ip                                   frames:25 bytes:2099
-      icmp                               frames:2 bytes:92
-      udp                                frames:12 bytes:832
-        dns                              frames:6 bytes:502
-        data                             frames:6 bytes:330
-      tcp                                frames:11 bytes:1175
-"""
+# tshark 4.6 adds a top-level "frame" row, so every protocol is one level
+# deeper (eth at depth 1, dns at depth 4), as reported from a 4.6.4 run.
+PHS_46 = "frame                                    frames:26 bytes:2141\n" + "".join(
+    f"  {line}\n" for line in PHS_42.strip("\n").split("\n")
+)
 
 
 def _parent(rows: list[dict[str, object]], name: str) -> tuple[object, object, object]:
@@ -134,7 +126,7 @@ def _parent(rows: list[dict[str, object]], name: str) -> tuple[object, object, o
 def test_protocol_hierarchy_depth_differs_by_version_parent_does_not() -> None:
     old = stats.parse_protocol_hierarchy(PHS_42).rows
     new = stats.parse_protocol_hierarchy(PHS_46).rows
-    assert [r["cells"][0] for r in new][:3] == ["eth", "ethertype", "arp"]
+    assert [(r["depth"], r["cells"][0]) for r in new][:3] == [(0, "frame"), (1, "eth"), (2, "arp")]
     assert _parent(old, "dns") == ("udp", 3, 6)
     assert _parent(new, "dns") == ("udp", 4, 6)
     # Percentages only count the top level, so the extra level changes nothing.
