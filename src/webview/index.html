@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <!--
+    Strict CSP: no inline scripts or styles, scripts only with this page's nonce,
+    resources only from the extension's webview folder. Packet contents are
+    untrusted and are only ever inserted with textContent.
+  -->
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; img-src {{cspSource}} data:; style-src {{cspSource}}; font-src {{cspSource}}; script-src 'nonce-{{nonce}}';">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="{{stylesUri}}">
+  <title>PCAP Viewer</title>
+</head>
+<body>
+  <div id="app">
+    <div id="filter-bar" role="search">
+      <label for="filter-input" class="visually-hidden">Display filter</label>
+      <input id="filter-input" type="text" spellcheck="false" autocomplete="off"
+             list="filter-history" placeholder="Apply a display filter … (Enter to apply)">
+      <datalist id="filter-history"></datalist>
+      <button id="filter-apply" type="button" title="Apply display filter (Enter)">Apply</button>
+      <button id="filter-clear" type="button" title="Clear display filter">Clear</button>
+      <button id="filter-cancel" type="button" class="hidden" title="Cancel filtering">Cancel</button>
+    </div>
+    <div id="filter-error" class="hidden" role="alert"></div>
+    <div id="busy-bar" class="hidden"><div id="busy-bar-fill"></div></div>
+
+    <div id="main">
+      <section id="list" aria-label="Packet list">
+        <div id="list-header" role="row"></div>
+        <div id="list-viewport" tabindex="0" role="grid" aria-label="Packets">
+          <div id="list-spacer"></div>
+          <div id="list-rows"></div>
+        </div>
+        <div id="list-empty" class="hidden">No packets match the current filter.</div>
+      </section>
+
+      <div id="split-h" class="splitter horizontal" role="separator" aria-orientation="horizontal" tabindex="-1"></div>
+
+      <section id="bottom">
+        <div id="detail" aria-label="Packet details">
+          <div id="detail-tree" role="tree" tabindex="0"></div>
+          <div id="detail-placeholder" class="placeholder">Select a packet to see its details.</div>
+        </div>
+        <div id="split-v" class="splitter vertical" role="separator" aria-orientation="vertical" tabindex="-1"></div>
+        <div id="bytes" aria-label="Packet bytes">
+          <div id="bytes-tabs" class="hidden" role="tablist"></div>
+          <div id="bytes-view" tabindex="0"></div>
+        </div>
+      </section>
+    </div>
+
+    <footer id="status-bar">
+      <span id="status-left"></span>
+      <span id="status-right"></span>
+    </footer>
+
+    <div id="overlay" class="overlay">
+      <div class="overlay-box">
+        <div id="overlay-message">Loading…</div>
+        <div id="overlay-progress" class="progress"><div id="overlay-progress-fill"></div></div>
+        <div id="overlay-detail"></div>
+        <div class="overlay-actions">
+          <button id="overlay-cancel" type="button">Cancel</button>
+          <button id="overlay-reload" type="button" class="hidden">Reload</button>
+          <button id="overlay-log" type="button" class="hidden secondary">Show Log</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="context-menu" class="context-menu hidden" role="menu"></div>
+  </div>
+
+  <script nonce="{{nonce}}" src="{{libUri}}"></script>
+  <script nonce="{{nonce}}" src="{{mainUri}}"></script>
+</body>
+</html>

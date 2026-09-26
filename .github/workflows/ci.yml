@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  linux:
+    name: Linux (lint, backend, unit, webview e2e, VS Code smoke)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tshark
+        run: |
+          echo "wireshark-common wireshark-common/install-setuid boolean false" | sudo debconf-set-selections
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y tshark xvfb
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: uv sync --locked
+      - run: npm ci
+      - name: Lint
+        run: |
+          npm run lint
+          uv run ruff check
+          uv run ruff format --check
+          uv run mypy
+      - name: Backend tests
+        run: uv run pytest
+      - name: Install Chromium for webview e2e
+        run: npx playwright-core install --with-deps chromium
+      - name: Unit + webview tests
+        run: npm run test:unit
+      - name: VS Code smoke test
+        run: xvfb-run -a npm run test:extension
+
+  cross-platform:
+    name: ${{ matrix.os }} (backend + unit)
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: uv sync --locked
+      - run: npm ci
+      - run: npm run lint
+      # tshark-dependent tests skip when Wireshark is not installed.
+      - run: uv run pytest
+      - run: npm run test:unit

@@ -1,0 +1,33 @@
+{
+  "Wireshark Lua dissector": {
+    "prefix": ["dissector", "wsdissector"],
+    "description": "Skeleton of a Wireshark/tshark Lua dissector registered on a UDP or TCP port",
+    "body": [
+      "-- ${1:My Protocol} dissector for PCAP Viewer / Wireshark.",
+      "local ${2:myproto} = Proto(\"${2:myproto}\", \"${1:My Protocol}\")",
+      "",
+      "local f_type = ProtoField.uint8(\"${2:myproto}.type\", \"Type\", base.DEC)",
+      "local f_length = ProtoField.uint16(\"${2:myproto}.length\", \"Length\", base.DEC)",
+      "local f_payload = ProtoField.bytes(\"${2:myproto}.payload\", \"Payload\")",
+      "${2:myproto}.fields = { f_type, f_length, f_payload }",
+      "",
+      "function ${2:myproto}.dissector(buffer, pinfo, tree)",
+      "    if buffer:len() < 3 then",
+      "        return 0",
+      "    end",
+      "    pinfo.cols.protocol = ${2:myproto}.name",
+      "    local subtree = tree:add(${2:myproto}, buffer(), \"${1:My Protocol}\")",
+      "    subtree:add(f_type, buffer(0, 1))",
+      "    subtree:add(f_length, buffer(1, 2))",
+      "    if buffer:len() > 3 then",
+      "        subtree:add(f_payload, buffer(3))",
+      "    end",
+      "    $0",
+      "    return buffer:len()",
+      "end",
+      "",
+      "DissectorTable.get(\"${3|udp.port,tcp.port|}\"):add(${4:9999}, ${2:myproto})",
+      ""
+    ]
+  }
+}

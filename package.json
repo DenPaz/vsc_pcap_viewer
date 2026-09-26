@@ -1,0 +1,234 @@
+{
+  "name": "pcap-viewer",
+  "displayName": "PCAP Viewer",
+  "description": "Wireshark-like packet capture viewer for VS Code, powered by tshark.",
+  "version": "0.1.0",
+  "publisher": "denpaz",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/DenPaz/vsc_pcap_viewer"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other",
+    "Visualization"
+  ],
+  "keywords": [
+    "pcap",
+    "pcapng",
+    "wireshark",
+    "tshark",
+    "network"
+  ],
+  "main": "./out/src/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "customEditors": [
+      {
+        "viewType": "pcapViewer.editor",
+        "displayName": "PCAP Viewer",
+        "selector": [
+          {
+            "filenamePattern": "*.pcap"
+          },
+          {
+            "filenamePattern": "*.pcapng"
+          },
+          {
+            "filenamePattern": "*.cap"
+          }
+        ],
+        "priority": "default"
+      }
+    ],
+    "commands": [
+      {
+        "command": "pcapViewer.applyFilter",
+        "title": "Apply Display Filter",
+        "category": "PCAP"
+      },
+      {
+        "command": "pcapViewer.clearFilter",
+        "title": "Clear Display Filter",
+        "category": "PCAP"
+      },
+      {
+        "command": "pcapViewer.goToPacket",
+        "title": "Go to Packet",
+        "category": "PCAP"
+      },
+      {
+        "command": "pcapViewer.manageColumns",
+        "title": "Manage Custom Columns",
+        "category": "PCAP"
+      },
+      {
+        "command": "pcapViewer.reload",
+        "title": "Reload Capture",
+        "category": "PCAP"
+      },
+      {
+        "command": "pcapViewer.showLog",
+        "title": "Show Log",
+        "category": "PCAP"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "pcapViewer.applyFilter",
+          "when": "activeCustomEditorId == pcapViewer.editor"
+        },
+        {
+          "command": "pcapViewer.clearFilter",
+          "when": "activeCustomEditorId == pcapViewer.editor"
+        },
+        {
+          "command": "pcapViewer.goToPacket",
+          "when": "activeCustomEditorId == pcapViewer.editor"
+        },
+        {
+          "command": "pcapViewer.reload",
+          "when": "activeCustomEditorId == pcapViewer.editor"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "pcapViewer.applyFilter",
+        "key": "ctrl+/",
+        "mac": "cmd+/",
+        "when": "activeCustomEditorId == pcapViewer.editor"
+      },
+      {
+        "command": "pcapViewer.goToPacket",
+        "key": "ctrl+g",
+        "mac": "cmd+g",
+        "when": "activeCustomEditorId == pcapViewer.editor"
+      }
+    ],
+    "configuration": {
+      "title": "PCAP Viewer",
+      "properties": {
+        "pcapViewer.pythonPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine-overridable",
+          "markdownDescription": "Python 3.10+ interpreter used to run the backend. Empty: try `python3`/`python` (or `py -3` on Windows) from `PATH`."
+        },
+        "pcapViewer.tsharkPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine-overridable",
+          "markdownDescription": "Path to `tshark`. Empty: search `PATH` and the default Wireshark install locations."
+        },
+        "pcapViewer.luaScripts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "Lua dissector scripts passed to tshark as `-X lua_script:<path>`. Relative paths resolve against the first workspace folder."
+        },
+        "pcapViewer.dissectorsFolder": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Folder whose `*.lua` files are loaded as dissectors in addition to `#pcapViewer.luaScripts#`. Relative paths resolve against the first workspace folder."
+        },
+        "pcapViewer.decodeAs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.\\-]*(==|:)[^,\\s]+,[A-Za-z0-9_.\\-]+$",
+            "patternErrorMessage": "Expected <layer>==<value>,<protocol>, e.g. tcp.port==8080,http"
+          },
+          "default": [],
+          "markdownDescription": "\"Decode As\" rules passed to tshark as `-d`, e.g. `tcp.port==8080,http`."
+        },
+        "pcapViewer.prefs": {
+          "type": "object",
+          "additionalProperties": {
+            "type": [
+              "string",
+              "number",
+              "boolean"
+            ]
+          },
+          "default": {},
+          "markdownDescription": "Wireshark preference overrides passed as `-o <name>:<value>`, e.g. `{ \"tcp.desegment_tcp_streams\": false }`."
+        },
+        "pcapViewer.columns": {
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "field": {
+                    "type": "string"
+                  },
+                  "title": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "field"
+                ]
+              }
+            ]
+          },
+          "default": [],
+          "markdownDescription": "Extra packet-list columns: any tshark field (e.g. `tcp.stream`, `http.host`) or `{ \"field\": \"http.host\", \"title\": \"Host\" }`."
+        },
+        "pcapViewer.maxCachedFrames": {
+          "type": "integer",
+          "default": 5000000,
+          "minimum": 10000,
+          "markdownDescription": "Budget (in frame numbers) for cached filter results and sort orders in the backend. Each entry costs 4 bytes."
+        },
+        "pcapViewer.requestTimeoutSeconds": {
+          "type": "integer",
+          "default": 60,
+          "minimum": 5,
+          "markdownDescription": "Timeout for quick backend requests (packet detail, validation). Long operations (open, filter, sort) are not timed out but can be cancelled."
+        }
+      }
+    },
+    "snippets": [
+      {
+        "language": "lua",
+        "path": "./snippets/lua-dissector.json"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src test && tsc -p tsconfig.webview.json",
+    "test": "npm run test:unit && npm run test:backend",
+    "test:unit": "npm run compile && mocha --ui tdd \"out/test/extension/unit/**/*.test.js\" \"test/webview/**/*.test.js\"",
+    "test:backend": "uv run pytest",
+    "test:extension": "npm run compile && node ./out/test/extension/runTest.js",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.0",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^20.19.0",
+    "@types/vscode": "~1.90.0",
+    "@vscode/test-electron": "^2.5.2",
+    "@vscode/vsce": "^3.6.0",
+    "eslint": "^9.39.0",
+    "mocha": "^11.7.0",
+    "playwright-core": "^1.56.1",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.46.0"
+  }
+}
