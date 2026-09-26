@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Big captures open faster: the first packets show within about half a second
+  while the rest is indexed (a filter applied meanwhile waits for it), and the
+  finished index is saved, so reopening an unchanged capture is instant
+  (`pcapViewer.indexCache.enabled`, `pcapViewer.indexCache.maxSizeMB`,
+  *PCAP: Clear Index Cache*).
+- The large-capture generator (`make large-fixture`) works on Pythons built
+  without zstd.
 - Quick view of late packets: from packet 20,000 on (`pcapViewer.quickDetail.after`),
   the details show in about 0.3 s instead of up to ~20 s per million packets:
   only the 300 packets before it (`pcapViewer.quickDetail.window`) are

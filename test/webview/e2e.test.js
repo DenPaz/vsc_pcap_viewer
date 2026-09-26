@@ -7,7 +7,10 @@
  * Set PCAP_VIEWER_SCREENSHOT=<path> to save a screenshot of the final state.
  */
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
+const { spawnSync } = require("node:child_process");
 const { ROOT, HAVE_TSHARK, loadDeps, serveWebview, renderEditorHtml, startBackend } = require("./harness");
 
 const deps = loadDeps();
@@ -837,6 +840,50 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     assert.deepEqual(detailRequests, [{ number: 10 }]);
     assert.equal(await note(), "");
     await reopen({ after: 20000, window: 300 });
+  });
+
+  test("streaming open: rows show while indexing; a filter waits for it, sorting says why", async function () {
+    this.timeout(120_000);
+    const venv = path.join(ROOT, ".venv", process.platform === "win32" ? "Scripts/python.exe" : "bin/python");
+    const py = process.env.PCAP_VIEWER_PYTHON ?? venv;
+    const big = path.join(os.tmpdir(), `pcapviewer-e2e-${process.pid}.pcap`);
+    // Big enough that indexing takes a few seconds (the small fixtures finish before the first batch).
+    const gen = spawnSync(py, [path.join(ROOT, "test", "fixtures", "generate.py"), "--large", "150000", big], { encoding: "utf8" });
+    if (gen.status !== 0) {
+      console.warn(`skipping streaming e2e: could not generate a capture (${gen.stderr || gen.error})`);
+      this.skip();
+    }
+    const status = () => page.textContent("#status-left");
+    const stop = client.onNotification("index", (p) => {
+      void post(p.event === "progress" ? { type: "indexProgress", frames: p.frames, fraction: p.fraction ?? null } : { type: "indexDone", info: p.info, error: p.event === "failed" ? p.message : undefined });
+    });
+    try {
+      const info = await client.request("open", { path: big, stream: true, prefs: { "tcp.analyze_sequence_numbers": false } }, { timeoutMs: 0 });
+      assert.equal(info.indexing, true);
+      assert.ok(info.frames > 0 && info.frames < 150_000);
+      await post({ type: "init", info, columns: customCols, layout, timeFormat: "relative", quickDetail: { after: 20000, window: 300 }, filter: "", history: [], savedFilters, elapsedMs: 1 });
+      await page.waitForFunction(() => /^Indexing… [\d,]+ packets so far/.test(document.querySelector("#status-left")?.textContent ?? ""));
+      await page.waitForFunction(() => document.querySelector("#list-rows .list-row:not(.loading)")?.children[0]?.textContent === "1");
+
+      await page.fill("#filter-input", "dns");
+      await page.press("#filter-input", "Enter");
+      await page.waitForFunction(() => /The filter is applied when indexing finishes/.test(document.getElementById("filter-error")?.textContent ?? ""));
+      await page.click("#list-header > div[data-id='length']");
+      await page.waitForFunction(() => /Sorting is available when indexing finishes/.test(document.getElementById("filter-error")?.textContent ?? ""));
+      assert.equal(await page.$("#list-header .sort-indicator"), null, "not sorted");
+
+      // When indexing is done, the waiting filter is applied.
+      await page.waitForFunction(() => /Packets: 150,000 · Displayed: [\d,]+/.test(document.querySelector("#status-left")?.textContent ?? ""), null, { timeout: 90_000 });
+      assert.doesNotMatch(await status(), /Indexing/);
+    } finally {
+      stop();
+      fs.rmSync(big, { force: true });
+    }
+    // Back to the small capture for the other tests.
+    const info = await client.request("open", { path: path.join(ROOT, "test", "fixtures", "http.pcap"), columns: ["tcp.stream"] }, { timeoutMs: 0 });
+    await post({ type: "init", info, columns: customCols, layout, timeFormat: "relative", quickDetail: { after: 20000, window: 300 }, filter: "", history: [], savedFilters, elapsedMs: 1 });
+    await page.fill("#filter-input", "");
+    await page.waitForFunction(() => document.querySelectorAll("#list-rows .list-row:not(.loading)").length === 11);
   });
 
   test("no script errors or CSP violations", () => {

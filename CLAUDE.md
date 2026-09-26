@@ -69,7 +69,8 @@ The `Makefile` wraps all of these (`make` lists the targets; `make check` = lint
   `coloring.py` (coloring rules → `colorfilters`), `navigation.py` (find
   expressions, hex parsing, frame-set filters, time formatting), `export.py` (destination
   checks, atomic output, CSV/JSON writers), `protocol.py` (error codes,
-  request context), `cancellation.py`, `procs.py` (stopping children, also
+  request context), `cancellation.py`, `index_cache.py` (saved indexes),
+  `procs.py` (stopping children, also
   when the kill is refused), `sandbox.py` (AppArmor/Snap detection and hints).
 - `backend/dissectors/example.lua` sample dissector (UDP/9999).
 - `test/backend` pytest; `test/backend/acceptance` pytest-bdd scenarios
@@ -116,7 +117,43 @@ UI behaviour stays in the Chromium test (`test/webview/e2e.test.js`).
   temp file and keeps an `array('Q')` of line offsets (8 B/frame). Filters keep
   an `array('I')` of matching frame numbers (4 B/match), cached in an LRU keyed
   by expression and bounded by `pcapViewer.maxCachedFrames`. Scrolling never
-  runs tshark.
+  runs tshark. `RowStore.publish()` flushes and makes appended rows visible
+  (`len()` = published rows); the index pass publishes every progress tick.
+- **Streaming open** (`open {stream: true}`, what the host sends): the index
+  pass runs in the pool (`_run_index`); `open` returns once FIRST_BATCH (1000)
+  rows are published or after FIRST_BATCH_S (0.5 s) with some (`indexing:
+  true`), else when done. The pass then reports through backend notifications
+  `index {event: progress|done|failed}` (`service.notify` = `server.notify`;
+  `BackendClient.onNotification`). An `_Indexing` object is "attached" under
+  `_lock` when `open` publishes the partial capture, so a pass ending at the
+  same moment either completes `open` or finalises the attached capture, never
+  neither. The host subscribes before sending `open` and buffers events until
+  the webview has its `init` (a fast "done" can beat the response). While
+  indexing, `_require_view` grows the unfiltered view to the published rows;
+  everything that needs all rows raises `IndexingError` (-32012): non-empty
+  filters, sorting, find, conversation stepping, extra column passes (follow
+  stream), CSV/JSON export, coloring (the host starts coloring after "done").
+  Non-relative time formats show relative times until done. The webview
+  queues a filter (`pendingFilter`, applied on `indexDone`), refuses sorting
+  with a notice, grows `total` on `indexProgress` (dropping the cached short
+  last page), and `refreshRows()` on done. Closing cancels the pass and waits
+  for it (`_close_file` drops `_lock` meanwhile: the pass takes it to finish).
+- **Saved indexes** (`index_cache.py`, `open {cache: {dir, maxBytes}}`; the
+  host passes `globalStorageUri/index-cache`, `pcapViewer.indexCache.*`): an
+  entry `<key>/` holds `rows.tsv`, `offsets.bin`, `meta.json` (info, fields,
+  column names, kept columns) and up to 4 `colors-<rules>.bin/.json`. The key
+  hashes the capture's resolved path, size, mtime_ns and inode; tshark path and
+  version (`--version`, cached per path); Lua scripts by content; Decode As;
+  prefs; requested columns; and a fingerprint (names, sizes, mtimes) of tshark's
+  personal configuration and plugin folders (`tshark -G folders`), which change
+  dissection too. Entries are written to `.key.pid.tmp` and renamed; a load
+  touches `meta.json` (LRU) and the rows are hard-linked (else copied) into the
+  work dir, so pruning never pulls the file from under an open capture.
+  Saving runs after the pass, in the background, also hard-linking. Size cap:
+  least recently used first. Coloring results are saved per rules digest and
+  reused by `set_coloring` (`_coloring_pass` is skipped). *PCAP: Clear Index
+  Cache* deletes the folder from the host. Custom columns added later are extra
+  passes and not saved (the next open with them is a new key).
 - **Column field names**: tshark ≥ 4.2 uses `_ws.col.def_src/def_dst/protocol/info`;
   older versions `_ws.col.Source/…`. The index pass tries the new names and
   falls back automatically when tshark rejects them. Unknown custom column
@@ -424,13 +461,15 @@ UI behaviour stays in the Chromium test (`test/webview/e2e.test.js`).
     Time or Info). `lib.formatBytesAs` has the bytes-pane copy formats.
 - **Protocol**: JSON-RPC 2.0 framing (`"jsonrpc": "2.0"`), LSP-style
   cancellation code -32800; app codes in `backend/pcap_backend/protocol.py`
-  and mirrored in `src/backendClient.ts` (`ErrorCodes`; -32011 unsupported format). `open` returns the
+  and mirrored in `src/backendClient.ts` (`ErrorCodes`; -32011 unsupported format,
+  -32012 still indexing). `open` returns the
   initial `filterId`; every `list_packets` result carries the current one so
   the webview drops stale pages.
 
 ## Performance notes (test/perf/bench.py, 1M synthetic packets, 146 MB)
 
-With `-o tcp.analyze_sequence_numbers:FALSE`: open 36 s, filter 26 s, page
+With `-o tcp.analyze_sequence_numbers:FALSE`: open 29–36 s (first rows after
+0.5 s with streaming; reopening from the saved index 0.01 s, 104 MB), filter 26 s, page
 fetch < 1 ms, sort 0.6 s, detail of last frame 20–26 s (quick view of any
 frame 0.25–0.3 s with a 300-packet window), backend RSS 125 MB,
 tshark 225 MB. With TCP analysis on, the synthetic file (512 replayed flows)

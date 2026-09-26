@@ -27,7 +27,7 @@ import time
 from array import array
 from bisect import bisect_left
 from collections.abc import Callable, Iterable, Sequence
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -44,8 +44,10 @@ from .export import (
     check_destination,
 )
 from .fields import FieldCatalog, parse_field_list
+from .index_cache import IndexCache, folder_fingerprint, index_key, rules_key
 from .protocol import (
     FilterError,
+    IndexingError,
     InvalidParamsError,
     NotOpenError,
     RequestContext,
@@ -85,6 +87,11 @@ _FRAMENUM_HINT = re.compile(
 # copy, export). 4 bytes each in the backend, ~8 in JSON.
 MAX_SELECTION = 1_000_000
 PROGRESS_INTERVAL_S = 0.2
+# Streaming open: `open` returns once this many rows are indexed (or after
+# FIRST_BATCH_S with at least one), and the pass goes on in the background.
+FIRST_BATCH = 1000
+FIRST_BATCH_S = 0.5
+DEFAULT_CACHE_BYTES = 1 << 30
 
 
 @dataclass(frozen=True, slots=True)
@@ -197,6 +204,71 @@ class _Open:
     columns: list[str] = field(default_factory=list)  # custom column fields
     # Fields tshark refused ("Some fields aren't valid"); never re-run tshark for them.
     rejected: set[str] = field(default_factory=set)
+    # Saved-index cache and this capture's key in it (None: not cached).
+    cache: IndexCache | None = None
+    cache_key: str | None = None
+
+    def frame_count(self) -> int:
+        """Frames known so far: during a streaming open, the rows published
+        already, even before the view (and ``info.frames``) caught up."""
+        return max(self.info.frames, len(self.base.rows))
+
+
+class _PassProgress:
+    """Per-row bookkeeping of an index pass: progress (from frame lengths vs
+    file size when the format allows), publishing rows as they come, and the
+    first batch for a streaming open."""
+
+    def __init__(
+        self,
+        ctx: RequestContext,
+        store: _Store,
+        on_rows: Callable[[_Store], None] | None,
+        size: int,
+        overhead: int | None,
+    ) -> None:
+        self.ctx = ctx
+        self.store = store
+        self.on_rows = on_rows
+        self.size = size
+        self.overhead = overhead
+        self.bytes_seen = 0
+        self.last_emit = 0.0
+        self.started = time.monotonic()
+
+    def row(self, number: int, rest: bytes) -> None:
+        rows = self.store.rows
+        if self.overhead:
+            cells = rest.split(b"\t", _LEN_IDX + 1)
+            if len(cells) > _LEN_IDX and cells[_LEN_IDX].isdigit():
+                self.bytes_seen += int(cells[_LEN_IDX]) + self.overhead
+        now = time.monotonic()
+        if now - self.last_emit >= PROGRESS_INTERVAL_S:
+            self.last_emit = now
+            rows.publish()
+            fraction = min(0.99, self.bytes_seen / self.size) if self.overhead else None
+            self.ctx.progress({"phase": "index", "frames": number, "fraction": fraction})
+        if self.on_rows is not None and (
+            rows.appended >= FIRST_BATCH or now - self.started >= FIRST_BATCH_S
+        ):
+            on_rows, self.on_rows = self.on_rows, None
+            rows.publish()
+            on_rows(self.store)
+
+
+@dataclass(slots=True)
+class _Indexing:
+    """A (streaming) index pass running in the background."""
+
+    token: CancelToken
+    report: Callable[[Any], None]
+    first: threading.Event = field(default_factory=threading.Event)  # rows to show
+    done: threading.Event = field(default_factory=threading.Event)
+    store: _Store | None = None
+    error: BaseException | None = None
+    future: Future[None] | None = None
+    # `open` returned while the pass was running: finishing it updates the capture.
+    attached: bool = False
 
 
 @dataclass(slots=True)
@@ -239,6 +311,11 @@ class PcapService:
         self._coloring_seq = 0
         # Marked frames (Wireshark's Ctrl+M): per session, not persisted.
         self._marks: set[int] = set()
+        # Streaming open: the index pass still running after `open` returned.
+        self._indexing: _Indexing | None = None
+        self._tshark_versions: dict[Path, str] = {}
+        # Backend -> client notifications ("index": progress/done/failed of a streaming open).
+        self.notify: Callable[[str, dict[str, Any]], None] = lambda _method, _params: None
         self._pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="svc")
 
     # ------------------------------------------------------------------ lifecycle
@@ -266,6 +343,17 @@ class PcapService:
         self._pool.shutdown(wait=False, cancel_futures=True)
 
     def _close_file(self) -> None:
+        indexing, self._indexing = self._indexing, None
+        if indexing is not None:
+            indexing.token.cancel()
+            if indexing.future is not None:
+                self._lock.release()  # the pass takes the lock to finish
+                try:
+                    indexing.future.result(timeout=30)
+                except Exception:  # noqa: S110 - it was cancelled; errors don't matter now
+                    pass
+                finally:
+                    self._lock.acquire()
         if self._file is not None:
             self._file.base.rows.close()
             for s in self._file.extra:
@@ -296,11 +384,34 @@ class PcapService:
         with self._lock:
             if self._file is None or self._view is None:
                 raise NotOpenError()
-            return self._file, self._view
+            view = self._view
+            if self._indexing is not None and not view.expr and view.sort is None:
+                # Streaming: the unfiltered view grows with the index pass.
+                n = len(self._file.base.rows)
+                if len(view.matched) != n:
+                    view.matched = view.ordered = FrameIndex.all(n)
+                    self._file.info.frames = n
+            return self._file, view
+
+    def _require_indexed(self) -> None:
+        """Raise IndexingError while a streaming index pass is still running."""
+        with self._lock:
+            if self._indexing is not None and self._file is not None:
+                raise IndexingError(len(self._file.base.rows))
 
     # ------------------------------------------------------------------ open
 
     def open(self, params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
+        """Index a capture file for the packet list.
+
+        ``cache: {dir, maxBytes}`` reuses a saved index when nothing that
+        changes it did (``fromCache: true``), and saves new ones. ``stream:
+        true`` returns once the first rows are indexed (``indexing: true``);
+        the pass goes on in the background and "index" notifications report
+        its progress and end ("progress", then "done" with the final result,
+        or "failed"). Until then the unfiltered list grows as rows arrive, and
+        what needs every row (filters, sorting, find…) raises IndexingError.
+        """
         path = Path(param(params, "path", str)).expanduser()
         if not path.is_file():
             raise InvalidParamsError(f"capture file not found: {path}")
@@ -322,6 +433,8 @@ class PcapService:
         ]
         requested_columns = list(columns)  # _index_pass removes fields tshark rejects
         tshark = self._require_tshark().with_options(options)
+        stream = bool(params.get("stream"))
+        cache = _cache_from(params.get("cache"))
 
         with self._lock:
             self._close_file()
@@ -330,34 +443,206 @@ class PcapService:
 
         info = CaptureInfo(path=str(path), size=path.stat().st_size)
         info.warnings += options.check_scripts()
+        key = self._index_key(tshark, path, options, requested_columns, ctx) if cache else None
+        if cache is not None and key is not None:
+            hit = cache.load(key)
+            if hit is not None:
+                return self._open_cached(path, tshark, hit, work_dir, cache, key)
+
         info_future = self._pool.submit(self._capinfos, tshark, path, ctx.token)
-
-        base = self._index_pass(tshark, path, work_dir, columns, info, ctx, base=True)
-        info.frames = len(base.rows)
-
-        meta = info_future.result()
-        for key in ("start_time", "end_time", "link_type", "file_type"):
-            if getattr(info, key) is None and meta.get(key) is not None:
-                setattr(info, key, meta[key])
-        if info.start_time is None and info.frames:
-            info.start_time = self._first_epoch(tshark, path, ctx.token)
-
+        indexing = _Indexing(token=CancelToken(), report=ctx.progress)
+        ctx.token.on_cancel(indexing.token.cancel)
+        indexing.future = self._pool.submit(
+            self._run_index, tshark, path, work_dir, columns, info, info_future, indexing,
+            cache, key,
+        )  # fmt: skip
+        wait_for = indexing.first if stream else indexing.done
+        while not wait_for.wait(0.1):
+            ctx.token.raise_if_cancelled()
+        ctx.token.raise_if_cancelled()
         with self._lock:
+            if indexing.error is not None:
+                raise indexing.error
+            assert indexing.store is not None
+            complete = indexing.done.is_set()
             self._file = _Open(
                 path,
                 tshark,
                 info,
-                base,
+                indexing.store,
                 columns=columns,
                 rejected={c for c in requested_columns if c not in columns},
+                cache=cache,
+                cache_key=key,
+            )
+            if not complete:
+                info.frames = len(indexing.store.rows)
+                indexing.attached = True
+                indexing.report = lambda p: self.notify("index", {"event": "progress", **p})
+                self._indexing = indexing
+            self._next_filter_id += 1
+            everything = FrameIndex.all(info.frames)
+            self._view = _View(self._next_filter_id, "", everything, None, everything)
+            return self._open_result(self._file, indexing=not complete)
+
+    def _open_result(self, f: _Open, *, indexing: bool = False) -> dict[str, Any]:
+        result = f.info.to_json()
+        result["columns"] = self._column_descriptors(f.columns)
+        result["filterId"] = self._view.filter_id if self._view else 0
+        result["indexing"] = indexing
+        return result
+
+    def _run_index(
+        self,
+        tshark: Tshark,
+        path: Path,
+        work_dir: Path,
+        columns: list[str],
+        info: CaptureInfo,
+        info_future: Future[dict[str, Any]],
+        indexing: _Indexing,
+        cache: IndexCache | None,
+        key: str | None,
+    ) -> None:
+        """The index pass (in the pool). Rows become visible as they come
+        (``indexing.first`` once there are some); finishing it completes the
+        capture's info, updates an attached (streaming) capture and saves the index."""
+        # Not `progress=indexing.report`: open() swaps it for notifications when it returns.
+        ctx = RequestContext(token=indexing.token, progress=lambda p: indexing.report(p))  # noqa: PLW0108
+
+        def rows_ready(store: _Store) -> None:
+            indexing.store = store
+            indexing.first.set()
+
+        try:
+            base = self._index_pass(
+                tshark, path, work_dir, columns, info, ctx, base=True, on_rows=rows_ready
+            )
+            indexing.store = base
+            meta = info_future.result()
+            for name in ("start_time", "end_time", "link_type", "file_type"):
+                if getattr(info, name) is None and meta.get(name) is not None:
+                    setattr(info, name, meta[name])
+            if info.start_time is None and len(base.rows):
+                info.start_time = self._first_epoch(tshark, path, indexing.token)
+        except BaseException as exc:  # handed to `open` or the client
+            indexing.error = exc
+        with self._lock:
+            if indexing.error is None:
+                assert indexing.store is not None
+                info.frames = len(indexing.store.rows)
+            indexing.done.set()
+            indexing.first.set()
+            attached = indexing.attached and self._indexing is indexing
+            if attached:
+                self._indexing = None
+                done = self._finish_streaming(indexing)
+        if attached:
+            self.notify("index", done)
+        if indexing.error is None and cache is not None and key is not None:
+            store = indexing.store
+            assert store is not None
+            cache.save(
+                key,
+                store.rows.path,
+                store.rows.offsets,
+                {
+                    "info": info.to_json(),
+                    "fields": list(store.rows.fields),
+                    "names": list(store.fields),
+                    "columns": columns,
+                },
+            )
+
+    def _finish_streaming(self, indexing: _Indexing) -> dict[str, Any]:
+        """The end of a streaming index pass: update the capture (under the lock)
+        and return the "index" notification to send."""
+        f = self._file
+        if f is None:
+            return {"event": "failed", "message": "the capture was closed"}
+        if indexing.error is not None:
+            if isinstance(indexing.error, CancelledError):
+                return {"event": "failed", "message": "indexing was cancelled"}
+            message = str(indexing.error) or type(indexing.error).__name__
+            f.info.warnings.append(
+                f"Indexing stopped after {len(f.base.rows):,} packets: {message}"
+            )
+            f.info.frames = len(f.base.rows)
+            return {"event": "failed", "message": message, "info": self._open_result(f)}
+        view = self._view
+        if view is not None and not view.expr and view.sort is None:
+            view.matched = view.ordered = FrameIndex.all(f.info.frames)
+        return {"event": "done", "info": self._open_result(f)}
+
+    def _open_cached(
+        self,
+        path: Path,
+        tshark: Tshark,
+        hit: Any,
+        work_dir: Path,
+        cache: IndexCache,
+        key: str,
+    ) -> dict[str, Any]:
+        """Open from a saved index: no tshark pass at all."""
+        meta = hit.meta
+        rows_path = work_dir / "rows-cached.tsv"
+        try:
+            os.link(hit.rows, rows_path)  # instant, and safe if the cache entry goes away
+        except OSError:
+            shutil.copyfile(hit.rows, rows_path)
+        store = _Store(RowStore(rows_path, meta["fields"], hit.offsets), tuple(meta["names"]))
+        saved = meta["info"]
+        info = CaptureInfo(
+            path=str(path),
+            frames=len(store.rows),
+            start_time=saved.get("startTime"),
+            end_time=saved.get("endTime"),
+            link_type=saved.get("linkType"),
+            file_type=saved.get("fileType"),
+            size=path.stat().st_size,
+            warnings=list(saved.get("warnings", [])),
+        )
+        columns = list(meta.get("columns", []))
+        with self._lock:
+            self._file = _Open(
+                path, tshark, info, store, columns=columns, cache=cache, cache_key=key
             )
             self._next_filter_id += 1
             everything = FrameIndex.all(info.frames)
             self._view = _View(self._next_filter_id, "", everything, None, everything)
-        result = info.to_json()
-        result["columns"] = self._column_descriptors(columns)
-        result["filterId"] = self._view.filter_id
+            result = self._open_result(self._file)
+        result["fromCache"] = True
         return result
+
+    def _index_key(
+        self,
+        tshark: Tshark,
+        path: Path,
+        options: DissectionOptions,
+        columns: list[str],
+        ctx: RequestContext,
+    ) -> str | None:
+        """The saved-index key of this capture with these settings (None if it
+        can't be computed: then the index is neither loaded nor saved)."""
+        try:
+            version = self._tshark_versions.get(tshark.path)
+            if version is None:
+                version = tshark.version()
+                self._tshark_versions[tshark.path] = version
+            folders = _personal_folders(tshark.folders(ctx.token))
+            return index_key(
+                capture=path,
+                tshark=tshark.path,
+                tshark_version=version,
+                lua_scripts=list(options.lua_scripts),
+                decode_as=list(options.decode_as),
+                prefs=dict(options.prefs),
+                columns=columns,
+                config=folder_fingerprint(folders),
+            )
+        except (OSError, ToolError) as exc:
+            print(f"pcap-viewer: index cache off for this capture: {exc}", file=sys.stderr)
+            return None
 
     def _column_descriptors(self, custom: Sequence[str]) -> list[dict[str, Any]]:
         cols: list[dict[str, Any]] = [
@@ -390,11 +675,14 @@ class PcapService:
         ctx: RequestContext,
         *,
         base: bool,
+        on_rows: Callable[[_Store], None] | None = None,
     ) -> _Store:
         """Run one ``-T fields`` pass, writing every frame's row to a RowStore.
 
         Retries without fields tshark rejects (unknown custom columns, or the
-        column field names of older tshark versions).
+        column field names of older tshark versions). Rows are published as
+        they come; ``on_rows`` gets the store once the first ones are readable
+        (FIRST_BATCH rows, or FIRST_BATCH_S with at least one).
         """
         # (name the caller asked for, name actually passed to tshark)
         pairs = [(c.field, c.field) for c in BASE_COLUMNS] if base else []
@@ -412,9 +700,9 @@ class PcapService:
             # when it is not already the first column.
             fields = actual if base else ["frame.number", *actual]
             argv = tshark.argv(*_fields_args(fields), capture=str(path))
-            last_emit = 0.0
-            bytes_seen = 0
             bad_lines = 0
+            store = _Store(rows, tuple(name for name, _ in pairs))
+            tracker = _PassProgress(ctx, store, on_rows, size, overhead)
             try:
                 for line in stream_lines(argv, result, ctx.token):
                     parts = line.split(b"\t", 1)
@@ -425,15 +713,7 @@ class PcapService:
                         continue
                     rest = line if base else (parts[1] if len(parts) > 1 else b"")
                     rows.append(number, rest)
-                    if overhead:
-                        cells = rest.split(b"\t", _LEN_IDX + 1)
-                        if len(cells) > _LEN_IDX and cells[_LEN_IDX].isdigit():
-                            bytes_seen += int(cells[_LEN_IDX]) + overhead
-                    now = time.monotonic()
-                    if now - last_emit >= PROGRESS_INTERVAL_S:
-                        last_emit = now
-                        fraction = min(0.99, bytes_seen / size) if overhead else None
-                        ctx.progress({"phase": "index", "frames": number, "fraction": fraction})
+                    tracker.row(number, rest)
             finally:
                 rows.finish()
             if result.lines == 0 and result.returncode not in (0, None):
@@ -448,8 +728,8 @@ class PcapService:
             if result.stderr:
                 info.warnings += _stderr_warnings(result.stderr)
             ctx.progress({"phase": "index", "frames": len(rows), "fraction": 1.0})
-            # Expose columns under the names the caller asked for.
-            return _Store(rows, tuple(name for name, _ in pairs))
+            # Columns are exposed under the names the caller asked for.
+            return store
         raise ToolError("tshark rejected the requested columns")
 
     def _capinfos(self, tshark: Tshark, path: Path, token: CancelToken) -> dict[str, Any]:
@@ -489,6 +769,11 @@ class PcapService:
         return {"valid": error is None, "error": error} if error else {"valid": True}
 
     def set_filter(self, params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
+        if str(params.get("expr") or "").strip():
+            self._require_indexed()
+        return self._set_filter(params, ctx)
+
+    def _set_filter(self, params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
         expr = param(params, "expr", str, "").strip()
         f = self._require_file()
         with self._lock:
@@ -579,11 +864,15 @@ class PcapService:
             ]
         else:
             extra_fields = list(f.columns)
-        self._ensure_columns(f, extra_fields, ctx)
+        with self._lock:
+            indexing = self._indexing is not None
+        if not indexing:
+            self._ensure_columns(f, extra_fields, ctx)
+        # (Streaming: columns not indexed yet stay blank until the pass is done.)
         view_ordered = self._apply_sort(f, view, params, ctx)
 
         if "frames" in params and params.get("inView") is False:
-            n_frames = f.info.frames
+            n_frames = f.frame_count()
             asked = _frame_list(params, "frames", MAX_PAGE)
             frames = [n for n in dict.fromkeys(asked) if 1 <= n <= n_frames]
         elif "frames" in params:
@@ -600,13 +889,18 @@ class PcapService:
             for i, n in enumerate(frames)
         ]
         if "timeFormat" in params:
+            fmt = param(params, "timeFormat", str)
+            ref = params.get("timeRef")
+            if indexing and fmt in navigation.TIME_FORMATS:
+                # The other formats need a frame.time_epoch pass: relative until indexed.
+                fmt, ref = "relative", None
             times = self._display_times(
                 f,
                 view.matched,
                 frames,
                 [r["cells"][1] for r in rows],
-                param(params, "timeFormat", str),
-                params.get("timeRef"),
+                fmt,
+                ref,
                 ctx,
             )
             for row, text in zip(rows, times, strict=True):
@@ -647,6 +941,8 @@ class PcapService:
             sort = (_DELTA_SORTS[params["timeFormat"]], sort[1])
         if sort == view.sort:
             return view.ordered
+        if sort is not None:
+            self._require_indexed()
         ordered = self._sorted(f, view, sort, ctx) if sort else view.matched
         with self._lock:
             if self._view is view:
@@ -694,6 +990,7 @@ class PcapService:
         """
         if all(fld in f.rejected or self._locate(f, fld) is not None for fld in fields):
             return
+        self._require_indexed()  # a column pass while the index pass still runs: later
         with self._build_lock:
             self._build_columns(f, fields, ctx)
 
@@ -887,6 +1184,7 @@ class PcapService:
         from the top or bottom) in view order (current filter and sort) and
         wraps around. The search filter runs once and is cached like any filter.
         """
+        self._require_indexed()
         mode = param(params, "mode", str)
         direction = param(params, "direction", str, "next")
         if mode not in navigation.FIND_MODES or direction not in ("next", "previous"):
@@ -944,6 +1242,7 @@ class PcapService:
         The conversation is the tcp.stream or udp.stream (extracted once into the
         row store), else the Source/Destination address pair. No wrap-around.
         """
+        self._require_indexed()
         frame = param(params, "frame", int)
         direction = param(params, "direction", str, "next")
         if direction not in ("next", "previous"):
@@ -994,7 +1293,7 @@ class PcapService:
         like Wireshark's Ctrl+M on a multi-selection: mark them all unless all
         of them are already marked, then unmark them."""
         f = self._require_file()
-        frames = [n for n in _frame_list(params, "frames") if 1 <= n <= f.info.frames]
+        frames = [n for n in _frame_list(params, "frames") if 1 <= n <= f.frame_count()]
         mark = params.get("mark")
         with self._lock:
             on = bool(mark) if mark is not None else not all(n in self._marks for n in frames)
@@ -1046,8 +1345,8 @@ class PcapService:
         if mode not in ("exact", "quick"):
             raise InvalidParamsError("mode must be exact or quick")
         f = self._require_file()
-        if not 1 <= number <= f.info.frames:
-            raise InvalidParamsError(f"frame {number} out of range 1..{f.info.frames}")
+        if not 1 <= number <= f.frame_count():
+            raise InvalidParamsError(f"frame {number} out of range 1..{f.frame_count()}")
         cached = self._details.get(number)
         if cached is not None:
             return cached
@@ -1202,8 +1501,8 @@ class PcapService:
         return followed
 
     def _stream_of(self, f: _Open, proto: str, frame: int, ctx: RequestContext) -> int:
-        if not 1 <= frame <= f.info.frames:
-            raise InvalidParamsError(f"frame {frame} out of range 1..{f.info.frames}")
+        if not 1 <= frame <= f.frame_count():
+            raise InvalidParamsError(f"frame {frame} out of range 1..{f.frame_count()}")
         fld = "udp.stream" if proto == "udp" else "tcp.stream"
         self._ensure_columns(f, [fld], ctx)  # one extra pass, then cached
         value = self._column_cells(f, fld, [frame])[0].split(",")[0]
@@ -1305,6 +1604,7 @@ class PcapService:
         if not isinstance(raw, list):
             raise InvalidParamsError("parameter 'rules' must be a list")
         f = self._require_file()
+        self._require_indexed()
         with self._lock:
             self._coloring_seq += 1
             seq = self._coloring_seq
@@ -1314,37 +1614,22 @@ class PcapService:
         valid = sum(isinstance(r, coloring.ColorRule) for r in rules)
         colors: array[int] | None = None
         colored = 0
-        if valid:
-            colors = array("B", bytes(f.info.frames + 1))
-            result = StreamResult()
-            argv = f.tshark.argv(
-                "--color", "-T", "fields", "-e", "frame.number", "-e", "frame.coloring_rule.name",
-                capture=str(f.path),
-            )  # fmt: skip
-            personal = coloring.personal_config_dir(f.tshark.folders(ctx.token))
-            total = max(1, f.info.frames)
-            last_emit = 0.0
-            with tempfile.TemporaryDirectory(prefix="pcapviewer-colors-") as tmp:
-                coloring.prepare_config_dir(Path(tmp), rules, personal)
-                env = {**os.environ, "WIRESHARK_CONFIG_DIR": tmp}
-                for line in stream_lines(argv, result, ctx.token, env=env):
-                    number, _, rule = line.partition(b"\t")
-                    try:
-                        n, idx = int(number), int(rule)
-                    except ValueError:
-                        continue
-                    if 0 < n < len(colors) and 0 <= idx < len(rules):
-                        colors[n] = idx + 1
-                        colored += 1
-                    now = time.monotonic()
-                    if now - last_emit >= PROGRESS_INTERVAL_S:
-                        last_emit = now
-                        ctx.progress({"phase": "color", "fraction": min(0.99, n / total)})
-            if result.returncode not in (0, None) and result.lines == 0:
-                raise f.tshark.error(
-                    result.stderr, result.returncode, "tshark coloring pass failed"
-                )
-            errors.update(coloring.parse_compile_errors(result.stderr))
+        rules_id = rules_key(raw)
+        saved = (
+            f.cache.load_colors(f.cache_key, rules_id, f.info.frames)
+            if valid and f.cache is not None and f.cache_key is not None
+            else None
+        )
+        if saved is not None:
+            colors, extra = saved
+            colored = int(extra.get("colored", 0))
+            errors.update({int(i): str(m) for i, m in extra.get("errors", {}).items()})
+        elif valid:
+            colors, colored, compile_errors = self._coloring_pass(f, rules, ctx)
+            errors.update(compile_errors)
+            if f.cache is not None and f.cache_key is not None:
+                extra = {"colored": colored, "errors": {str(i): m for i, m in errors.items()}}
+                f.cache.save_colors(f.cache_key, rules_id, colors, extra)
         with self._lock:
             if seq != self._coloring_seq:
                 raise CancelledError("superseded by newer coloring rules")
@@ -1358,6 +1643,40 @@ class PcapService:
             "colored": colored,
             "errors": {str(i): msg for i, msg in sorted(errors.items())},
         }
+
+    def _coloring_pass(
+        self, f: _Open, rules: list[coloring.ColorRule | str], ctx: RequestContext
+    ) -> tuple[array[int], int, dict[int, str]]:
+        """One ``--color`` pass: (rule index + 1 per frame, frames colored, compile errors)."""
+        colors = array("B", bytes(f.info.frames + 1))
+        colored = 0
+        result = StreamResult()
+        argv = f.tshark.argv(
+            "--color", "-T", "fields", "-e", "frame.number", "-e", "frame.coloring_rule.name",
+            capture=str(f.path),
+        )  # fmt: skip
+        personal = coloring.personal_config_dir(f.tshark.folders(ctx.token))
+        total = max(1, f.info.frames)
+        last_emit = 0.0
+        with tempfile.TemporaryDirectory(prefix="pcapviewer-colors-") as tmp:
+            coloring.prepare_config_dir(Path(tmp), rules, personal)
+            env = {**os.environ, "WIRESHARK_CONFIG_DIR": tmp}
+            for line in stream_lines(argv, result, ctx.token, env=env):
+                number, _, rule = line.partition(b"\t")
+                try:
+                    n, idx = int(number), int(rule)
+                except ValueError:
+                    continue
+                if 0 < n < len(colors) and 0 <= idx < len(rules):
+                    colors[n] = idx + 1
+                    colored += 1
+                now = time.monotonic()
+                if now - last_emit >= PROGRESS_INTERVAL_S:
+                    last_emit = now
+                    ctx.progress({"phase": "color", "fraction": min(0.99, n / total)})
+        if result.returncode not in (0, None) and result.lines == 0:
+            raise f.tshark.error(result.stderr, result.returncode, "tshark coloring pass failed")
+        return colors, colored, coloring.parse_compile_errors(result.stderr)
 
     # ------------------------------------------------------------------ export
 
@@ -1402,7 +1721,7 @@ class PcapService:
                 raise InvalidParamsError("No packets are marked")
             return self._export_frames(f, fmt, dest, marks, "marked packets", ctx)
         if "frames" in params:
-            n_frames = f.info.frames
+            n_frames = f.frame_count()
             frames = sorted({n for n in _frame_list(params, "frames") if 1 <= n <= n_frames})
             if not frames:
                 raise InvalidParamsError("No packets are selected")
@@ -1506,6 +1825,7 @@ class PcapService:
     def _export_list(
         self, f: _Open, fmt: str, dest: Path, params: dict[str, Any], ctx: RequestContext
     ) -> dict[str, Any]:
+        self._require_indexed()
         _f, view = self._require_view()
         base_fields = {c.field for c in BASE_COLUMNS}
         requested = str_list(params, "columns") if "columns" in params else list(f.columns)
@@ -1646,6 +1966,28 @@ def _index_error(tshark: Tshark, path: Path, result: StreamResult) -> Exception:
     return tshark.error(
         result.stderr, result.returncode, f"tshark exited with code {result.returncode}"
     )
+
+
+def _cache_from(raw: Any) -> IndexCache | None:
+    """``{dir, maxBytes?}`` -> the saved-index cache (None: caching off)."""
+    if not isinstance(raw, dict) or not isinstance(raw.get("dir"), str) or not raw["dir"]:
+        return None
+    max_bytes = raw.get("maxBytes", DEFAULT_CACHE_BYTES)
+    if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes < 0:
+        raise InvalidParamsError("cache.maxBytes must be a non-negative integer")
+    return IndexCache(Path(raw["dir"]).expanduser(), max_bytes)
+
+
+def _personal_folders(folders_output: str) -> list[Path]:
+    """tshark's personal configuration and plugin folders (``tshark -G folders``):
+    their contents change dissection, so they are part of the saved-index key."""
+    wanted = {"Personal configuration", "Personal Plugins", "Personal Lua Plugins"}
+    out: list[Path] = []
+    for line in folders_output.split("\n"):
+        name, sep, value = line.partition(":")
+        if sep and name.strip() in wanted and value.strip():
+            out.append(Path(value.strip()))
+    return out
 
 
 def _frame_list(params: dict[str, Any], key: str, limit: int = MAX_SELECTION) -> list[int]:

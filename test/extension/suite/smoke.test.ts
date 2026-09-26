@@ -98,6 +98,7 @@ suite("PCAP Viewer smoke test", () => {
       "pcapViewer.exportSelected",
       "pcapViewer.selectAll",
       "pcapViewer.askAboutPackets",
+      "pcapViewer.clearIndexCache",
       "pcapViewer.toggleTimeReference",
       "pcapViewer.timeFormat",
     ]) {

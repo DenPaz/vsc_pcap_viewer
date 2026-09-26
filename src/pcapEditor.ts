@@ -89,6 +89,11 @@ export class PcapEditorProvider implements vscode.CustomReadonlyEditorProvider<P
 
 let nextSessionId = 1;
 
+/** Where saved packet-list indexes live (the extension's own storage). */
+export function indexCacheDir(context: vscode.ExtensionContext): string {
+  return path.join(context.globalStorageUri.fsPath, "index-cache");
+}
+
 export class PcapEditorSession {
   /** Unique per editor panel (keys the statistics panels). */
   readonly id = nextSessionId++;
@@ -194,31 +199,21 @@ export class PcapEditorSession {
       const init = await client.request<{ version: string; tsharkPath: string }>("initialize", { tsharkPath: settings.tsharkPath || undefined }, { timeoutMs: 30_000 });
       this.log.info(`using ${init.version} at ${init.tsharkPath} (python ${py.version})`);
       this.post({ type: "loading", message: "Indexing packets…" });
+      // A streaming open's "index" events can arrive before the open response:
+      // keep them until the viewer has its init, then replay them.
+      const early: Record<string, unknown>[] = [];
+      let onIndex = (p: Record<string, unknown>) => void early.push(p);
+      const stopIndexEvents = client.onNotification("index", (p) => onIndex(p));
       const info = await this.openFile(client, settings);
       if (seq !== this.loadSeq || this.disposed) {
+        stopIndexEvents();
         return;
       }
       this.info = info;
-      const warnings = [...settings.luaWarnings, ...info.warnings];
-      for (const w of warnings) {
-        this.log.warn(`${this.uri.fsPath}: ${w}`);
+      if (info.fromCache) {
+        this.log.info(`${this.uri.fsPath}: opened from the saved index (no index pass)`);
       }
-      // Lua load errors are errors, not warnings: say so and point at the log.
-      const luaErrors = warnings.filter((w) => w.startsWith("Lua:"));
-      const others = warnings.filter((w) => !w.startsWith("Lua:"));
-      if (luaErrors.length) {
-        const first = luaErrors[0].split("\n")[0].replace(/^Lua: /, "");
-        void vscode.window
-          .showErrorMessage(`PCAP Viewer: Lua dissector error: ${first}${luaErrors.length > 1 ? ` (+${luaErrors.length - 1} more)` : ""}`, "Show Log")
-          .then((choice) => choice && this.log.show());
-      }
-      if (others.length) {
-        void vscode.window.showWarningMessage(`PCAP Viewer: ${others[0]}${others.length > 1 ? ` (+${others.length - 1} more)` : ""}`, "Show Log").then((choice) => {
-          if (choice) {
-            this.log.show();
-          }
-        });
-      }
+      this.reportWarnings([...settings.luaWarnings, ...info.warnings]);
       this.post({
         type: "init",
         info,
@@ -231,7 +226,18 @@ export class PcapEditorSession {
         savedFilters: settings.savedFilters,
         elapsedMs: Date.now() - started,
       });
-      void this.applyColoring();
+      if (info.indexing) {
+        const known = info.warnings.length;
+        onIndex = (p) => {
+          if (this.onIndexEvent(client, p, known)) {
+            stopIndexEvents();
+          }
+        };
+        early.splice(0).forEach(onIndex);
+      } else {
+        stopIndexEvents();
+        void this.applyColoring();
+      }
       void this.postAiAvailability();
     } catch (err) {
       if (seq !== this.loadSeq || this.disposed) {
@@ -251,6 +257,56 @@ export class PcapEditorSession {
     }
   }
 
+  private reportWarnings(warnings: string[]): void {
+    for (const w of warnings) {
+      this.log.warn(`${this.uri.fsPath}: ${w}`);
+    }
+    // Lua load errors are errors, not warnings: say so and point at the log.
+    const luaErrors = warnings.filter((w) => w.startsWith("Lua:"));
+    const others = warnings.filter((w) => !w.startsWith("Lua:"));
+    if (luaErrors.length) {
+      const first = luaErrors[0].split("\n")[0].replace(/^Lua: /, "");
+      void vscode.window
+        .showErrorMessage(`PCAP Viewer: Lua dissector error: ${first}${luaErrors.length > 1 ? ` (+${luaErrors.length - 1} more)` : ""}`, "Show Log")
+        .then((choice) => choice && this.log.show());
+    }
+    if (others.length) {
+      void vscode.window.showWarningMessage(`PCAP Viewer: ${others[0]}${others.length > 1 ? ` (+${others.length - 1} more)` : ""}`, "Show Log").then((choice) => {
+        if (choice) {
+          this.log.show();
+        }
+      });
+    }
+  }
+
+  /**
+   * An "index" notification of a streaming open: progress goes to the viewer;
+   * the end brings the final info, then coloring starts. Returns true at the end.
+   */
+  private onIndexEvent(client: BackendClient, p: Record<string, unknown>, knownWarnings: number): boolean {
+    if (this.client !== client || this.disposed) {
+      return true;
+    }
+    if (p.event === "progress") {
+      this.post({ type: "indexProgress", frames: Number(p.frames) || 0, fraction: typeof p.fraction === "number" ? p.fraction : null });
+      return false;
+    }
+    const info = p.info as OpenResult | undefined;
+    if (info) {
+      this.info = info;
+      this.reportWarnings(info.warnings.slice(knownWarnings));
+    }
+    const error = p.event === "failed" ? String(p.message ?? "indexing failed") : undefined;
+    if (error) {
+      this.log.warn(`${this.uri.fsPath}: indexing stopped: ${error}`);
+    }
+    if (this.info) {
+      this.post({ type: "indexDone", info: this.info, error });
+      void this.applyColoring();
+    }
+    return true;
+  }
+
   private async openFile(client: BackendClient, settings: Settings): Promise<OpenResult> {
     return vscode.window.withProgress(
       { location: vscode.ProgressLocation.Window, title: `Indexing ${vscode.workspace.asRelativePath(this.uri)}` },
@@ -263,6 +319,9 @@ export class PcapEditorSession {
             decodeAs: settings.decodeAs,
             prefs: settings.prefs,
             columns: settings.columns.map((c) => c.field),
+            // Show the first rows while the rest is indexed, and reuse saved indexes.
+            stream: true,
+            cache: settings.indexCacheBytes > 0 ? { dir: indexCacheDir(this.context), maxBytes: settings.indexCacheBytes } : undefined,
           },
           {
             timeoutMs: 0,

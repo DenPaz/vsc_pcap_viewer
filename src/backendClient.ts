@@ -54,6 +54,8 @@ export const ErrorCodes = {
   NotOpen: -32003,
   InvalidFilter: -32010,
   UnsupportedFormat: -32011,
+  /** The streaming index pass is still running (filters, sorting… wait for it). */
+  Indexing: -32012,
   // Client-side codes.
   Timeout: -33001,
   BackendExited: -33002,
@@ -112,6 +114,17 @@ export class BackendClient {
   onExit(listener: (info: { code: number | null; signal: NodeJS.Signals | null; expected: boolean }) => void): () => void {
     this.events.on("exit", listener);
     return () => this.events.off("exit", listener);
+  }
+
+  /** Backend notifications other than request progress (e.g. "index" of a streaming open). */
+  onNotification(method: string, listener: (params: Record<string, unknown>) => void): () => void {
+    const handler = (m: string, params: Record<string, unknown>) => {
+      if (m === method) {
+        listener(params);
+      }
+    };
+    this.events.on("notification", handler);
+    return () => this.events.off("notification", handler);
   }
 
   start(): void {
@@ -294,6 +307,8 @@ export class BackendClient {
       if (msg.method === "progress") {
         const p = msg.params as Progress;
         this.pending.get(p.requestId)?.onProgress?.(p);
+      } else {
+        this.events.emit("notification", msg.method, (msg.params ?? {}) as Record<string, unknown>);
       }
       return;
     }

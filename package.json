@@ -229,6 +229,11 @@
         "category": "PCAP"
       },
       {
+        "command": "pcapViewer.clearIndexCache",
+        "title": "Clear Index Cache",
+        "category": "PCAP"
+      },
+      {
         "command": "pcapViewer.followStream",
         "title": "Follow Stream\u2026",
         "category": "PCAP"
@@ -867,6 +872,17 @@
           "default": 5000000,
           "minimum": 10000,
           "markdownDescription": "Budget (in frame numbers) for cached filter results and sort orders in the backend. Each entry costs 4 bytes."
+        },
+        "pcapViewer.indexCache.enabled": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Save each capture's packet-list index (the result of the first tshark pass over the file) in the extension's storage, so reopening it is instant as long as the file and everything that changes dissection (tshark version, Lua scripts, Decode As rules, preferences, custom columns, your Wireshark configuration) are unchanged. The index holds the packet list's text (addresses, Info column). *PCAP: Clear Index Cache* deletes them all."
+        },
+        "pcapViewer.indexCache.maxSizeMB": {
+          "type": "integer",
+          "default": 1024,
+          "minimum": 0,
+          "markdownDescription": "Most disk space (MB) the saved indexes of `#pcapViewer.indexCache.enabled#` may use; the least recently opened captures' indexes go first. An index takes about 120 MB per million packets."
         },
         "pcapViewer.quickDetail.after": {
           "type": "integer",

@@ -10,6 +10,7 @@ import { registerSavedFilterCommands } from "./commands/savedFilters";
 import { COLORING_KEYS, RELOAD_KEYS, SECTION, readQuickDetail, readSettings } from "./config";
 import { FilterAssistant } from "./ai";
 import { registerAiCommands } from "./commands/ai";
+import { registerIndexCacheCommands } from "./commands/indexCache";
 import { PcapEditorProvider } from "./pcapEditor";
 
 let provider: PcapEditorProvider | undefined;
@@ -36,6 +37,7 @@ export function activate(context: vscode.ExtensionContext): PcapViewerApi {
   registerNavigationCommands(context, p);
   registerColoringCommands(context, p);
   registerAiCommands(context, p, log);
+  registerIndexCacheCommands(context);
   context.subscriptions.push(
     vscode.commands.registerCommand("pcapViewer.showLog", () => log.show()),
     vscode.workspace.onDidChangeConfiguration(async (e) => {
