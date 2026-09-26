@@ -32,6 +32,7 @@ export const WEBVIEW_RPC_METHODS = new Set([
   "list_packets",
   "packet_detail",
   "find_frame",
+  "view_frames",
   "field_index",
   "capture_info",
   "find_packet",
@@ -52,6 +53,7 @@ export const VIEWER_COMMANDS = [
   "previousInConversation",
   "firstPacket",
   "lastPacket",
+  "selectAll",
   "toggleMark",
   "nextMark",
   "previousMark",
@@ -68,7 +70,8 @@ export type WebviewToHost =
   | { type: "reload" }
   | { type: "filterApplied"; expr: string }
   | { type: "saveFilter"; expr: string }
-  | { type: "selection"; frame: number | null }
+  /** The focused packet (detail pane) and, for a multi-selection, every selected frame. */
+  | { type: "selection"; frame: number | null; frames?: number[] }
   | { type: "decodeAs"; frame: number }
   | { type: "follow"; proto: "tcp" | "udp" | "tls" | "http"; frame: number }
   | { type: "manageSavedFilters" }
@@ -83,6 +86,7 @@ export type WebviewToHost =
   | { type: "columnLayout"; layout: ColumnLayout }
   | { type: "pickTimeFormat" }
   | { type: "exportMarked" }
+  | { type: "exportSelected" }
   | { type: "marks"; count: number }
   | { type: "copy"; text: string }
   | { type: "showLog" };

@@ -12,7 +12,16 @@ by **tshark** (Wireshark's command-line tool), so results match Wireshark exactl
   stays smooth on captures with millions of packets: the webview renders only
   the visible rows and the backend pages through a cached index; scrolling
   never re-runs tshark.
-- **Sorting** by any column (done in the backend) and **custom columns** from
+- **Multi-select** like Wireshark: `Shift+click` or `Shift+arrow keys` select a
+  range, `Ctrl+click` (`Cmd+click`) adds or removes a packet, `Ctrl+A` selects
+  every displayed packet and `Esc` goes back to one. `Ctrl+M` marks the
+  selection, `Ctrl+C` or the right-click menu copies its rows (visible
+  columns, tab-separated) or frame numbers, and *Export Selected Packets…*
+  saves it as pcapng or pcap.
+- **Sorting** by any column (done in the backend). Addresses sort numerically
+  (`8.8.8.8` before `10.0.0.1`; IPv4, then IPv6, then MAC addresses), and the
+  Time column sorts by the time format shown (by the delta for "since
+  previous packet"). **Custom columns** from
   any tshark field (`tcp.stream`, `http.host`, …) via `pcapViewer.columns` or
   *PCAP: Manage Custom Columns*.
 - **Display filters** with Wireshark syntax, validated as you type (green/red),
@@ -48,12 +57,13 @@ by **tshark** (Wireshark's command-line tool), so results match Wireshark exactl
   jumps. If the filter hides the packet, you're offered *Clear filter and go*.
 - **Packet navigation**: next/previous packet in the same conversation (TCP or
   UDP stream, else the address pair), first/last packet.
-- **Marks**: `Ctrl+M` marks the selected packet. Marked rows stand out over
+- **Marks**: `Ctrl+M` marks the selected packets. Marked rows stand out over
   coloring rules. You can jump to the next or previous marked packet, unmark
   all, and *Export Marked Packets…* to pcapng or pcap. Marks last while the
   capture is open.
 - **Time display formats**: seconds since the beginning (default), since the
-  previous displayed packet (follows the filter and sort order), since the
+  previous displayed packet (the previous packet of the filter, whatever the
+  sort order), since the
   previous captured packet, local or UTC date and time, or epoch seconds.
   Click the time format in the status bar to change it. A **time reference**
   (`Ctrl+T`) makes relative times count from that packet, marked `*REF*`.
@@ -76,9 +86,9 @@ by **tshark** (Wireshark's command-line tool), so results match Wireshark exactl
   adds a rule on top, *PCAP: Toggle Packet Coloring* turns coloring off.
   Changing rules recolors open captures in the background without re-indexing.
 - **Export**: *PCAP: Export Specified Packets…* writes the displayed packets,
-  all packets or the selected packet to a new **pcapng** or **pcap** file.
-  *PCAP: Export Packet List as CSV/JSON…* saves the displayed rows (current
-  filter and sort order, including custom columns). *PCAP: Export Packet
+  all packets or the selected packets to a new **pcapng** or **pcap** file.
+  *PCAP: Export Packet List as CSV/JSON…* saves the displayed (or selected)
+  rows (current filter and sort order, including custom columns). *PCAP: Export Packet
   Bytes…* (also in the packet list's right-click menu) saves a packet's raw
   bytes or its reassembled data. The follow-stream panel saves stream data.
   Exports appear only once complete, so cancelling leaves no partial file,
@@ -153,7 +163,8 @@ tshark built with them (`tshark --version` lists "with Zstandard", "with LZ4").
 | PCAP: Go Back / Go Forward (Packet History) | `Alt+Left`, `Alt+Right` | Walk back and forth over jumps (links, go to, find…) |
 | PCAP: Next / Previous Packet in Conversation | `Ctrl+.`, `Ctrl+,` | Same TCP/UDP stream, else the same address pair |
 | PCAP: First Packet / Last Packet | `Ctrl+Home`, `Ctrl+End` | |
-| PCAP: Mark/Unmark Packet | `Ctrl+M` | Mark the selected packet |
+| PCAP: Select All Packets | `Ctrl+A` (`Cmd+A`) | Select every displayed packet |
+| PCAP: Mark/Unmark Selected Packets | `Ctrl+M` | Mark the selected packets (unmark them if all are marked) |
 | PCAP: Next / Previous Marked Packet | `Ctrl+Shift+N`, `Ctrl+Shift+B` | |
 | PCAP: Unmark All Packets / Export Marked Packets… | | Clear the marks / save the marked packets as pcapng or pcap |
 | PCAP: Set/Unset Time Reference | `Ctrl+T` | Relative times count from the selected packet |
@@ -167,7 +178,8 @@ tshark built with them (`tshark --version` lists "with Zstandard", "with LZ4").
 | PCAP: Open Dissectors Folder | | Reveal (or set up) `pcapViewer.dissectorsFolder` |
 | PCAP: Decode As… / Manage Decode As Rules | | Add or remove `-d` rules (stored in settings) |
 | PCAP: Export Specified Packets… | | Displayed / all / selected packets to pcapng or pcap |
-| PCAP: Export Packet List as CSV/JSON… | | The displayed rows with their columns |
+| PCAP: Export Selected Packets… | | The selected packets to pcapng or pcap |
+| PCAP: Export Packet List as CSV/JSON… | | The displayed (or selected) rows with their columns |
 | PCAP: Export Packet Bytes… | | Raw bytes of the selected packet (or a reassembled source) |
 | PCAP: Colorize with Filter… | | Add a coloring rule (also in the detail tree's right-click menu) |
 | PCAP: Toggle Packet Coloring / Manage Coloring Rules | | Turn coloring on or off / edit `pcapViewer.coloringRules` |

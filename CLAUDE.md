@@ -155,8 +155,19 @@ UI behaviour stays in the Chromium test (`test/webview/e2e.test.js`).
   fields validate.
 - **Sorting** is backend-side over the current filter's frames: one column is
   read from the row store (cached, 3 columns max), sorted in Python, and the
-  resulting order is cached per (filter, column, direction). IP columns sort as
-  text (tradeoff: simple and predictable; Wireshark sorts addresses numerically).
+  resulting order is cached per (filter, column, direction). Source/Destination
+  and custom columns of FT_IPv4/FT_IPv6/FT_ETHER fields (catalogue lookup) sort
+  by `cache.address_key`: IPv4 < IPv6 < MAC < other text, numerically within
+  each, as one fixed-width hex string per row (no tuples, so memory stays flat).
+  The Time column sorts by the time format shown: the absolute formats (and a
+  time reference) keep capture order, the two delta formats sort by the delta
+  (internal sort keys `@delta_displayed`/`@delta_captured`, computed from
+  `frame.time_epoch`). Every request that returns or takes row indexes
+  (`list_packets`, `find_frame`, `view_frames`, `find_packet`,
+  `neighbor_frame`) carries `sort`/`timeFormat` and applies it first
+  (`_apply_sort`): an index request must not overtake the page request that
+  changes the sort (found by the multi-select e2e test: the selection was
+  relocated with the old order).
 - **Progress** during open is estimated from summed frame lengths vs file size
   (no capinfos needed up front); capinfos runs in parallel for metadata.
 - **Virtualized list**: fixed row height; above 10M px of content the scroll
@@ -292,11 +303,30 @@ UI behaviour stays in the Chromium test (`test/webview/e2e.test.js`).
   - *Times* are formatted by the backend when `list_packets` gets `timeFormat`
     (and `timeRef`). Plain relative time uses the index pass's column; every
     other format uses `frame.time_epoch`, extracted once, parsed to integer ns.
-    "Since previous displayed" uses the previous row *of the view* (the page's
-    predecessor via `ordered.slice(offset-1, 1)`), not tshark's
-    `frame.time_delta_displayed`, which only knows the unfiltered pass. There
-    is one time reference; its row shows `*REF*` in every format. The format
+    "Since previous displayed" is since the previous packet *of the filter* in
+    capture order (bisect in `view.matched`), like Wireshark's
+    `frame.time_delta_displayed` but for our filter (tshark's field only knows
+    the unfiltered pass). It is a property of the packet, whatever the sort,
+    which is what lets the Time column sort by it. There is one time reference; its row shows `*REF*` in every format. The format
     and reference are part of the webview's page cache key.
+  - *Multi-selection* lives in the webview as a `Set` of frame numbers
+    (`state.selection`, empty when one row is selected) plus the focused row
+    (`selectedIndex`/`selectedFrame`, the detail pane). Click selects one row;
+    Ctrl/Cmd+click toggles; Shift+click and Shift+arrows select from the
+    anchor (the last plain or Ctrl click) and take frames for rows not loaded
+    from `view_frames {offset, limit}`. Ctrl+A is a package.json keybinding
+    (VS Code's own webview select-all would otherwise run too) that selects
+    the view via `view_frames`, or the text of a focused input. Limits:
+    `MAX_SELECTION` (1M frames) and 100k rows per copy. A new filter drops the
+    selection; a new sort keeps it (same frames). Right-click inside the
+    selection keeps it and the menu acts on all of it: mark (Ctrl+M: mark all
+    unless all are marked), copy rows (TSV of the visible columns in view
+    order: cached pages, else `view_frames {frames}` for the order then
+    `list_packets {frames}` in chunks), copy frame numbers, *Export Selected
+    Packets…* (`export` with `frames`, the same chunked `frame.number in {…}`
+    path as marked packets; CSV/JSON can export the selected rows). Ctrl+C
+    arrives as a `copy` event (VS Code runs `execCommand("copy")` in the
+    webview). The host learns the selection from `selection {frame, frames}`.
   - *Frame links*: after a detail loads, the webview asks `field_types` (exact
     catalogue lookups) for the tree's field names once, and `FT_FRAMENUM`
     fields become links. The back/forward history covers jumps (links, go to,

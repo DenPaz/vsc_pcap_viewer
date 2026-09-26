@@ -104,7 +104,7 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
       } else if (msg.type === "columnLayout") {
         hostLog.push(msg);
         layout = msg.layout;
-      } else if (["marks", "pickTimeFormat", "renameColumn"].includes(msg.type)) {
+      } else if (["marks", "pickTimeFormat", "renameColumn", "exportSelected", "copy"].includes(msg.type)) {
         hostLog.push(msg);
       } else if (["manageSavedFilters", "filterApplied", "selection", "follow", "decodeAs", "colorize", "exportBytes"].includes(msg.type)) {
         hostLog.push(msg);
@@ -643,6 +643,92 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     await waitSelected(1);
     await command("previousInConversation");
     await page.waitForFunction(() => /No previous packet in this conversation/.test(document.querySelector("#filter-error").textContent));
+  });
+
+  test("multi-select: Shift/Ctrl+click, Shift+arrows, Esc, Ctrl+A; mark, copy and export the selection", async () => {
+    await cleanView();
+    const selectedNumbers = () => page.$$eval("#list-rows .list-row.selected", (rows) => rows.map((r) => Number(r.children[0].textContent)));
+    const waitSelection = (frames) => page.waitForFunction((want) => [...document.querySelectorAll("#list-rows .list-row.selected")].map((r) => r.children[0].textContent).join() === want.join(), frames);
+    const lastSelection = () => hostLog.filter((m) => m.type === "selection").at(-1);
+
+    await rowEl(2).click();
+    await waitSelected(2);
+    await rowEl(5).click({ modifiers: ["Shift"] });
+    await waitSelection([2, 3, 4, 5]);
+    assert.match(await status(), /Selected: 5 \(4 packets\)/);
+    await waitForHost((m) => m.type === "selection" && m.frames?.length === 4);
+    assert.deepEqual([...lastSelection().frames].sort((a, b) => a - b), [2, 3, 4, 5]);
+    assert.equal(lastSelection().frame, 5, "the clicked row is focused (detail pane)");
+    assert.ok(await rowEl(5).evaluate((r) => r.classList.contains("focused")));
+
+    await rowEl(8).click({ modifiers: ["Control"] }); // add
+    await rowEl(3).click({ modifiers: ["Control"] }); // take out
+    await waitSelection([2, 4, 5, 8]);
+    await waitSelected(8);
+
+    // Right-click inside the selection keeps it; the menu acts on all of it.
+    await rowEl(4).click({ button: "right" });
+    assert.deepEqual(await selectedNumbers(), [2, 4, 5, 8]);
+    await page.click("#context-menu .item:has-text('Copy 4 Rows')");
+    await waitForHost((m) => m.type === "copy" && m.text.startsWith("No.\t"));
+    const copied = hostLog.filter((m) => m.type === "copy").at(-1).text.split("\n");
+    assert.equal(copied.length, 5, "a header line plus one line per row");
+    assert.deepEqual(
+      copied.slice(1).map((l) => l.split("\t")[0]),
+      ["2", "4", "5", "8"],
+    );
+    // Ctrl+C in the list: VS Code fires a "copy" event in the webview.
+    const clip = await page.evaluate(() => {
+      const viewport = /** @type {HTMLElement} */ (document.getElementById("list-viewport"));
+      viewport.focus();
+      const data = new window.DataTransfer();
+      viewport.dispatchEvent(new window.ClipboardEvent("copy", { clipboardData: data, bubbles: true, cancelable: true }));
+      return data.getData("text/plain");
+    });
+    assert.equal(clip.split("\n").length, 5);
+
+    await command("toggleMark"); // Ctrl+M marks the whole selection
+    await page.waitForFunction(() => document.querySelectorAll("#list-rows .list-row.marked").length === 4);
+    await page.waitForFunction(() => /Marked: 4/.test(document.querySelector("#status-left").textContent));
+    await command("toggleMark"); // all marked: unmark them
+    await page.waitForFunction(() => !document.querySelector("#list-rows .list-row.marked"));
+
+    await rowEl(2).click({ button: "right" });
+    await page.click("#context-menu .item:has-text('Export 4 Selected Packets')");
+    await waitForHost((m) => m.type === "exportSelected");
+
+    await page.focus("#list-viewport");
+    await page.keyboard.press("Escape"); // back to one selected row: the focused one (right-clicked last)
+    await waitSelection([2]);
+    await rowEl(6).click();
+    await page.keyboard.press("Shift+ArrowDown");
+    await page.keyboard.press("Shift+ArrowDown");
+    await waitSelection([6, 7, 8]);
+    await waitSelected(8);
+    await page.keyboard.press("Shift+ArrowUp");
+    await waitSelection([6, 7]);
+
+    // A new sort keeps the selection (same packets, new rows)...
+    await page.click("#list-header > div[data-id='number']");
+    await page.click("#list-header > div[data-id='number']"); // No. descending
+    await page.waitForFunction(() => document.querySelector("#list-rows .list-row:not(.loading)")?.children[0]?.textContent === "11");
+    await waitSelection([7, 6]);
+    await page.click("#list-header > div[data-id='number']"); // sort off
+
+    await command("selectAll"); // Ctrl+A
+    await page.waitForFunction(() => document.querySelectorAll("#list-rows .list-row.selected").length === 11);
+    assert.match(await status(), /\(11 packets\)/);
+    // ...a new filter drops it.
+    await page.fill("#filter-input", "http");
+    await page.press("#filter-input", "Enter");
+    await page.waitForFunction(() => /Displayed: 2/.test(document.querySelector("#status-left").textContent));
+    await page.waitForFunction(() => document.querySelectorAll("#list-rows .list-row.selected").length <= 1);
+    assert.doesNotMatch(await status(), /packets\)/);
+    // Ctrl+A in the filter bar selects its text, not packets.
+    await page.focus("#filter-input");
+    await command("selectAll");
+    assert.equal(await page.evaluate(() => { const i = /** @type {HTMLInputElement} */ (document.getElementById("filter-input")); return i.value.slice(i.selectionStart ?? 0, i.selectionEnd ?? 0); }), "http");
+    assert.ok((await page.$$("#list-rows .list-row.selected")).length <= 1);
   });
 
   test("no script errors or CSP violations", () => {

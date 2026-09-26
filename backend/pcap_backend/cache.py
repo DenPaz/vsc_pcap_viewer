@@ -9,6 +9,8 @@
   packet details) by an explicit cost budget.
 """
 
+import ipaddress
+import re
 import threading
 from array import array
 from collections import OrderedDict
@@ -159,13 +161,16 @@ def sort_frames(
     column_values: Sequence[str],
     descending: bool,
     numeric: bool | None = None,
+    addresses: bool = False,
 ) -> FrameIndex:
     """Sort ``frames`` by ``column_values[frame - 1]``.
 
     ``frames`` must be in ascending order (as filter results are): the sort is
     stable, so ties keep ascending frame order in both directions. Empty values
     always go last. When ``numeric`` is ``None`` the column is treated as
-    numeric if every non-empty value parses as a float. Avoids per-row tuples
+    numeric if every non-empty value parses as a float. Text columns with
+    ``addresses`` sort IPv4, then IPv6, then MAC addresses numerically, then
+    everything else as text (see :func:`address_key`). Avoids per-row tuples
     to keep memory flat for millions of rows.
     """
     n = len(column_values)
@@ -174,12 +179,56 @@ def sort_frames(
     empty = [i for i, v in enumerate(values) if not v]
     if numeric is None:
         numeric = all(_is_number(values[i]) for i in filled)
-    keys: list[float] | list[str] = (
-        [_to_float(v) for v in values] if numeric else [v.casefold() for v in values]
-    )
+    keys: list[float] | list[str]
+    if numeric:
+        keys = [_to_float(v) for v in values]
+    elif addresses:
+        keys = [address_key(v) for v in values]
+    else:
+        keys = [v.casefold() for v in values]
     filled.sort(key=keys.__getitem__, reverse=descending)
     del keys, values
     return FrameIndex.of(frames[i] for i in (*filled, *empty))
+
+
+def sort_frames_by_key(
+    frames: Sequence[int], keys: Sequence[int | None], descending: bool
+) -> FrameIndex:
+    """Sort ``frames`` by ``keys`` (parallel to ``frames``; ``None`` goes last).
+
+    Stable like :func:`sort_frames`: ties keep the order of ``frames``.
+    """
+    filled = [i for i, k in enumerate(keys) if k is not None]
+    empty = [i for i, k in enumerate(keys) if k is None]
+    filled.sort(key=keys.__getitem__, reverse=descending)  # type: ignore[arg-type]
+    return FrameIndex.of(frames[i] for i in (*filled, *empty))
+
+
+_IPV4_RE = re.compile(r"\d{1,3}(?:\.\d{1,3}){3}")
+_MAC_RE = re.compile(r"[0-9A-Fa-f]{2}(?:[:-][0-9A-Fa-f]{2}){5}")
+_IPV6_CHARS = frozenset("0123456789abcdefABCDEF:.")
+
+
+def address_key(value: str) -> str:
+    """A string key that sorts addresses numerically, like Wireshark.
+
+    IPv4 < IPv6 < MAC < anything else (names, resolved addresses), each group in
+    numeric or text order. Only the first of several occurrences (``a,b``)
+    decides. Fixed-width hex keeps plain string comparison, and memory, cheap.
+    """
+    first = value.split(",", 1)[0].strip()
+    if _IPV4_RE.fullmatch(first):
+        octets = [int(o) for o in first.split(".")]
+        if all(o <= 255 for o in octets):
+            return "0" + "".join(f"{o:02x}" for o in octets)
+    elif _MAC_RE.fullmatch(first):
+        return "2" + first.replace(":", "").replace("-", "").lower()
+    elif ":" in first and _IPV6_CHARS.issuperset(first):
+        try:
+            return "1" + f"{int(ipaddress.IPv6Address(first)):032x}"
+        except ValueError:
+            pass
+    return "3" + value.casefold()
 
 
 def _to_float(v: str) -> float:

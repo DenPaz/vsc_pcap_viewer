@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Multi-select in the packet list: Shift+click / Shift+arrows ranges,
+  Ctrl/Cmd+click, Ctrl+A, Esc. Mark, copy (rows or frame numbers) and export
+  the selection (*Export Selected Packets…*; the CSV/JSON packet list can
+  export the selected rows).
+- Source/Destination (and custom IPv4/IPv6/MAC columns) sort numerically:
+  IPv4, then IPv6, then MAC addresses, then names.
+- The Time column sorts by the time format shown: the delta formats sort by
+  the delta.
+- "Since previous displayed packet" now means the previous packet of the
+  filter in capture order (like Wireshark), whatever the sort order.
+- Fixed: after a sort change the selection could be drawn on the row where
+  the packet was before the sort.
+
 - Wireshark-like navigation: Find Packet (display filter / string / hex),
   clickable frame references with back/forward history, next/previous packet
   in the conversation, first/last packet, marks (with export of marked

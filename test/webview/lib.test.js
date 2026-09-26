@@ -266,6 +266,15 @@ suite("webview lib: follow stream and statistics helpers", () => {
     assert.equal(lib.tableToCsv([{ label: "a" }, { label: "b,c" }], [{ cells: [1, 'x"y'] }, { cells: ["line\nbreak", null] }]), 'a,"b,c"\n1,"x""y"\n"line\nbreak",');
   });
 
+  test("rowsToText: tab-separated rows, optional header, one line per row", () => {
+    const rows = [
+      ["1", "GET /\tx", "a\r\nb"],
+      ["2", "", "c"],
+    ];
+    assert.equal(lib.rowsToText(["No.", "Info", "More"], rows, true), "No.\tInfo\tMore\n1\tGET / x\ta b\n2\t\tc");
+    assert.equal(lib.rowsToText(["No."], [["7"]], false), "7");
+  });
+
   test("niceTicks covers the maximum with 1-2-5 steps", () => {
     assert.deepEqual(lib.niceTicks(561), [0, 200, 400, 600]);
     assert.deepEqual(lib.niceTicks(1000), [0, 500, 1000]);

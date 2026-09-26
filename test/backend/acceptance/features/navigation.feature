@@ -62,11 +62,25 @@ Feature: Navigating a capture
       | epoch          | 1     | 1700000000.000000          |
       | utc            | 1     | 2023-11-14 22:13:20.000000 |
 
-  Scenario: "Since previous displayed packet" follows the filter and sort order
-    Given the display filter "dns" is applied
+  Scenario: "Since previous displayed packet" is measured within the filter, whatever the sort
+    Given the display filter "dns || frame.number == 1 || frame.number == 20" is applied
     When I sort by "Length" descending
     And I show times as "delta_displayed"
-    Then the times are 0.000000, -0.004000, 0.006000, 0.002000, -0.006000 and -0.004000
+    Then the time of packet 1 is "0.000000"
+    And the time of packet 4 is "0.006000"
+    And the time of packet 5 is "0.002000"
+    And the time of packet 20 is "0.022000"
+
+  Scenario: The Time column sorts by the time format shown
+    Given the display filter "dns || frame.number == 1 || frame.number == 20" is applied
+    And I show times as "delta_displayed"
+    When I sort by "Time" descending
+    Then the rows are frames 20, 4, 5, 6, 7, 8, 9 and 1
+
+  Scenario: Addresses sort numerically, not as text
+    When I sort by "Source" ascending
+    Then the "Source" column of rows 1 to 4 is 8.8.8.8, 8.8.8.8, 8.8.8.8 and 10.0.0.1
+    And the "Source" column of row 26 is "02:00:00:00:00:01"
 
   Scenario: Times relative to a time reference
     Given packet 4 is the time reference

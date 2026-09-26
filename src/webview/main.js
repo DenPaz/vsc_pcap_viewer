@@ -17,6 +17,10 @@
   const PAGE_SIZE = 200;
   const MAX_CACHED_PAGES = 100;
   const MAX_INFLIGHT_PAGES = 6;
+  // Multi-selection limits (the backend's MAX_SELECTION and MAX_PAGE).
+  const MAX_SELECTION = 1_000_000;
+  const MAX_COPY_ROWS = 100_000;
+  const COPY_CHUNK = 5000;
 
   /** @type {Record<string, string>} */
   const TIME_LABELS = {
@@ -107,6 +111,12 @@
     /** @type {Map<string, number>} page key -> rpc id */ inflightPages: new Map(),
     /** @type {number | null} */ selectedFrame: null,
     /** @type {number | null} */ selectedIndex: null,
+    /** Every selected frame of a multi-selection (Shift/Ctrl+click, Ctrl+A); empty for one. */
+    /** @type {Set<number>} */ selection: new Set(),
+    /** Row a Shift+click range starts from; the filter the selection was made under. */
+    /** @type {number | null} */ anchorIndex: null,
+    selectionFilterId: 0,
+    rangeSeq: 0,
     /** @type {any} */ detail: null,
     /** @type {number | null} */ detailRequest: null,
     /** @type {number | null} */ selectedNodeId: null,
@@ -271,6 +281,8 @@
     clearDetail();
     state.selectedFrame = null;
     state.selectedIndex = null;
+    state.selection = new Set();
+    state.anchorIndex = null;
     state.elapsedMs = msg.elapsedMs;
     const filter = msg.filter || el.filterInput.value.trim();
     if (filter) {
@@ -466,6 +478,11 @@
     ].join("|");
   }
 
+  /** The view's order, sent with every request that deals in row indexes (the backend applies it first). */
+  function orderParams() {
+    return { sort: state.sort, timeFormat: state.timeFormat };
+  }
+
   /** Refetch the visible rows in place (same order and scroll position), e.g. after new colors. */
   function refreshRows() {
     for (const id of state.inflightPages.values()) {
@@ -486,6 +503,10 @@
     state.pages.clear();
     state.viewKey = computeViewKey();
     updateSpacer();
+    state.anchorIndex = null; // row indexes changed
+    if (state.selection.size && state.selectionFilterId !== state.filterId) {
+      setSelection(new Set()); // a new filter drops a multi-selection (a new sort keeps it)
+    }
     if (opts.keepSelection && state.selectedFrame !== null) {
       state.selectedIndex = null; // unknown until the backend says where it moved
       void relocateSelection();
@@ -553,12 +574,14 @@
       rowEl.dataset.index = String(index);
       rowEl.classList.toggle("odd", index % 2 === 1);
       rowEl.classList.toggle("loading", !row);
-      rowEl.classList.toggle("selected", index === state.selectedIndex);
-      rowEl.setAttribute("aria-selected", String(index === state.selectedIndex));
-      // Coloring rule colors, except on the selected row (it keeps the theme's selection
+      const selected = index === state.selectedIndex || (!!row && state.selection.has(row.number));
+      rowEl.classList.toggle("selected", selected);
+      rowEl.classList.toggle("focused", index === state.selectedIndex && state.selection.size > 1);
+      rowEl.setAttribute("aria-selected", String(selected));
+      // Coloring rule colors, except on selected rows (they keep the theme's selection
       // colors) and marked rows (the mark style wins).
       rowEl.classList.toggle("marked", !!row?.marked);
-      const rule = index !== state.selectedIndex && !row?.marked ? lib.rowColors(row, state.coloring) : null;
+      const rule = !selected && !row?.marked ? lib.rowColors(row, state.coloring) : null;
       rowEl.classList.toggle("colored", !!rule);
       rowEl.style.backgroundColor = rule ? rule.background : "";
       rowEl.style.color = rule ? rule.foreground : "";
@@ -638,10 +661,18 @@
 
   el.rows.addEventListener("mousedown", (e) => {
     const rowEl = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (e.target).closest(".list-row"));
-    if (!rowEl || rowEl.dataset.index === undefined) {
-      return;
+    if (!rowEl || rowEl.dataset.index === undefined || e.button !== 0) {
+      return; // right-click: the context menu decides (it keeps a multi-selection)
     }
-    selectIndex(Number(rowEl.dataset.index));
+    const index = Number(rowEl.dataset.index);
+    if (e.shiftKey) {
+      e.preventDefault(); // no text selection
+      void selectRange(index, e.ctrlKey || e.metaKey);
+    } else if (e.ctrlKey || e.metaKey) {
+      toggleInSelection(index);
+    } else {
+      selectIndex(index);
+    }
   });
 
   el.viewport.addEventListener("keydown", (e) => {
@@ -661,15 +692,31 @@
     };
     if (e.key in moves) {
       e.preventDefault();
-      selectIndex(Math.max(0, Math.min(state.total - 1, moves[e.key])));
+      const target = Math.max(0, Math.min(state.total - 1, moves[e.key]));
+      if (e.shiftKey) {
+        void selectRange(target, false);
+      } else {
+        selectIndex(target);
+      }
+    } else if (e.key === "Escape" && state.selection.size) {
+      setSelection(new Set());
     } else if (e.key === "Enter" || e.key === "ArrowRight") {
       e.preventDefault();
       el.tree.focus();
     }
   });
 
-  /** @param {number} index @param {boolean} [center] */
+  /** Select one row (dropping a multi-selection). @param {number} index @param {boolean} [center] */
   function selectIndex(index, center = false) {
+    state.anchorIndex = index;
+    if (state.selection.size) {
+      setSelection(new Set());
+    }
+    focusIndex(index, center);
+  }
+
+  /** Move the focused row (the one the detail pane shows) without changing the selection. @param {number} index @param {boolean} [center] */
+  function focusIndex(index, center = false) {
     state.selectedIndex = index;
     scrollIndexIntoView(index, center);
     const row = rowAt(index);
@@ -679,6 +726,212 @@
     }
     scheduleRender();
   }
+
+  /** Frames the row actions (mark, copy, export) apply to: the multi-selection, else the focused row. */
+  function selectedFrames() {
+    if (state.selection.size) {
+      return [...state.selection];
+    }
+    return state.selectedFrame !== null ? [state.selectedFrame] : [];
+  }
+
+  /** @param {Set<number>} frames the new multi-selection (one frame or none = single selection) */
+  function setSelection(frames) {
+    state.selection = frames.size > 1 ? frames : new Set();
+    state.selectionFilterId = state.filterId;
+    postSelection();
+    updateStatus();
+    scheduleRender();
+  }
+
+  /** Ctrl/Cmd+click: add a row to the selection, or take it out. @param {number} index */
+  function toggleInSelection(index) {
+    const row = rowAt(index);
+    if (!row) {
+      return;
+    }
+    const next = new Set(selectedFrames());
+    state.anchorIndex = index;
+    if (!next.has(row.number)) {
+      next.add(row.number);
+      setSelection(next);
+      focusIndex(index);
+      return;
+    }
+    if (next.size === 1) {
+      return; // the last selected row stays selected
+    }
+    next.delete(row.number);
+    setSelection(next);
+    if (row.number === state.selectedFrame) {
+      void focusFrame(next.values().next().value ?? row.number); // focus another selected row
+    }
+  }
+
+  /** Focus a frame of the current view by number (no scrolling). @param {number} frame */
+  async function focusFrame(frame) {
+    try {
+      const viewKey = state.viewKey;
+      const res = await rpc("find_frame", { number: frame, ...orderParams() }).promise;
+      if (res.filterId === state.filterId && viewKey === state.viewKey && typeof res.index === "number") {
+        focusIndex(res.index);
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  /**
+   * Shift+click / Shift+arrows: select the rows from the anchor to `index`
+   * (added to the selection with Ctrl). Rows not loaded yet come from the backend.
+   * @param {number} index @param {boolean} add
+   */
+  async function selectRange(index, add) {
+    const anchor = state.anchorIndex ?? state.selectedIndex ?? index;
+    state.anchorIndex = anchor;
+    const lo = Math.min(anchor, index);
+    const count = Math.min(Math.max(anchor, index) - lo + 1, MAX_SELECTION);
+    const base = add ? selectedFrames() : [];
+    const seq = ++state.rangeSeq;
+    focusIndex(index);
+    /** @type {number[]} */
+    let frames = [];
+    for (let i = lo; i < lo + count; i++) {
+      const row = rowAt(i);
+      if (!row) {
+        frames = [];
+        break;
+      }
+      frames.push(row.number);
+    }
+    if (!frames.length) {
+      try {
+        const viewKey = state.viewKey;
+        const res = await rpc("view_frames", { offset: lo, limit: count, ...orderParams() }).promise;
+        if (seq !== state.rangeSeq || res.filterId !== state.filterId || viewKey !== state.viewKey) {
+          return;
+        }
+        frames = res.frames;
+      } catch (err) {
+        showNotice(String(/** @type {any} */ (err)?.message ?? err));
+        return;
+      }
+    }
+    if (count === MAX_SELECTION) {
+      showNotice(`Selected the first ${MAX_SELECTION.toLocaleString()} packets of the range.`);
+    }
+    setSelection(new Set([...base, ...frames]));
+  }
+
+  /** Ctrl+A: every packet of the current view (in the filter bar or find box: its text). */
+  async function selectAll() {
+    const active = /** @type {HTMLElement | null} */ (document.activeElement);
+    if (active?.tagName === "INPUT" || active?.tagName === "TEXTAREA") {
+      /** @type {HTMLInputElement} */ (active).select();
+      return;
+    }
+    if (!state.ready || state.total === 0) {
+      return;
+    }
+    const filterId = state.filterId;
+    try {
+      const res = await rpc("view_frames", { offset: 0, limit: Math.min(state.total, MAX_SELECTION), ...orderParams() }).promise;
+      if (res.filterId !== filterId) {
+        return;
+      }
+      if (state.selectedIndex === null) {
+        focusIndex(0);
+      }
+      setSelection(new Set(res.frames));
+      if (state.total > MAX_SELECTION) {
+        showNotice(`Selected the first ${MAX_SELECTION.toLocaleString()} packets.`);
+      }
+    } catch (err) {
+      showNotice(String(/** @type {any} */ (err)?.message ?? err));
+    }
+  }
+
+  /** Cached rows of `frames` in view order, or null if some aren't loaded. @param {Set<number>} frames */
+  function cachedRows(frames) {
+    /** @type {{index: number, row: Row}[]} */
+    const found = [];
+    const prefix = `${state.viewKey}#`;
+    for (const [key, page] of state.pages.entries()) {
+      if (!key.startsWith(prefix)) {
+        continue;
+      }
+      const first = Number(key.slice(prefix.length)) * PAGE_SIZE;
+      page.forEach((/** @type {Row} */ row, /** @type {number} */ i) => {
+        if (frames.has(row.number)) {
+          found.push({ index: first + i, row });
+        }
+      });
+    }
+    if (found.length !== frames.size) {
+      return null;
+    }
+    return found.sort((a, b) => a.index - b.index).map((f) => f.row);
+  }
+
+  /** The visible columns' titles and each row's cells, for copying. @param {Row[]} rows */
+  function copyText(rows) {
+    const cols = visibleColumns();
+    const cells = rows.map((r) => cols.map((c) => r.cells[c.index] ?? ""));
+    return lib.rowsToText(cols.map((c) => c.column.title), cells, rows.length > 1);
+  }
+
+  /** Copy the selected rows (visible columns, view order); rows not loaded come from the backend. */
+  async function copyRows() {
+    const frames = selectedFrames();
+    if (!frames.length) {
+      return;
+    }
+    const cached = cachedRows(new Set(frames));
+    if (cached) {
+      copy(copyText(cached));
+      return;
+    }
+    const viewKey = state.viewKey;
+    try {
+      const ordered = (await rpc("view_frames", { frames, ...orderParams() }).promise).frames.slice(0, MAX_COPY_ROWS);
+      /** @type {Row[]} */
+      const rows = [];
+      for (let i = 0; i < ordered.length; i += COPY_CHUNK) {
+        const res = await rpc("list_packets", {
+          frames: ordered.slice(i, i + COPY_CHUNK),
+          columns: state.customColumns.map((c) => c.field),
+          sort: state.sort,
+          timeFormat: state.timeFormat,
+          timeRef: state.timeRef,
+        }).promise;
+        if (viewKey !== state.viewKey) {
+          return; // the view changed meanwhile
+        }
+        rows.push(...res.rows);
+      }
+      copy(copyText(rows));
+      if (frames.length > MAX_COPY_ROWS) {
+        showNotice(`Copied the first ${MAX_COPY_ROWS.toLocaleString()} rows. Export Packet List saves them all.`);
+      }
+    } catch (err) {
+      showNotice(String(/** @type {any} */ (err)?.message ?? err));
+    }
+  }
+
+  // Ctrl+C in the packet list (VS Code turns it into a "copy" event in the webview).
+  document.addEventListener("copy", (e) => {
+    const active = document.activeElement;
+    if (!active || !el.viewport.contains(active) || !selectedFrames().length) {
+      return;
+    }
+    e.preventDefault();
+    const cached = cachedRows(new Set(selectedFrames()));
+    if (cached && e.clipboardData) {
+      e.clipboardData.setData("text/plain", copyText(cached));
+    } else {
+      void copyRows();
+    }
+  });
 
   /** @param {number} index @param {boolean} center */
   function scrollIndexIntoView(index, center) {
@@ -712,9 +965,10 @@
     if (frame === null) {
       return;
     }
+    const viewKey = state.viewKey;
     try {
-      const res = await rpc("find_frame", { number: frame }).promise;
-      if (res.filterId !== state.filterId || frame !== state.selectedFrame) {
+      const res = await rpc("find_frame", { number: frame, ...orderParams() }).promise;
+      if (res.filterId !== state.filterId || frame !== state.selectedFrame || viewKey !== state.viewKey) {
         return;
       }
       if (res.index === null || res.index === undefined) {
@@ -743,7 +997,7 @@
       return false;
     }
     try {
-      const res = await rpc("find_frame", { number: frame }).promise;
+      const res = await rpc("find_frame", { number: frame, ...orderParams() }).promise;
       if (res.index === null || res.index === undefined) {
         showNotice(
           `Packet ${frame} is not displayed with the current filter.`,
@@ -811,11 +1065,17 @@
   function reportSelection(frame) {
     if (frame !== reportedFrame) {
       reportedFrame = frame;
-      vscode.postMessage({ type: "selection", frame });
+      postSelection();
     }
   }
   /** @type {number | null} */
   let reportedFrame = null;
+
+  /** The focused frame plus, for a multi-selection, every selected frame (Export Selected…). */
+  function postSelection() {
+    const frames = state.selection.size ? [...state.selection] : undefined;
+    vscode.postMessage(frames ? { type: "selection", frame: reportedFrame, frames } : { type: "selection", frame: reportedFrame });
+  }
 
   function clearDetail() {
     reportSelection(null);
@@ -1190,11 +1450,17 @@
       return;
     }
     e.preventDefault();
-    selectIndex(Number(rowEl.dataset.index));
-    const row = rowAt(Number(rowEl.dataset.index));
+    const index = Number(rowEl.dataset.index);
+    const row = rowAt(index);
+    if (row && state.selection.has(row.number)) {
+      focusIndex(index); // right-click inside a multi-selection keeps it
+    } else {
+      selectIndex(index);
+    }
     if (!row) {
       return;
     }
+    const multi = state.selection.size;
     const protocol = (row.cells[4] || "").toUpperCase();
     /** @param {"tcp" | "udp" | "tls" | "http"} proto */
     const follow = (proto) => () => vscode.postMessage({ type: "follow", proto, frame: row.number });
@@ -1220,12 +1486,21 @@
       ["Decode As…", () => vscode.postMessage({ type: "decodeAs", frame: row.number })],
       ["Export Packet Bytes…", () => vscode.postMessage({ type: "exportBytes", frame: row.number })],
       ["-", null],
-      [row.marked ? "Unmark Packet" : "Mark Packet", () => void toggleMark()],
+      [multi ? `Mark/Unmark ${multi.toLocaleString()} Selected Packets` : row.marked ? "Unmark Packet" : "Mark Packet", () => void toggleMark()],
       [state.timeRef === row.number ? "Unset Time Reference" : "Set Time Reference", () => toggleTimeReference()],
+      ["Select All", () => void selectAll()],
       ["-", null],
       ["Copy Value", cellValue ? () => copy(cellValue) : null],
-      ["Copy Summary", () => copy(row.cells.join("\t"))],
-      ["Copy Frame Number", () => copy(String(row.number))],
+      ...(multi
+        ? /** @type {[string, (() => void) | null][]} */ ([
+            [`Copy ${multi.toLocaleString()} Rows`, () => void copyRows()],
+            [`Copy ${multi.toLocaleString()} Frame Numbers`, () => void copyFrameNumbers()],
+            [`Export ${multi.toLocaleString()} Selected Packets…`, () => vscode.postMessage({ type: "exportSelected" })],
+          ])
+        : /** @type {[string, (() => void) | null][]} */ ([
+            ["Copy Summary", () => copy(row.cells.join("\t"))],
+            ["Copy Frame Number", () => copy(String(row.number))],
+          ])),
     ];
     showMenu(e.clientX, e.clientY, items);
   });
@@ -1946,6 +2221,7 @@
       caseSensitive: el.findCase.checked,
       from: state.selectedFrame,
       direction,
+      ...orderParams(),
     });
     findRequest = req.id;
     setFindStatus("Searching…");
@@ -2000,7 +2276,7 @@
       return;
     }
     try {
-      const res = await rpc("neighbor_frame", { frame, direction }).promise;
+      const res = await rpc("neighbor_frame", { frame, direction, ...orderParams() }).promise;
       if (res.frame === null || res.frame === undefined) {
         showNotice(`No ${direction} packet in this conversation${state.appliedFilter ? " among the displayed packets" : ""}.`);
         return;
@@ -2011,14 +2287,28 @@
     }
   }
 
-  /** @param {number} frame @param {boolean} marked */
-  function setRowMark(frame, marked) {
+  /** Patch cached rows instead of refetching. @param {number[]} marked @param {number[]} unmarked */
+  function patchMarks(marked, unmarked) {
+    const on = new Set(marked);
+    const off = new Set(unmarked);
     for (const page of state.pages.values()) {
       for (const row of page) {
-        if (row.number === frame) {
-          row.marked = marked;
+        if (on.has(row.number)) {
+          row.marked = true;
+        } else if (off.has(row.number)) {
+          delete row.marked;
         }
       }
+    }
+  }
+
+  /** The selected frames in view order, one per line. */
+  async function copyFrameNumbers() {
+    try {
+      const res = await rpc("view_frames", { frames: selectedFrames(), ...orderParams() }).promise;
+      copy(res.frames.join("\n"));
+    } catch (err) {
+      showNotice(String(/** @type {any} */ (err)?.message ?? err));
     }
   }
 
@@ -2028,15 +2318,16 @@
     scheduleRender();
   }
 
+  /** Ctrl+M: mark the selected packets, or unmark them if all of them are marked. */
   async function toggleMark() {
-    const frame = state.selectedFrame;
-    if (frame === null) {
+    const frames = selectedFrames();
+    if (!frames.length) {
       showNotice("Select a packet to mark.");
       return;
     }
     try {
-      const res = await rpc("mark_packets", { frames: [frame] }).promise;
-      setRowMark(frame, res.marked.includes(frame));
+      const res = await rpc("mark_packets", { frames }).promise;
+      patchMarks(res.marked, res.unmarked);
       state.markCount = res.count;
       afterMarksChanged();
     } catch (err) {
@@ -2066,7 +2357,7 @@
       return;
     }
     try {
-      const res = await rpc("find_packet", { mode: "marked", from: state.selectedFrame, direction }).promise;
+      const res = await rpc("find_packet", { mode: "marked", from: state.selectedFrame, direction, ...orderParams() }).promise;
       if (res.frame === null || res.frame === undefined) {
         showNotice("None of the marked packets is displayed with the current filter.");
         return;
@@ -2121,6 +2412,9 @@
         if (state.total) {
           jumpToIndex(state.total - 1, null, true);
         }
+        break;
+      case "selectAll":
+        void selectAll();
         break;
       case "toggleMark":
         void toggleMark();
@@ -2471,7 +2765,8 @@
       parts.push(`Displayed: ${state.matchCount.toLocaleString()} (${pct}%)`);
     }
     if (state.selectedFrame !== null) {
-      parts.push(`Selected: ${state.selectedFrame}`);
+      const multi = state.selection.size ? ` (${state.selection.size.toLocaleString()} packets)` : "";
+      parts.push(`Selected: ${state.selectedFrame}${multi}`);
     }
     if (state.markCount) {
       parts.push(`Marked: ${state.markCount.toLocaleString()}`);

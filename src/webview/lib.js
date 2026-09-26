@@ -133,6 +133,10 @@
     values() {
       return this.map.values();
     }
+    /** Cached [key, value] pairs (does not change the LRU order). */
+    entries() {
+      return this.map.entries();
+    }
     get size() {
       return this.map.size;
     }
@@ -513,6 +517,19 @@
   }
 
   /**
+   * Packet-list rows as tab-separated text (what Copy puts on the clipboard):
+   * one line per row, optionally a header line first. Tabs and line breaks in
+   * cells become spaces so every row stays one line.
+   * @param {string[]} titles @param {string[][]} rows @param {boolean} header
+   */
+  function rowsToText(titles, rows, header) {
+    /** @param {string} v */
+    const clean = (v) => String(v ?? "").replace(/[\t\r\n]+/g, " ");
+    const lines = rows.map((cells) => cells.map(clean).join("\t"));
+    return (header ? [titles.map(clean).join("\t"), ...lines] : lines).join("\n");
+  }
+
+  /**
    * Clean axis ticks from 0 to at least `max` (1-2-5 steps), e.g. 0, 20, 40, 60.
    * @param {number} max @param {number} [target] approximate number of intervals
    */
@@ -786,6 +803,7 @@
     formatCell,
     sortRows,
     tableToCsv,
+    rowsToText,
     niceTicks,
     hexToBytes,
     asciiChar,

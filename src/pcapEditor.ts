@@ -92,8 +92,10 @@ let nextSessionId = 1;
 export class PcapEditorSession {
   /** Unique per editor panel (keys the statistics panels). */
   readonly id = nextSessionId++;
-  /** Frame currently selected in the packet list, if any. */
+  /** Frame currently selected (focused) in the packet list, if any. */
   selectedFrame: number | null = null;
+  /** Every selected frame when several are (Shift/Ctrl+click), else empty. */
+  selectedFrames: number[] = [];
   /** Number of marked packets (the marks themselves live in the backend). */
   markedCount = 0;
   private readonly disposeEmitter = new vscode.EventEmitter<void>();
@@ -354,6 +356,7 @@ export class PcapEditorSession {
         return;
       case "selection":
         this.selectedFrame = typeof msg.frame === "number" ? msg.frame : null;
+        this.selectedFrames = Array.isArray(msg.frames) ? msg.frames.filter((n) => Number.isInteger(n)) : [];
         return;
       case "follow":
         FollowPanel.show(this.context, this, msg.proto, msg.frame);
@@ -395,6 +398,9 @@ export class PcapEditorSession {
         return;
       case "exportMarked":
         await vscode.commands.executeCommand("pcapViewer.exportMarked");
+        return;
+      case "exportSelected":
+        await vscode.commands.executeCommand("pcapViewer.exportSelected");
         return;
       case "marks":
         this.markedCount = msg.count;
