@@ -295,3 +295,9 @@ export function pushHistory(history: readonly string[], expr: string, max = 50):
   }
   return [trimmed, ...history.filter((h) => h !== trimmed)].slice(0, max);
 }
+
+/** Quick (approximate) packet detail for late packets: from frame `after` on (0 = never), dissecting `window` packets. */
+export interface QuickDetail {
+  after: number;
+  window: number;
+}

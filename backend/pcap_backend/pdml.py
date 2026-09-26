@@ -12,6 +12,7 @@ prints them with ``-x``).
 
 import re
 import xml.etree.ElementTree as ET
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -166,3 +167,63 @@ def parse_hexdump(text: str) -> list[ByteSource]:
             del current.data[offset:]
         current.data.extend(chunk)
     return sources
+
+
+# ---------------------------------------------------------------------- quick detail
+
+_FRAME_LABEL_RE = re.compile(r"^Frame (\d+)(?=:)")
+_SEGMENT_REF_RE = re.compile(r"#(\d+)(?=\()")
+
+
+def _replace_last_number(text: str, old: int, new: int) -> str:
+    matches = list(re.finditer(rf"(?<!\d){old}(?!\d)", text))
+    if not matches:
+        return text
+    m = matches[-1]
+    return f"{text[: m.start()]}{new}{text[m.end() :]}"
+
+
+def renumber_tree(
+    tree: list[TreeNode],
+    offset: int,
+    window: int,
+    is_framenum: Callable[[str], bool],
+    time_relative: str | None = None,
+) -> None:
+    """Make a tree dissected from an extracted window of packets read like the
+    capture's own (in place).
+
+    The window file numbers its packets from 1, so frame ``k`` of the window
+    is frame ``k + offset`` of the capture: ``frame.number``, every field for
+    which ``is_framenum(name)`` (FT_FRAMENUM: "Request in frame", "ACK of
+    frame"…), the "Frame N:" header and the ``#N(len)`` references of
+    ``*.segments``/``*.fragments`` get ``offset`` added (only values within
+    the window, 1..``window``). ``time_relative`` replaces
+    ``frame.time_relative``, which the window measures from its own first packet.
+    """
+
+    def shift(n: int) -> int:
+        return n + offset if 1 <= n <= window else n
+
+    def fix(node: TreeNode) -> None:
+        name = node.get("name", "")
+        show = node.get("show")
+        label = node["label"]
+        if name == "frame" and node.get("proto"):
+            node["label"] = _FRAME_LABEL_RE.sub(lambda m: f"Frame {shift(int(m[1]))}", label)
+        elif name == "frame.time_relative" and time_relative is not None and show is not None:
+            node["label"] = label.replace(show, time_relative) if show in label else label
+            node["show"] = time_relative
+        elif (name == "frame.number" or is_framenum(name)) and show is not None and show.isdigit():
+            old = int(show)
+            new = shift(old)
+            if new != old:
+                node["show"] = str(new)
+                node["label"] = _replace_last_number(label, old, new)
+        elif _NEW_SOURCE_RE.search(name):
+            node["label"] = _SEGMENT_REF_RE.sub(lambda m: f"#{shift(int(m[1]))}", label)
+        for child in node.get("children", ()):
+            fix(child)
+
+    for node in tree:
+        fix(node)

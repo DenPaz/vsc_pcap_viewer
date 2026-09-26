@@ -53,6 +53,15 @@ by **tshark** (Wireshark's command-line tool), so results match Wireshark exactl
 - **Packet details**: collapsible protocol tree and hex/ASCII pane with
   **two-way highlighting** (select a field to see its bytes; click a byte to
   find its field), including reassembled data (e.g. HTTP over several TCP segments).
+- **Quick view of late packets**: a packet's exact details come from dissecting
+  the capture up to it, which takes long near the end of a big capture (20 s at
+  packet 1,000,000). From packet 20,000 on (`pcapViewer.quickDetail.after`), a
+  quick view shows first: only the 300 packets before it are dissected
+  (`pcapViewer.quickDetail.window`), in about 0.3 s anywhere in the file. It is
+  marked *Quick view* because reassembly, TCP analysis and "Request in frame"
+  links that depend on earlier packets can be missing; the exact view replaces
+  it when ready, keeping the expanded nodes and the selected field. Recently
+  viewed packets are cached, so going back is instant.
 - Tree context menu: *Apply as Filter*, *Prepare as Filter*, *…and/or/and not
   Selected*, *Colorize with Filter…*, *Apply as Column*, *Copy Value / Line / Field Name / as Filter / Bytes*.
 - **Find Packet** (`Ctrl+F`): a find bar under the filter bar that searches by
@@ -222,6 +231,8 @@ the side bar or panel.
 | `pcapViewer.ai.allowPacketData` | Let *Ask Copilot About This Packet…* / `@pcap /explain` send packet rows and dissection trees (default `false`; asked once; user settings only) |
 | `pcapViewer.ai.allowPacketBytes` | Also send raw bytes when explaining packets (default `false`; user settings only) |
 | `pcapViewer.maxCachedFrames` | Backend cache budget for filter results / sort orders |
+| `pcapViewer.quickDetail.after` | From this packet number on, show a quick (approximate) view first (default `20000`; `0` = never) |
+| `pcapViewer.quickDetail.window` | How many packets the quick view dissects (default `300`) |
 | `pcapViewer.requestTimeoutSeconds` | Timeout for quick requests (long ones are cancellable instead) |
 
 A Lua dissector template is available as the `dissector` snippet in Lua files;
@@ -245,7 +256,11 @@ Webview (HTML/JS)  --postMessage-->  Extension host (TypeScript)
 - Applying a filter runs `tshark -Y <filter> -T fields -e frame.number` once
   and caches the matching frame numbers (4 bytes per match).
 - Selecting a packet runs `tshark -c N -Y frame.number==N -T pdml` (and `-x`
-  for the bytes), so tshark stops reading after that packet.
+  for the bytes), so tshark stops reading after that packet. For late packets
+  a quick view comes first: `editcap -r` copies the last few hundred packets
+  up to it into a small temporary file (it reads records without dissecting
+  them), tshark dissects only those, and the frame numbers in the tree are
+  shifted back to the capture's.
 - Coloring runs one `tshark --color` pass in the background and keeps one
   byte per packet (the matching rule). tshark reads coloring rules only from
   its configuration folder, so the pass points `WIRESHARK_CONFIG_DIR` at a
@@ -266,7 +281,8 @@ Measured with `test/perf/bench.py` on 1,000,000 synthetic packets (146 MB,
 | 1000 random scroll pages | 0.09 s total |
 | Apply a filter | 26 s (one tshark pass; re-applying a cached filter is instant) |
 | Sort 1M rows by Length | 0.6 s |
-| Detail of frame 10 / frame 1,000,000 | 0.2 s / 26 s |
+| Detail of frame 10 / frame 1,000,000 | 0.2 s / 20–26 s |
+| Quick view of any frame (300-packet window) | 0.25–0.3 s |
 | Peak memory: backend / tshark | 125 MB / 225 MB |
 
 Almost all of the time is tshark's own dissection. Wireshark preferences that
@@ -274,12 +290,12 @@ make dissection cheaper can be set through `pcapViewer.prefs`, for example
 `{ "tcp.analyze_sequence_numbers": false }` (the synthetic benchmark capture
 replays the same flows, which makes this analysis 6x slower: 165 s instead of 26 s
 for the filter). Opening a packet near the end of a huge capture re-reads the
-file up to that packet so reassembly stays correct (see the roadmap below).
+file up to that packet so reassembly stays correct; the quick view above shows
+something in the meantime.
 
 ## Roadmap
 
-Every item of the project brief is implemented. Possible next steps: a faster
-"quick view" of late packets in huge captures (without reassembly context),
+Every item of the project brief is implemented. Possible next steps:
 exporting full dissections (PDML/JSON), and a visual editor for coloring rules.
 
 ## Running locally (Linux)

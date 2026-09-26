@@ -3,12 +3,12 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { BackendClient, ErrorCodes, RpcError, findPython } from "./backendClient";
-import { Settings, getSetting, readSettings, updateSetting } from "./config";
+import { Settings, getSetting, readQuickDetail, readSettings, updateSetting } from "./config";
 import type { ExplainOutcome, ExplainSink, FilterAssistant, SuggestOutcome } from "./ai";
 import { ColoringResult, HostToWebview, OpenResult, ViewerCommand, WEBVIEW_RPC_METHODS, WebviewToHost } from "./messages";
 import { saveFilterInteractive, showSavedFilters } from "./commands/savedFilters";
 import { FollowPanel } from "./panels/followPanel";
-import { ColumnLayout, ColumnSetting, SavedFilter, TimeFormat, addColumn, normalizeColumns, pushHistory } from "./settingsModel";
+import { ColumnLayout, ColumnSetting, QuickDetail, SavedFilter, TimeFormat, addColumn, normalizeColumns, pushHistory } from "./settingsModel";
 
 const HISTORY_KEY = "pcapViewer.filterHistory";
 /** Coloring problems already shown in a notification (each is reported once per window). */
@@ -225,6 +225,7 @@ export class PcapEditorSession {
         columns: settings.columns,
         layout: settings.columnLayout,
         timeFormat: settings.timeFormat,
+        quickDetail: settings.quickDetail,
         filter: this.filter,
         history: this.history(),
         savedFilters: settings.savedFilters,
@@ -551,7 +552,7 @@ export class PcapEditorSession {
     }
     return this.assistant.explain(
       client,
-      { frames, question, currentFilter: this.filter, titleOf, customFields: custom.map((c) => c.field), includeBytes },
+      { frames, question, currentFilter: this.filter, titleOf, customFields: custom.map((c) => c.field), includeBytes, quickDetail: readQuickDetail(this.uri) },
       sink,
       token,
     );
@@ -604,6 +605,10 @@ export class PcapEditorSession {
 
   setTimeFormat(format: TimeFormat): void {
     this.post({ type: "timeFormat", format });
+  }
+
+  setQuickDetail(quickDetail: QuickDetail): void {
+    this.post({ type: "quickDetail", quickDetail });
   }
 
   /** Run a viewer action (Find, marks, navigation…) from the command palette or a keybinding. */

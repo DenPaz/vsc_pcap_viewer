@@ -148,8 +148,29 @@ UI behaviour stays in the Chromium test (`test/webview/e2e.test.js`).
   parallel. `-c N` stops reading after frame N (it counts packets *read*), so
   cost is proportional to N, and earlier packets are still dissected (TCP
   reassembly etc. stay correct). Detail of frame ~1M therefore costs about one
-  pass over the file; a random-access fast path (editcap) would lose
-  reassembly context, so it is not used.
+  pass over the file (20 s on the benchmark capture).
+- **Quick detail** (`packet_detail {mode: "quick", window}`): for frames past
+  `pcapViewer.quickDetail.after` (default 20k) the webview asks for the exact
+  and the quick detail together and shows whichever comes first; the exact one
+  replaces the quick one (same frame: `showDetail` keeps expansion, the
+  selected field and the scroll position; the quick request is cancelled when
+  the exact one lands). Quick = `editcap -F pcapng -r <capture> <tmp> first-N`
+  (reads records without dissecting: 0.13 s at the end of 1M packets) then
+  `_dissect` of the window's last frame, ~0.3 s in all. The window numbers
+  its frames from 1, so `pdml.renumber_tree` adds `first - 1` to
+  `frame.number`, the "Frame N:" header, `*.segments` `#N(len)` references
+  and every FT_FRAMENUM field (field catalogue; while it is still loading, a
+  name list `_FRAMENUM_HINT`, and the catalogue is warmed in the background,
+  once), only for values inside the window, and puts the capture's
+  `frame.time_relative` back (the window measures from its own start).
+  Result: `approximate: true, window: [first, N]`; the webview shows a sticky
+  note ("only packets X–N were dissected…"). References to packets before
+  the window are simply absent (e.g. `http.request_in`). A quick request
+  returns the exact detail when cached or when the window starts at frame 1,
+  and `{unavailable}` without editcap (the webview then waits for the exact
+  one). Quick results have their own LRU (16) keyed by (frame, window). Ask
+  Copilot uses quick details for late packets too, and the prompt says which
+  trees are approximate.
 - **Byte sources**: PDML does not say which data source (frame vs reassembled)
   a field's `pos` refers to. Heuristic in `pdml.py`: top-level items after a
   `*.segments`/`*.fragments` node belong to the next `-x` source. Documented
@@ -408,7 +429,8 @@ UI behaviour stays in the Chromium test (`test/webview/e2e.test.js`).
 ## Performance notes (test/perf/bench.py, 1M synthetic packets, 146 MB)
 
 With `-o tcp.analyze_sequence_numbers:FALSE`: open 36 s, filter 26 s, page
-fetch < 1 ms, sort 0.6 s, detail of last frame 26 s, backend RSS 125 MB,
+fetch < 1 ms, sort 0.6 s, detail of last frame 20–26 s (quick view of any
+frame 0.25–0.3 s with a 300-packet window), backend RSS 125 MB,
 tshark 225 MB. With TCP analysis on, the synthetic file (512 replayed flows)
 makes tshark super-linear (filter 165 s for 1M vs 4.5 s for 100k); real
 captures are not expected to behave like that. Sorting streams one column from
@@ -430,4 +452,5 @@ check, open folder, reload offer on save) and a Decode As UI plus rule manager.
 Step 7: coloring rules (defaults, Colorize with Filter, toggle), export
 (pcapng/pcap, CSV/JSON packet list, packet bytes), CHANGELOG, packaging.
 
-Not yet (beyond the brief): quick view for late packets in huge files.
+Beyond the brief: navigation and customisation, multi-select, AI help for
+filters and explaining packets, and a quick view for late packets in huge files.

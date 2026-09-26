@@ -116,6 +116,12 @@ suite("aiExplain", () => {
     assert.match(bounded, /\[dissection cut short\]/);
   });
 
+  test("an approximate (quick) dissection is labelled as such", () => {
+    const prompt = buildExplainPrompt(input({ packets: [{ ...packet(900000), approximateFrom: 899701 }, packet(5)] }));
+    assert.match(prompt, /## Packet 900000\nRow: .*\n\(Approximate dissection: only packets 899701-900000 were dissected/);
+    assert.equal((prompt.match(/Approximate dissection/g) ?? []).length, 1, "only the quick one");
+  });
+
   test("question and filter are one bounded line; the data is marked untrusted", () => {
     const prompt = buildExplainPrompt(input({ question: "why\nreset?", currentFilter: "tcp\n&& ip" }));
     assert.match(prompt, /Question: why reset\?/);

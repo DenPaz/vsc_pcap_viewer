@@ -65,6 +65,7 @@ ignore = [
 "test/backend/test_stats.py" = ["E501"]  # captured tshark report text
 "test/backend/test_export.py" = ["E501"]  # one-line request literals
 "test/backend/test_navigation.py" = ["E501"]
+"test/backend/test_quick_detail.py" = ["E501"]  # a hand-laid-out PDML tree
 
 [tool.mypy]
 python_version = "3.14"
