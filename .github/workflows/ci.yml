@@ -10,6 +10,7 @@ jobs:
   linux:
     name: Linux (lint, backend, unit, webview e2e, VS Code smoke)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Install tshark
@@ -54,6 +55,7 @@ jobs:
       matrix:
         os: [macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       # tshark, capinfos, editcap and mergecap, so the tshark tests run here too.

@@ -27,12 +27,17 @@ def _recorder(service: PcapService) -> list[dict[str, Any]]:
     return events
 
 
-def _wait_event(events: list[dict[str, Any]], method: str, event: str, **match: Any) -> Any:
+def _wait_event(
+    events: list[dict[str, Any]], method: str, event: str, *, has_view: bool = False, **match: Any
+) -> Any:
+    """The first ``method`` notification with this ``event`` (and ``match``ing
+    fields; with ``has_view``, one carrying ``view``), waiting up to 10 s."""
     for _ in range(200):
         for e in list(events):
             if (
                 e["method"] == method
                 and e.get("event") == event
+                and (not has_view or "view" in e)
                 and all(e.get(k) == v for k, v in match.items())
             ):
                 return e
@@ -208,8 +213,9 @@ def test_streaming_filter_while_indexing(
         service.list_packets({"sort": {"field": "frame.len"}}, ctx) and service.find_packet(
             {"mode": "filter", "value": "dns"}, ctx
         )
-    progress = [e for e in events if e["method"] == "index" and "view" in e]
-    assert progress and progress[-1]["view"]["filterId"] == res["filterId"]
+    # Index progress (every PROGRESS_INTERVAL_S) says how many matches are shown by now.
+    progress = _wait_event(events, "index", "progress", has_view=True)
+    assert progress["view"]["filterId"] == res["filterId"]
     slow_index.set()
     index_done = _wait_event(events, "index", "done")
     assert index_done["view"] == {"filterId": res["filterId"], "matchCount": len(UDP)}
