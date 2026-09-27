@@ -49,6 +49,25 @@
     "http"
   ],
   "main": "./out/src/extension.js",
+  "extensionKind": [
+    "workspace"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "In Restricted Mode, the Python and tshark paths and the Lua dissectors come from your user settings only, so a workspace can't make PCAP Viewer run its own programs or scripts.",
+      "restrictedConfigurations": [
+        "pcapViewer.pythonPath",
+        "pcapViewer.tsharkPath",
+        "pcapViewer.luaScripts",
+        "pcapViewer.dissectorsFolder"
+      ]
+    },
+    "virtualWorkspaces": {
+      "supported": "limited",
+      "description": "tshark reads files from disk: captures in a virtual workspace open as copies."
+    }
+  },
   "activationEvents": [],
   "contributes": {
     "customEditors": [

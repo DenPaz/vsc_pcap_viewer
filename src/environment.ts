@@ -63,16 +63,20 @@ export function tsharkVersion(banner: string): string {
   return /(\d+\.\d+\.\d+)/.exec(banner)?.[1] ?? banner.trim();
 }
 
-/** One line for a notification. */
-export function environmentSummary(status: EnvironmentStatus): string {
+/**
+ * One line for a notification. In a remote window (`where`, from
+ * `remote.whereLabel`) the tools must be installed there, not locally.
+ */
+export function environmentSummary(status: EnvironmentStatus, where?: string): string {
   const { python, tshark } = status;
   if (python.ok && tshark.ok) {
-    return `Ready: Python ${python.version} (${python.command}) and TShark ${tshark.version} (${tshark.path}).`;
+    return `Ready${where ? ` in ${where}` : ""}: Python ${python.version} (${python.command}) and TShark ${tshark.version} (${tshark.path}).`;
   }
+  const hint = where ? ` PCAP Viewer runs in ${where}: install it there.` : "";
   if (!python.ok) {
-    return python.error;
+    return python.error + hint;
   }
-  return `Python ${python.version} is fine, but TShark isn't: ${(tshark as { error: string }).error}`;
+  return `Python ${python.version} is fine, but TShark isn't: ${(tshark as { error: string }).error}${hint}`;
 }
 
 /** Which setting fixes the first problem. */

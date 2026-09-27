@@ -7,6 +7,8 @@ import {
   environmentSummary,
   settingToFix,
 } from "../environment";
+import { copyName, whereLabel } from "../remote";
+import { newTemporaryCapture } from "../tempCaptures";
 
 /** The Get Started walkthrough's id in package.json. */
 export const WALKTHROUGH = "gettingStarted";
@@ -43,8 +45,14 @@ export async function offerSetupHelp(
   setting: "pythonPath" | "tsharkPath",
 ): Promise<void> {
   const download = setting === "pythonPath" ? "Download Python" : "Download Wireshark";
+  // Remotely, the tools must be on the remote machine (the download page opens locally).
+  const where = whereLabel(vscode.env.remoteName);
+  const text =
+    where && !message.includes(where)
+      ? `${message} PCAP Viewer runs in ${where}: install it there.`
+      : message;
   const choice = await vscode.window.showErrorMessage(
-    `PCAP Viewer: ${message}`,
+    `PCAP Viewer: ${text}`,
     "Setup Guide",
     download,
     "Open Settings",
@@ -56,6 +64,21 @@ export async function offerSetupHelp(
   } else if (choice === "Open Settings") {
     await vscode.commands.executeCommand("workbench.action.openSettings", `pcapViewer.${setting}`);
   }
+}
+
+/**
+ * Open a copy of a capture that isn't a file on disk (Live Share, archives,
+ * virtual file systems) as an unsaved capture. Returns the copy.
+ */
+export async function openCopy(
+  context: vscode.ExtensionContext,
+  uri: vscode.Uri,
+): Promise<vscode.Uri> {
+  const data = await vscode.workspace.fs.readFile(uri);
+  const copy = vscode.Uri.file(await newTemporaryCapture(context, copyName(uri)));
+  await vscode.workspace.fs.writeFile(copy, data);
+  await vscode.commands.executeCommand("vscode.openWith", copy, "pcapViewer.editor");
+  return copy;
 }
 
 export function registerSetupCommands(
@@ -92,7 +115,7 @@ export function registerSetupCommands(
           () => checkEnvironment(readSettings(), { findPython, initialize }),
         );
         setEnvironmentContext(status.python.ok, status.tshark.ok);
-        const summary = environmentSummary(status);
+        const summary = environmentSummary(status, whereLabel(vscode.env.remoteName));
         const fix = settingToFix(status);
         (fix ? log.warn : log.info).call(log, `environment check: ${summary}`);
         if (!options?.quiet) {
@@ -108,7 +131,9 @@ export function registerSetupCommands(
     vscode.commands.registerCommand("pcapViewer.openSample", async () => {
       // A copy in the extension's storage: comments saved into it must not
       // touch the installed extension (which updates replace anyway).
-      const dir = vscode.Uri.joinPath(context.globalStorageUri, "samples");
+      // A file: URI (tshark reads files): globalStorageUri itself can be
+      // vscode-userdata:, which the viewer would offer to copy instead.
+      const dir = vscode.Uri.joinPath(vscode.Uri.file(context.globalStorageUri.fsPath), "samples");
       const sample = vscode.Uri.joinPath(dir, "sample.pcapng");
       await vscode.workspace.fs.createDirectory(dir);
       try {
@@ -123,5 +148,9 @@ export function registerSetupCommands(
       return sample;
     }),
     vscode.commands.registerCommand("pcapViewer.openWalkthrough", () => openWalkthrough(context)),
+    // (the "Open a Copy" button of a capture that isn't on disk; not in the palette)
+    vscode.commands.registerCommand("pcapViewer.openCopy", (uri: vscode.Uri) =>
+      openCopy(context, uri),
+    ),
   );
 }

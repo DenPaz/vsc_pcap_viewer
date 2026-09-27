@@ -281,6 +281,46 @@ is anything unusual?`) describes the capture from its statistics only:
   `py -3.14` / `py -3` on Windows), or set `pcapViewer.pythonPath`. The backend
   only uses the standard library, so no packages need to be installed.
 
+### Remote windows (WSL, SSH, Dev Containers, Codespaces)
+
+PCAP Viewer runs where the files are: in a remote window it runs on the
+remote machine, and so do Python, tshark and live captures. Install tshark
+and Python 3.14 **on the remote machine**; the walkthrough and _PCAP: Check
+Python and TShark_ say so and check there. `pcapViewer.pythonPath` and
+`pcapViewer.tsharkPath` are machine settings: set them in the Remote
+settings (_Preferences: Open Remote Settings_), since local user settings
+don't apply remotely.
+
+- **SSH**: capture on the server's own interfaces (_PCAP: Start Capture…_
+  lists them) and look at the result in VS Code, without copying files.
+- **WSL**: install tshark in the distribution (`sudo apt install tshark`),
+  not Wireshark for Windows. Captures on Windows drives open through
+  `/mnt/c/…`; live captures see WSL's own network interface.
+- **Dev Containers and Codespaces**: for example
+
+  ```jsonc
+  // .devcontainer/devcontainer.json
+  {
+    "image": "mcr.microsoft.com/devcontainers/python:3.14",
+    "postCreateCommand": "sudo apt-get update && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y tshark",
+    "customizations": { "vscode": { "extensions": ["denpaz.pcap-viewer"] } },
+    // Only for live capture: let dumpcap capture as the container's user.
+    // "runArgs": ["--cap-add=NET_RAW", "--cap-add=NET_ADMIN"],
+    // "postStartCommand": "sudo setcap cap_net_raw,cap_net_admin=eip /usr/bin/dumpcap"
+  }
+  ```
+
+- Saved files are shown in the Explorer view (or their path is offered for
+  copying) instead of the local file manager, which can't open a remote
+  folder. _Download_ buttons open your local browser: install on the remote
+  machine anyway.
+- A capture that isn't a file on disk (Live Share, an archive or another
+  virtual file system) can be opened as a copy, which is an unsaved capture.
+- In **Restricted Mode** (an untrusted workspace), the Python and tshark
+  paths and the Lua dissectors come from your user settings only: a
+  repository you haven't trusted can't make PCAP Viewer run its own programs
+  or scripts.
+
 ## Usage
 
 Open a capture file and it opens in the PCAP Viewer (use _Reopen Editor With…_
@@ -486,9 +526,8 @@ something in the meantime.
 ## Roadmap
 
 Every item of the project brief is implemented, and more (see the
-[CHANGELOG](CHANGELOG.md)). Possible next steps: running where the capture
-lives (Remote SSH, WSL, Dev Containers), comparing two captures, and VoIP
-calls.
+[CHANGELOG](CHANGELOG.md)). Possible next steps: comparing two captures,
+and VoIP calls.
 
 ## Running locally (Linux)
 

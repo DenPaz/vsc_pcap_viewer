@@ -86,7 +86,8 @@ wireshark`, `C:\Program Files\Wireshark` added to PATH): lint, backend and
   `src/commands/capture.ts` and `editCapture.ts` (start/stop, editing),
   `src/commands/withBackend.ts` (active or short-lived backend).
   `src/environment.ts` the setup check (pure); `src/commands/setup.ts` the
-  walkthrough's commands and context keys.
+  walkthrough's commands and context keys. `src/remote.ts` remote-window
+  helpers (pure); `src/commands/reveal.ts` shows saved files.
 - `src/webview/` plain JS/CSS/HTML (no build step). `lib.js` = pure helpers
   shared with Node tests; `main.js` = UI. Type-checked via JSDoc +
   `tsconfig.webview.json`.
@@ -784,6 +785,25 @@ stream, sessionId}`. The query stays short: expert rows (sanitized by
   artifact. Marketplace details: `icon` (PNG: vsce refuses SVG icons),
   `galleryBanner`, categories, keywords; README images are relative (vsce
   rewrites them to the repository), so `media/screenshots/` is not packaged.
+- **Remote windows and trust** (`extensionKind: ["workspace"]`, `remote.ts`):
+  the extension host, backend, tshark and dumpcap all run on the remote
+  machine (WSL, SSH, containers), where workspace files are `file:` URIs, so
+  paths work unchanged and live capture uses the remote's interfaces.
+  `whereLabel(vscode.env.remoteName)` names the machine in setup messages
+  (`environmentSummary(status, where)`, `offerSetupHelp`: "install it
+  there"). `revealFile` replaces `revealFileInOS`, which can't open a remote
+  folder: remotely the Explorer view for workspace files, else _Copy Path_
+  (`revealHow`; `preferExplorer` keeps the dissectors folder in the Explorer
+  locally too). A document whose scheme isn't `file:` (Live Share `vsls:`,
+  zip or virtual file systems) never starts a backend: `load()` shows
+  `notOnDisk` with _Open a Copy_ (`pcapViewer.openCopy`: read through
+  `workspace.fs` into a new unsaved capture). `capabilities.virtualWorkspaces`
+  is `limited` for that reason. `capabilities.untrustedWorkspaces` is
+  `limited` with `restrictedConfigurations` pythonPath, tsharkPath,
+  luaScripts and dissectorsFolder: in Restricted Mode VS Code only returns
+  their user values, so a repository can't choose the programs or Lua that
+  run (a unit test keeps the list). The smoke test opens a capture from a
+  read-only `pcaptest:` file system provider and its copy.
 - **Navigation and customisation** (Wireshark-like; all over the _current view_,
   i.e. the filter and sort order, which only the backend knows in full):
   - _Find Packet_ is backend `find_packet`. It turns the search into a display
