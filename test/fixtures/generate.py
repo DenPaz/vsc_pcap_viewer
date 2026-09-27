@@ -4,6 +4,7 @@ Usage (from the repository root)::
 
     uv run python test/fixtures/generate.py            # regenerate committed fixtures
     uv run python test/fixtures/generate.py --large 1000000 /tmp/big.pcap
+    uv run python test/fixtures/generate.py --tls-keylog /tmp/tls.pcap /tmp/tls-keys.log
 
 The committed fixtures are deterministic (fixed timestamps, addresses and
 sequence numbers) so that tests can assert on exact values. ``formats/`` holds
@@ -15,6 +16,7 @@ library, so their bytes never depend on a Wireshark version.
 import argparse
 import gzip
 import random
+import ssl
 import struct
 from pathlib import Path
 
@@ -400,12 +402,80 @@ def format_fixtures() -> None:
         (FORMATS / name).write_bytes(data)
 
 
+TLS_PSK = bytes.fromhex("00112233445566778899aabbccddeeff")
+
+
+def _psk_context(server: bool, keylog: Path | None) -> ssl.SSLContext:
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER if server else ssl.PROTOCOL_TLS_CLIENT)
+    ctx.minimum_version = ctx.maximum_version = ssl.TLSVersion.TLSv1_2
+    ctx.set_ciphers("PSK-AES128-GCM-SHA256")
+    if server:
+        ctx.set_psk_server_callback(lambda _identity: TLS_PSK)
+    else:
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        ctx.set_psk_client_callback(lambda _hint: ("pcap-viewer", TLS_PSK))
+        ctx.keylog_filename = str(keylog)
+    return ctx
+
+
+def tls_keylog_capture(dest: Path, keylog: Path) -> None:
+    """A TLS 1.2 session carrying one HTTP request and response on port 443,
+    plus the key log file (SSLKEYLOGFILE format) that decrypts it.
+
+    Not committed: TLS randoms differ on every run. Both ends run in memory
+    (``ssl.MemoryBIO``) with a pre-shared key, so no certificate is needed;
+    the records they exchange become TCP segments.
+    """
+    keylog.unlink(missing_ok=True)
+    c_in, c_out, s_in, s_out = (ssl.MemoryBIO() for _ in range(4))
+    client = _psk_context(False, keylog).wrap_bio(c_in, c_out, server_side=False)
+    server = _psk_context(True, None).wrap_bio(s_in, s_out, server_side=True)
+    session = _TcpSession("192.168.1.10", "93.184.216.34", 50443, 443)
+    session.handshake()
+
+    def pump() -> None:
+        if data := c_out.read():
+            session.client_send(data)
+            s_in.write(data)
+        if data := s_out.read():
+            session.server_send(data)
+            c_in.write(data)
+
+    done = [False, False]
+    for _ in range(20):
+        for i, end in enumerate((client, server)):
+            if not done[i]:
+                try:
+                    end.do_handshake()
+                    done[i] = True
+                except ssl.SSLWantReadError:
+                    pass
+        pump()
+        if all(done):
+            break
+    client.write(b"GET /secret.html HTTP/1.1\r\nHost: example.com\r\n\r\n")
+    pump()
+    server.read(4096)
+    body = b"<html>decrypted with the key log</html>"
+    server.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n")
+    server.write(f"Content-Length: {len(body)}\r\n\r\n".encode() + body)
+    pump()
+    client.read(4096)
+    session.close()
+    wrpcap(str(dest), _stamp(session.packets))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--large", nargs=2, metavar=("COUNT", "DEST"))
+    parser.add_argument("--tls-keylog", nargs=2, metavar=("DEST", "KEYLOG"))
     args = parser.parse_args()
     if args.large:
         large_capture(int(args.large[0]), Path(args.large[1]))
+        return
+    if args.tls_keylog:
+        tls_keylog_capture(Path(args.tls_keylog[0]), Path(args.tls_keylog[1]))
         return
     wrpcap(str(HERE / "http.pcap"), http_packets())
     wrpcap(str(HERE / "dns.pcap"), dns_packets())

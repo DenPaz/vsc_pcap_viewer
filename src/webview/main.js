@@ -139,11 +139,16 @@
     /** Quick (approximate) detail from frame `after` on (0 = never), dissecting `window` packets (pcapViewer.quickDetail). */
     quickDetail: { after: 20000, window: 300 },
     /** @type {number | null} */ quickRequest: null,
-    /** Streaming open: the index pass still runs (rows keep arriving; filters and sorting wait). */
+    /** Streaming open: the index pass still runs (rows keep arriving; sorting waits). */
     indexing: false,
     /** @type {number | null} */ indexFraction: null,
-    /** A filter applied while indexing: applied when indexing finishes. */
-    /** @type {string | null} */ pendingFilter: null,
+    /** Streaming filter: its matches are still arriving (a sort applies when it's done). */
+    filtering: false,
+    /** @type {number | null} */ filterFraction: null,
+    /** The filter was stopped (or failed) early: the list holds the matches found by then. */
+    filterPartial: false,
+    /** "filter" events that came before the set_filter result naming their filterId. */
+    /** @type {Map<number, any>} */ earlyFilterEvents: new Map(),
     /** @type {number | null} */ timeRef: null,
     markCount: 0,
     /** Back/forward history over jumps (links, go to, find, marks, conversation). */
@@ -246,10 +251,13 @@
         state.quickDetail = msg.quickDetail;
         break;
       case "indexProgress":
-        onIndexProgress(msg.frames, msg.fraction);
+        onIndexProgress(msg.frames, msg.fraction, msg.view);
         break;
       case "indexDone":
-        onIndexDone(msg.info, msg.error);
+        onIndexDone(msg.info, msg.error, msg.view);
+        break;
+      case "filterEvent":
+        onFilterEvent(msg);
         break;
       case "command":
         runCommand(msg.command);
@@ -295,7 +303,10 @@
     state.filterId = msg.info.filterId;
     state.indexing = !!msg.info.indexing;
     state.indexFraction = null;
-    state.pendingFilter = null;
+    state.filtering = false;
+    state.filterFraction = null;
+    state.filterPartial = false;
+    state.earlyFilterEvents.clear();
     state.ready = true;
     setHistory(msg.history);
     state.savedFilters = msg.savedFilters || [];
@@ -341,6 +352,8 @@
    */
   /** @type {Set<number>} */
   const busyRequests = new Set();
+  /** Busy-bar id of a streaming filter after its set_filter request returned. */
+  const FILTER_BUSY = -1;
   /** @param {number} id @param {boolean} on @param {number | null} [fraction] */
   function setBusy(id, on, fraction = null) {
     if (on) {
@@ -468,37 +481,67 @@
     resetView({ keepSelection: true });
   }
 
-  /** More rows are indexed (streaming open): grow the unfiltered list. @param {number} frames @param {number | null} fraction */
-  function onIndexProgress(frames, fraction) {
+  /**
+   * The list grew (streaming open or filter) to `total` rows: the rows already
+   * shown stay, and the last page, cut short where the list ended, is fetched again.
+   * @param {number} total
+   */
+  function growList(total) {
+    state.total = total;
+    state.matchCount = total;
+    const prefix = `${state.viewKey}#`;
+    for (const [key, page] of [...state.pages.entries()]) {
+      if (key.startsWith(prefix) && page.length < PAGE_SIZE) {
+        state.pages.delete(key);
+      }
+    }
+    updateSpacer();
+    scheduleRender();
+  }
+
+  /**
+   * The filtered view's match count from an index event (streaming open): the
+   * matches among the packets indexed so far.
+   * @param {{filterId: number, matchCount: number} | undefined} view
+   */
+  function viewCount(view) {
+    return state.appliedFilter && view && view.filterId === state.filterId ? view.matchCount : null;
+  }
+
+  /**
+   * More rows are indexed (streaming open): grow the list.
+   * @param {number} frames @param {number | null} fraction @param {{filterId: number, matchCount: number}} [view]
+   */
+  function onIndexProgress(frames, fraction, view) {
     if (!state.indexing || !state.info) {
       return;
     }
     state.info.frames = frames;
     state.indexFraction = fraction;
+    const matches = viewCount(view);
     if (!state.appliedFilter) {
-      state.total = frames;
-      state.matchCount = frames;
-      // The last page was cut short where indexing had got to: fetch it again.
-      const prefix = `${state.viewKey}#`;
-      for (const [key, page] of [...state.pages.entries()]) {
-        if (key.startsWith(prefix) && page.length < PAGE_SIZE) {
-          state.pages.delete(key);
-        }
-      }
-      updateSpacer();
-      scheduleRender();
+      growList(frames);
+    } else if (matches !== null && matches !== state.total) {
+      growList(matches);
     }
     updateStatus();
   }
 
-  /** The index pass ended (streaming open). @param {any} info @param {string | undefined} error */
-  function onIndexDone(info, error) {
+  /**
+   * The index pass ended (streaming open).
+   * @param {any} info @param {string | undefined} error @param {{filterId: number, matchCount: number}} [view]
+   */
+  function onIndexDone(info, error, view) {
     state.indexing = false;
     state.indexFraction = null;
     state.info = info;
+    const matches = viewCount(view);
     if (!state.appliedFilter) {
       state.total = info.frames;
       state.matchCount = info.frames;
+    } else if (matches !== null) {
+      state.total = matches;
+      state.matchCount = matches;
     }
     updateSpacer();
     refreshRows(); // columns and time formats that waited for the whole index
@@ -506,10 +549,52 @@
     if (error) {
       showNotice(`Indexing stopped after ${info.frames.toLocaleString()} packets: ${error}`);
     }
-    const pending = state.pendingFilter;
-    state.pendingFilter = null;
-    if (pending !== null) {
-      void applyFilter(pending);
+  }
+
+  /**
+   * A streaming filter's "filter" event: more matches, or its end.
+   * @param {{event: string, filterId: number, matchCount: number, fraction?: number | null, message?: string}} ev
+   */
+  function onFilterEvent(ev) {
+    if (ev.filterId !== state.filterId) {
+      if (ev.filterId > state.filterId) {
+        state.earlyFilterEvents.set(ev.filterId, ev); // its set_filter result is on the way
+      }
+      return;
+    }
+    if (!state.filtering) {
+      return;
+    }
+    if (ev.event === "progress") {
+      state.filterFraction = ev.fraction ?? null;
+      setBusy(FILTER_BUSY, true, state.filterFraction);
+      if (ev.matchCount !== state.total) {
+        growList(ev.matchCount);
+      }
+      updateStatus();
+      return;
+    }
+    state.filtering = false;
+    state.filterFraction = null;
+    state.filterPartial = ev.event !== "done";
+    setBusy(FILTER_BUSY, false);
+    el.filterCancel.classList.add("hidden");
+    state.total = ev.matchCount;
+    state.matchCount = ev.matchCount;
+    if (state.sort) {
+      resetView({ keepSelection: true }); // the sort applies now
+    } else {
+      growList(ev.matchCount);
+      if (state.selectedFrame !== null && state.selectedIndex === null) {
+        void relocateSelection(); // it may have been found since
+      }
+    }
+    updateStatus();
+    const found = `${ev.matchCount.toLocaleString()} match${ev.matchCount === 1 ? "" : "es"}`;
+    if (ev.event === "stopped") {
+      showNotice(`Filter stopped: showing the ${found} found so far.`);
+    } else if (ev.event === "failed") {
+      showNotice(`The filter stopped early (${ev.message ?? "tshark failed"}): showing the ${found} found so far.`);
     }
   }
 
@@ -521,6 +606,9 @@
     if (state.indexing) {
       showNotice("Sorting is available when indexing finishes.");
       return;
+    }
+    if (state.filtering) {
+      showNotice("The list is sorted when the filter finishes.");
     }
     if (!state.sort || state.sort.field !== field) {
       state.sort = { field, desc: false };
@@ -1083,7 +1171,9 @@
       if (res.filterId !== state.filterId || frame !== state.selectedFrame || viewKey !== state.viewKey) {
         return;
       }
-      if (res.index === null || res.index === undefined) {
+      if ((res.index === null || res.index === undefined) && state.filtering) {
+        state.selectedIndex = null; // it may still come: looked up again when the filter is done
+      } else if (res.index === null || res.index === undefined) {
         state.selectedIndex = null;
         state.selectedFrame = null;
         clearDetail();
@@ -1851,13 +1941,6 @@
     if (!state.ready) {
       return;
     }
-    if (state.indexing && expr) {
-      // A filter needs every packet: apply it when indexing finishes.
-      state.pendingFilter = expr;
-      showNotice(`The filter is applied when indexing finishes (${(state.info?.frames ?? 0).toLocaleString()} packets so far).`);
-      return;
-    }
-    state.pendingFilter = null;
     if (state.filterRequest !== null) {
       cancelRpc(state.filterRequest);
     }
@@ -1866,7 +1949,8 @@
     window.clearTimeout(validateTimer);
     state.validateSeq++;
     showFilterError("");
-    const req = rpc("set_filter", { expr });
+    // Streaming: the first matches come back at once, the rest as "filter" events.
+    const req = rpc("set_filter", { expr, stream: true });
     state.filterRequest = req.id;
     el.filterCancel.classList.remove("hidden");
     setBusy(req.id, true);
@@ -1876,11 +1960,20 @@
       state.filterId = res.filterId;
       state.total = res.matchCount;
       state.matchCount = res.matchCount;
+      state.filtering = !!res.filtering;
+      state.filterFraction = res.fraction ?? null;
+      state.filterPartial = !!res.partial;
+      setBusy(FILTER_BUSY, state.filtering, state.filterFraction);
       el.filterInput.classList.remove("invalid");
       el.filterInput.classList.toggle("valid", !!expr);
       vscode.postMessage({ type: "filterApplied", expr });
       resetView({ keepSelection: true });
       updateStatus();
+      const early = state.earlyFilterEvents.get(res.filterId);
+      state.earlyFilterEvents.clear();
+      if (early) {
+        onFilterEvent(early);
+      }
     } catch (err) {
       const e = /** @type {any} */ (err);
       if (e?.code === CANCELLED) {
@@ -1892,7 +1985,7 @@
     } finally {
       if (state.filterRequest === req.id) {
         state.filterRequest = null;
-        el.filterCancel.classList.add("hidden");
+        el.filterCancel.classList.toggle("hidden", !state.filtering); // ■ now stops the filter
       }
     }
   }
@@ -1915,6 +2008,8 @@
   el.filterCancel.addEventListener("click", () => {
     if (state.filterRequest !== null) {
       cancelRpc(state.filterRequest);
+    } else if (state.filtering) {
+      void rpc("stop_filter", { filterId: state.filterId }).promise.catch(() => undefined);
     }
   });
 
@@ -2957,9 +3052,13 @@
       const pct = state.indexFraction !== null ? ` (${Math.round(state.indexFraction * 100)}%)` : "";
       parts[0] = `Indexing… ${info.frames.toLocaleString()} packets so far${pct}`;
     }
-    if (state.appliedFilter) {
+    if (state.filtering) {
+      const pct = state.filterFraction !== null ? ` (${Math.round(state.filterFraction * 100)}%)` : "";
+      parts.push(`Filtering… ${state.matchCount.toLocaleString()} matches so far${pct}`);
+    } else if (state.appliedFilter) {
       const pct = info.frames ? ((state.matchCount / info.frames) * 100).toFixed(1) : "0";
-      parts.push(`Displayed: ${state.matchCount.toLocaleString()} (${pct}%)`);
+      const stopped = state.filterPartial ? ", filter stopped early" : "";
+      parts.push(`Displayed: ${state.matchCount.toLocaleString()} (${pct}%${stopped})`);
     }
     if (state.selectedFrame !== null) {
       const multi = state.selection.size ? ` (${state.selection.size.toLocaleString()} packets)` : "";

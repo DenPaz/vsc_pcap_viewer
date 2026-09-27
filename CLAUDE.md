@@ -54,7 +54,7 @@ The `Makefile` wraps all of these (`make` lists the targets; `make check` = lint
   custom editor + one `PcapEditorSession` per panel. `src/backendClient.ts`
   JSON-RPC client (no `vscode` import: unit-testable). `src/settingsModel.ts`
   pure settings helpers. `src/commands/` command implementations
-  (`export.ts`, `coloring.ts`, `dissectors.ts`, …).
+  (`export.ts`, `coloring.ts`, `dissectors.ts`, `tls.ts`, …).
 - `src/webview/` plain JS/CSS/HTML (no build step). `lib.js` = pure helpers
   shared with Node tests; `main.js` = UI. Type-checked via JSDoc +
   `tsconfig.webview.json`.
@@ -130,13 +130,14 @@ UI behaviour stays in the Chromium test (`test/webview/e2e.test.js`).
   neither. The host subscribes before sending `open` and buffers events until
   the webview has its `init` (a fast "done" can beat the response). While
   indexing, `_require_view` grows the unfiltered view to the published rows;
-  everything that needs all rows raises `IndexingError` (-32012): non-empty
-  filters, sorting, find, conversation stepping, extra column passes (follow
-  stream), CSV/JSON export, coloring (the host starts coloring after "done").
-  Non-relative time formats show relative times until done. The webview
-  queues a filter (`pendingFilter`, applied on `indexDone`), refuses sorting
-  with a notice, grows `total` on `indexProgress` (dropping the cached short
-  last page), and `refreshRows()` on done. Closing cancels the pass and waits
+  everything that needs all rows raises `IndexingError` (-32012): sorting,
+  find, conversation stepping, extra column passes (follow stream), CSV/JSON
+  export, coloring (the host starts coloring after "done"), and non-streaming
+  filters. A streaming filter works (see *Streaming filters*). Non-relative
+  time formats show relative times until done. Index notifications carry
+  `view {filterId, matchCount}` when a filter is applied. The webview refuses
+  sorting with a notice, grows `total` on `indexProgress` (`growList`, which
+  drops the cached short last page), and `refreshRows()` on done. Closing cancels the pass and waits
   for it (`_close_file` drops `_lock` meanwhile: the pass takes it to finish).
 - **Saved indexes** (`index_cache.py`, `open {cache: {dir, maxBytes}}`; the
   host passes `globalStorageUri/index-cache`, `pcapViewer.indexCache.*`): an
@@ -151,9 +152,54 @@ UI behaviour stays in the Chromium test (`test/webview/e2e.test.js`).
   work dir, so pruning never pulls the file from under an open capture.
   Saving runs after the pass, in the background, also hard-linking. Size cap:
   least recently used first. Coloring results are saved per rules digest and
-  reused by `set_coloring` (`_coloring_pass` is skipped). *PCAP: Clear Index
-  Cache* deletes the folder from the host. Custom columns added later are extra
+  reused by `set_coloring` (`_coloring_pass` is skipped). Finished filter
+  results are saved as `filter-<sha256(expr)[:24]>.bin` (array('I') bytes, the
+  8 most recent per entry) and loaded by `set_filter` before running tshark.
+  A preference whose value is an absolute file path (the TLS key log) adds the
+  file's size and mtime to the key, so new keys mean a new index. *PCAP: Clear
+  Index Cache* deletes the folder from the host. Custom columns added later are extra
   passes and not saved (the next open with them is a new key).
+- **Streaming filters** (`set_filter {stream: true}`, what the webview sends):
+  after validation, `_start_filter` installs a view with a `_Filtering`
+  (`view.live`) and runs `_filter_pass` in the pool; `set_filter` returns after
+  FIRST_BATCH matches or FIRST_BATCH_S with `filtering: true`. The pass appends
+  to `live.frames`; every progress tick copies it into `live.snapshot` (readers
+  never see the array grow) and sends `filter {event: progress, filterId,
+  matchCount, fraction}`; the end sends `done`, `stopped` (`stop_filter
+  {filterId}`) or `failed` (with `message`). Stopped/failed views keep their
+  matches (`view.partial`, not cached; applying the same filter reruns it).
+  `_require_view` shows the snapshot, and while a streaming open still indexes
+  only the matches among the published rows (bisect), even after the pass is
+  done; such results are cached only once indexing is done. `_install_view`
+  cancels the pass of the view it replaces; cancelling the `set_filter`
+  request during its first wait restores the previous view. Matches stay in
+  capture order while `live` is set (`_apply_sort` returns them unsorted and
+  keeps `view.sort` None), so the first request after `done` sorts.
+  `_require_complete` (IndexingError with `filtering: true`) guards find,
+  conversation stepping and CSV/JSON export; `find_frame`/`view_frames` work
+  (positions are stable while matches are appended). `_run_filter` checks the
+  token per line, since tshark's buffered output would otherwise still come.
+  Webview: `filtering`/`filterFraction`/`filterPartial`; ■ (`#filter-cancel`)
+  cancels the request, then stops the filter; a sort chosen meanwhile gets a
+  notice and applies on `done` (`resetView`); events for a newer `filterId`
+  than the webview knows wait in `earlyFilterEvents` (a fast pass can report
+  before its `set_filter` result arrives); a selected frame not found yet is
+  kept and looked up again on `done`. The host forwards `filter` notifications
+  as `filterEvent`.
+- **TLS key log** (`pcapViewer.tlsKeyLogFile`, resource-scoped): `readSettings`
+  resolves it like the dissectors folder (`resolveSettingPath`) and adds it to
+  `prefs` as `tls.keylog_file` (`withTlsKeyLog`; it overrides that pref). Any
+  pref ending in `.keylog_file` naming a missing file is a warning
+  (`check_scripts`). Changing the setting reloads the sessions whose
+  `keyLogFile` differs, without asking (extension.ts). Each load watches the
+  file (`watchKeyLog`, RelativePattern on its folder, debounced 1 s) and offers
+  a reload when it changes, one question at a time. *PCAP: Set TLS Key Log
+  File…* (`commands/tls.ts`) checks the file with `looksLikeKeyLog` (empty is
+  fine: a fresh SSLKEYLOGFILE) and can stop using the current one. Tests use
+  `generate.tls_keylog_capture`: a TLS 1.2 PSK session (no certificate) run in
+  memory with `ssl.MemoryBIO` and `keylog_filename`, generated per run (the
+  randoms differ, so it isn't committed; `tls_keylog` fixture, skipped without
+  PSK support).
 - **Column field names**: tshark ≥ 4.2 uses `_ws.col.def_src/def_dst/protocol/info`;
   older versions `_ws.col.Source/…`. The index pass tries the new names and
   falls back automatically when tshark rejects them. Unknown custom column
@@ -462,14 +508,15 @@ UI behaviour stays in the Chromium test (`test/webview/e2e.test.js`).
 - **Protocol**: JSON-RPC 2.0 framing (`"jsonrpc": "2.0"`), LSP-style
   cancellation code -32800; app codes in `backend/pcap_backend/protocol.py`
   and mirrored in `src/backendClient.ts` (`ErrorCodes`; -32011 unsupported format,
-  -32012 still indexing). `open` returns the
+  -32012 still indexing or still filtering). `open` returns the
   initial `filterId`; every `list_packets` result carries the current one so
   the webview drops stale pages.
 
 ## Performance notes (test/perf/bench.py, 1M synthetic packets, 146 MB)
 
 With `-o tcp.analyze_sequence_numbers:FALSE`: open 29–36 s (first rows after
-0.5 s with streaming; reopening from the saved index 0.01 s, 104 MB), filter 26 s, page
+0.5 s with streaming; reopening from the saved index 0.01 s, 104 MB), filter 26 s
+(first matches after 0.5 s when streaming), page
 fetch < 1 ms, sort 0.6 s, detail of last frame 20–26 s (quick view of any
 frame 0.25–0.3 s with a 300-packet window), backend RSS 125 MB,
 tshark 225 MB. With TCP analysis on, the synthetic file (512 replayed flows)
@@ -494,4 +541,5 @@ Step 7: coloring rules (defaults, Colorize with Filter, toggle), export
 (pcapng/pcap, CSV/JSON packet list, packet bytes), CHANGELOG, packaging.
 
 Beyond the brief: navigation and customisation, multi-select, AI help for
-filters and explaining packets, and a quick view for late packets in huge files.
+filters and explaining packets, a quick view for late packets in huge files,
+streaming open and filters with saved indexes, and TLS decryption with a key log.

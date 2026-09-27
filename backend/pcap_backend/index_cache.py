@@ -10,7 +10,8 @@ makes a different key, so a stale index is never used.
 
 Each entry is a folder ``<key>/`` with ``rows.tsv``, ``offsets.bin`` (one
 unsigned 64-bit offset per frame), ``meta.json`` and optional
-``colors-<rules>.bin`` (one coloring-rule byte per frame). Entries are
+``colors-<rules>.bin`` (one coloring-rule byte per frame) and
+``filter-<expr>.bin`` (a display filter's matching frame numbers, 32-bit). Entries are
 written to a temporary folder and renamed into place, so a reader never sees
 half an entry. The total size is capped: the least recently used entries go
 first (``meta.json``'s mtime is touched on every hit).
@@ -34,6 +35,7 @@ from typing import Any
 # Bump when the rows, offsets or meta change meaning: old entries are then ignored.
 CACHE_FORMAT = 1
 MAX_COLORINGS = 4  # coloring results kept per entry
+MAX_FILTERS = 8  # display-filter results kept per entry
 _MAX_CONFIG_FILES = 500  # personal config/plugin files hashed into the key
 
 
@@ -80,6 +82,14 @@ def _sha256(path: Path) -> str | None:
         return None
 
 
+def _pref_file(value: Any) -> list[Any]:
+    """Size and mtime of the file a preference value names (absolute paths only)."""
+    if not isinstance(value, str) or not value or not Path(value).is_absolute():
+        return []
+    fingerprint = _file_fingerprint(Path(value))
+    return fingerprint[1:] if fingerprint[1] is not None else []
+
+
 def index_key(
     *,
     capture: Path,
@@ -100,12 +110,18 @@ def index_key(
         "tshark": [str(tshark.resolve()), tshark_version],
         "lua": [[s, _sha256(Path(s))] for s in lua_scripts],
         "decodeAs": list(decode_as),
-        "prefs": sorted((str(k), str(v)) for k, v in prefs.items()),
+        # A preference naming a file (e.g. tls.keylog_file) depends on its contents too.
+        "prefs": sorted([str(k), str(v), *_pref_file(v)] for k, v in prefs.items()),
         "columns": list(columns),
         "config": list(config),
     }
     blob = json.dumps(parts, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(blob).hexdigest()
+
+
+def filter_key(expr: str) -> str:
+    """Short digest of a display filter, naming its results file."""
+    return hashlib.sha256(expr.encode()).hexdigest()[:24]
 
 
 def rules_key(rules: Any) -> str:
@@ -196,6 +212,40 @@ class IndexCache:
                 old.with_suffix(".json").unlink(missing_ok=True)
         except OSError as exc:
             _log(f"could not save colors: {exc}")
+
+    def load_filter(self, key: str, expr: str, frames: int) -> array[int] | None:
+        """Saved matches of display filter ``expr`` (ascending frame numbers)."""
+        path = self._entry(key) / f"filter-{filter_key(expr)}.bin"
+        try:
+            data = path.read_bytes()
+            os.utime(path)  # most recently used filter of this entry
+        except OSError:
+            return None
+        if len(data) % 4:
+            return None
+        matched = array("I")
+        matched.frombytes(data)
+        if matched and not 1 <= matched[0] <= matched[-1] <= frames:
+            return None
+        return matched
+
+    def save_filter(self, key: str, expr: str, matched: array[int]) -> None:
+        """Save a display filter's matches; only the MAX_FILTERS most recent stay."""
+        entry = self._entry(key)
+        if not (entry / "meta.json").is_file():
+            return  # no index saved for this capture (yet)
+        name = f"filter-{filter_key(expr)}.bin"
+        try:
+            tmp = entry / f".{name}.{os.getpid()}.tmp"
+            tmp.write_bytes(matched.tobytes())
+            tmp.replace(entry / name)
+            kept = sorted(entry.glob("filter-*.bin"), key=lambda p: p.stat().st_mtime)
+            for old in kept[:-MAX_FILTERS]:
+                old.unlink(missing_ok=True)
+        except OSError as exc:
+            _log(f"could not save filter results: {exc}")
+            return
+        self.prune()
 
     def entries(self) -> list[tuple[Path, float, int]]:
         """(folder, last use, size in bytes) of every entry."""

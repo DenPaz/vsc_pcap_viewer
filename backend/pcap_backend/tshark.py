@@ -151,11 +151,14 @@ class DissectionOptions:
         return out
 
     def check_scripts(self) -> list[str]:
-        """Return warnings for Lua scripts tshark would silently ignore."""
+        """Return warnings for Lua scripts and key log files tshark would silently ignore."""
         warnings: list[str] = []
         for script in self.lua_scripts:
             if not Path(script).is_file():
                 warnings.append(f"Lua script not found: {script}")
+        for key, value in self.prefs:
+            if key.endswith(".keylog_file") and value and not Path(value).is_file():
+                warnings.append(f"Key log file not found ({key}): {value}")
         if self.lua_scripts and hasattr(os, "geteuid") and os.geteuid() == 0:
             warnings.append(
                 "tshark disables Lua dissectors when running as root; Lua scripts were not loaded"

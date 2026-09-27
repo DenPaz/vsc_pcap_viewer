@@ -6,7 +6,8 @@ process per open editor). All heavy lifting is delegated to tshark:
 * ``open`` runs a single ``-T fields`` pass and stores the packet-list columns
   on disk (:class:`~pcap_backend.cache.RowStore`).
 * ``set_filter`` runs ``-Y <expr> -T fields -e frame.number`` once and keeps the
-  matching frame numbers; scrolling never re-runs tshark.
+  matching frame numbers; scrolling never re-runs tshark. With ``stream`` the
+  matches are shown as they come ("filter" notifications report the pass).
 * ``packet_detail`` runs ``-T pdml`` and ``-x`` for one frame, reading only up
   to that frame (``-c N``) so dissection state from earlier packets (TCP
   reassembly etc.) is still correct.
@@ -25,7 +26,7 @@ import tempfile
 import threading
 import time
 from array import array
-from bisect import bisect_left
+from bisect import bisect_left, bisect_right
 from collections.abc import Callable, Iterable, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -272,12 +273,38 @@ class _Indexing:
 
 
 @dataclass(slots=True)
+class _Filtering:
+    """A streaming filter pass (``set_filter {stream: true}``) in the background.
+
+    The pass appends matches to ``frames``; ``snapshot`` is the copy the view
+    shows (taken every progress tick, so readers never see the array grow).
+    While a streaming open is still indexing, the view shows only the matches
+    among the rows published so far, even after the pass is done.
+    """
+
+    expr: str
+    token: CancelToken = field(default_factory=CancelToken)
+    frames: array[int] = field(default_factory=lambda: array("I"))
+    snapshot: FrameIndex = field(default_factory=lambda: FrameIndex.of(()))
+    version: int = 0  # bumped with every snapshot
+    shown: tuple[int, int] = (-1, -1)  # (version, matches) the view shows
+    fraction: float | None = None
+    running: bool = True
+    done: threading.Event = field(default_factory=threading.Event)
+    future: Future[None] | None = None
+
+
+@dataclass(slots=True)
 class _View:
     filter_id: int
     expr: str
     matched: FrameIndex
     sort: tuple[str, bool] | None
     ordered: FrameIndex
+    # Streaming filter: matches still arriving (or clipped to a streaming open's rows).
+    live: _Filtering | None = None
+    # The filter pass stopped early ("stopped", or tshark's error): matches so far.
+    partial: str | None = None
 
 
 class PcapService:
@@ -343,17 +370,15 @@ class PcapService:
         self._pool.shutdown(wait=False, cancel_futures=True)
 
     def _close_file(self) -> None:
+        live = self._view.live if self._view is not None else None
+        self._view = None  # (so a stopped filter pass reports nothing)
+        if live is not None and live.running:
+            live.token.cancel()
+            self._wait_unlocked(live.future)
         indexing, self._indexing = self._indexing, None
         if indexing is not None:
             indexing.token.cancel()
-            if indexing.future is not None:
-                self._lock.release()  # the pass takes the lock to finish
-                try:
-                    indexing.future.result(timeout=30)
-                except Exception:  # noqa: S110 - it was cancelled; errors don't matter now
-                    pass
-                finally:
-                    self._lock.acquire()
+            self._wait_unlocked(indexing.future)
         if self._file is not None:
             self._file.base.rows.close()
             for s in self._file.extra:
@@ -367,6 +392,18 @@ class PcapService:
         if self._work_dir is not None:
             shutil.rmtree(self._work_dir, ignore_errors=True)
             self._work_dir = None
+
+    def _wait_unlocked(self, future: Future[None] | None) -> None:
+        """Wait for a cancelled background pass (it takes the lock to finish)."""
+        if future is None:
+            return
+        self._lock.release()
+        try:
+            future.result(timeout=30)
+        except Exception:  # noqa: S110 - it was cancelled; errors don't matter now
+            pass
+        finally:
+            self._lock.acquire()
 
     def _require_tshark(self) -> Tshark:
         with self._lock:
@@ -385,12 +422,29 @@ class PcapService:
             if self._file is None or self._view is None:
                 raise NotOpenError()
             view = self._view
-            if self._indexing is not None and not view.expr and view.sort is None:
+            indexing = self._indexing is not None
+            if indexing and not view.expr and view.sort is None:
                 # Streaming: the unfiltered view grows with the index pass.
                 n = len(self._file.base.rows)
                 if len(view.matched) != n:
                     view.matched = view.ordered = FrameIndex.all(n)
                     self._file.info.frames = n
+            live = view.live
+            if live is not None:
+                # Streaming filter: show the latest snapshot, limited to the rows
+                # a streaming open has published so far.
+                src = live.snapshot
+                k = len(src)
+                if indexing and k:
+                    k = bisect_right(src.frames(), len(self._file.base.rows))
+                if live.shown != (live.version, k):
+                    live.shown = (live.version, k)
+                    shown = src if k == len(src) else FrameIndex.of(src.frames()[:k])
+                    view.matched = view.ordered = shown
+                if not live.running and not indexing:
+                    view.live = None  # final: sorting etc. work from now on
+                    if view.partial is None:
+                        self._filters.put(view.expr, view.matched)
             return self._file, view
 
     def _require_indexed(self) -> None:
@@ -398,6 +452,22 @@ class PcapService:
         with self._lock:
             if self._indexing is not None and self._file is not None:
                 raise IndexingError(len(self._file.base.rows))
+
+    def _require_complete(self) -> None:
+        """Raise IndexingError while the capture is indexed or the view's filter
+        runs (for what needs the whole view: sorting, find, export in view order…)."""
+        self._require_indexed()
+        with self._lock:
+            view = self._view
+            if view is not None and view.live is not None and view.live.running:
+                raise IndexingError(len(view.matched), filtering=True)
+
+    def _install_view(self, view: _View) -> None:
+        """Make ``view`` current (under the lock), stopping a streaming filter it replaces."""
+        old = self._view
+        if old is not None and old is not view and old.live is not None and old.live.running:
+            old.live.token.cancel()
+        self._view = view
 
     # ------------------------------------------------------------------ open
 
@@ -478,7 +548,7 @@ class PcapService:
             if not complete:
                 info.frames = len(indexing.store.rows)
                 indexing.attached = True
-                indexing.report = lambda p: self.notify("index", {"event": "progress", **p})
+                indexing.report = self._index_progress
                 self._indexing = indexing
             self._next_filter_id += 1
             everything = FrameIndex.all(info.frames)
@@ -554,6 +624,23 @@ class PcapService:
                 },
             )
 
+    def _index_progress(self, progress: Any) -> None:
+        """A streaming open's "index" progress notification. With a filter
+        applied, ``view`` says how many of its matches are shown by now."""
+        event = {"event": "progress", **progress}
+        with self._lock:
+            view = self._view_counts()
+        if view is not None:
+            event["view"] = view
+        self.notify("index", event)
+
+    def _view_counts(self) -> dict[str, Any] | None:
+        """``{filterId, matchCount}`` of the current filtered view (under the lock)."""
+        if self._file is None or self._view is None or not self._view.expr:
+            return None
+        _f, view = self._require_view()
+        return {"filterId": view.filter_id, "matchCount": len(view.matched)}
+
     def _finish_streaming(self, indexing: _Indexing) -> dict[str, Any]:
         """The end of a streaming index pass: update the capture (under the lock)
         and return the "index" notification to send."""
@@ -568,11 +655,19 @@ class PcapService:
                 f"Indexing stopped after {len(f.base.rows):,} packets: {message}"
             )
             f.info.frames = len(f.base.rows)
-            return {"event": "failed", "message": message, "info": self._open_result(f)}
+            failed = {"event": "failed", "message": message, "info": self._open_result(f)}
+            counts = self._view_counts()
+            if counts is not None:
+                failed["view"] = counts
+            return failed
         view = self._view
         if view is not None and not view.expr and view.sort is None:
             view.matched = view.ordered = FrameIndex.all(f.info.frames)
-        return {"event": "done", "info": self._open_result(f)}
+        done: dict[str, Any] = {"event": "done", "info": self._open_result(f)}
+        counts = self._view_counts()
+        if counts is not None:
+            done["view"] = counts
+        return done
 
     def _open_cached(
         self,
@@ -769,27 +864,48 @@ class PcapService:
         return {"valid": error is None, "error": error} if error else {"valid": True}
 
     def set_filter(self, params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
-        if str(params.get("expr") or "").strip():
+        """Apply a display filter to the list (``""``: every packet).
+
+        ``stream: true`` returns once the first matches are in (FIRST_BATCH, or
+        after FIRST_BATCH_S) with ``filtering: true`` while the pass goes on;
+        "filter" notifications (``progress``, then ``done``, ``stopped`` or
+        ``failed``, each with ``filterId`` and ``matchCount``) report it, and
+        ``stop_filter`` ends it early, keeping the matches so far (``partial``).
+        A streaming filter also works while a streaming open is still indexing:
+        the list then shows the matches among the rows indexed so far.
+        Finished results are cached, also in the saved index.
+        """
+        if str(params.get("expr") or "").strip() and not params.get("stream"):
             self._require_indexed()
         return self._set_filter(params, ctx)
 
     def _set_filter(self, params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
         expr = param(params, "expr", str, "").strip()
+        stream = bool(params.get("stream"))
         f = self._require_file()
         with self._lock:
             self._filter_seq += 1
             seq = self._filter_seq
             current = self._view
-        if current is not None and current.expr == expr:
+            indexing = self._indexing is not None
+        if current is not None and current.expr == expr and current.partial is None:
             return self._filter_result(current)
 
         matched = self._filters.get(expr) if expr else FrameIndex.all(f.info.frames)
+        if matched is None and not indexing and f.cache is not None and f.cache_key is not None:
+            saved = f.cache.load_filter(f.cache_key, expr, f.info.frames)
+            if saved is not None:
+                matched = FrameIndex(saved, len(saved))
+                self._filters.put(expr, matched)
         if matched is None:
             error = f.tshark.validate_filter(expr, ctx.token)
             if error:
                 raise FilterError(error, {"expr": expr})
+            if stream:
+                return self._start_filter(f, expr, seq, current, ctx)
             matched = self._run_filter(f, expr, ctx)
             self._filters.put(expr, matched)
+            self._save_filter(f, expr, matched)
 
         with self._lock:
             if seq != self._filter_seq:
@@ -802,25 +918,151 @@ class PcapService:
         with self._lock:
             if seq != self._filter_seq:
                 raise CancelledError("superseded by a newer filter")
-            self._view = view
+            self._install_view(view)
         return self._filter_result(view)
 
+    def _start_filter(
+        self, f: _Open, expr: str, seq: int, current: _View | None, ctx: RequestContext
+    ) -> dict[str, Any]:
+        """Show a new view whose matches arrive from a background filter pass."""
+        live = _Filtering(expr)
+        with self._lock:
+            if seq != self._filter_seq:
+                raise CancelledError("superseded by a newer filter")
+            self._next_filter_id += 1
+            empty = FrameIndex.of(())
+            # Capture order while matches arrive; a sort applies once the pass is done.
+            view = _View(self._next_filter_id, expr, empty, None, empty, live=live)
+            self._install_view(view)
+            live.future = self._pool.submit(self._filter_pass, f, view, live)
+        deadline = time.monotonic() + FIRST_BATCH_S
+        while not live.done.wait(0.05):
+            if ctx.token.cancelled:
+                live.token.cancel()
+                with self._lock:
+                    if self._view is view:
+                        self._view = current  # never shown: back to the previous view
+                raise CancelledError("filter cancelled")
+            if time.monotonic() >= deadline or len(live.frames) >= FIRST_BATCH:
+                break
+        with self._lock:
+            if live.running:
+                self._snapshot(live)
+        return self._filter_result(view)
+
+    @staticmethod
+    def _snapshot(live: _Filtering) -> None:
+        """Publish the matches so far to the view (under the lock)."""
+        frames = live.frames[:]  # a copy: the pass keeps appending to its array
+        live.snapshot = FrameIndex(frames, len(frames))
+        live.version += 1
+
+    def _filter_pass(self, f: _Open, view: _View, live: _Filtering) -> None:
+        """A streaming filter's tshark pass (in the pool), then the "filter" notification."""
+
+        def tick(p: Any) -> None:
+            with self._lock:
+                self._snapshot(live)
+                live.fraction = None if self._indexing is not None else p.get("fraction")
+                if self._view is not view:
+                    return
+                _f, shown = self._require_view()
+                event = {
+                    "event": "progress",
+                    "filterId": view.filter_id,
+                    "matchCount": len(shown.matched),
+                    "fraction": live.fraction,
+                }
+            self.notify("filter", event)
+
+        ctx = RequestContext(token=live.token, progress=tick)
+        matched: FrameIndex | None = None
+        error: str | None = None
+        try:
+            matched = self._run_filter(f, live.expr, ctx, live.frames)
+        except CancelledError:
+            pass
+        except Exception as exc:  # reported to the client as "failed"
+            error = str(exc) or type(exc).__name__
+        with self._lock:
+            live.running = False
+            if matched is None:
+                self._snapshot(live)
+            else:
+                live.snapshot = matched
+                live.version += 1
+            live.done.set()
+            # Matches beyond a streaming open's rows so far can't be reused as they are.
+            complete = matched is not None and self._indexing is None and self._file is f
+            if complete and matched is not None:
+                self._filters.put(live.expr, matched)
+            event: dict[str, Any] | None = None
+            if self._view is view:
+                if matched is None:
+                    view.partial = error or "stopped"
+                _f, shown = self._require_view()
+                event = {
+                    "event": "done" if matched is not None else "failed" if error else "stopped",
+                    "filterId": view.filter_id,
+                    "matchCount": len(shown.matched),
+                    "total": f.info.frames,
+                }
+                if error:
+                    event["message"] = error
+        if complete and matched is not None:
+            self._save_filter(f, live.expr, matched)
+        if event is not None:
+            self.notify("filter", event)
+
+    def stop_filter(self, params: dict[str, Any], _ctx: RequestContext) -> dict[str, Any]:
+        """Stop the streaming filter of view ``filterId``; its matches so far stay
+        (a "filter" notification with event "stopped" follows)."""
+        filter_id = param(params, "filterId", int)
+        with self._lock:
+            view = self._view
+            live = view.live if view is not None else None
+            if view is None or view.filter_id != filter_id or live is None or not live.running:
+                return {"stopped": False}
+            live.token.cancel()
+        return {"stopped": True}
+
+    @staticmethod
+    def _save_filter(f: _Open, expr: str, matched: FrameIndex) -> None:
+        if expr and f.cache is not None and f.cache_key is not None:
+            frames = matched.frames()
+            if isinstance(frames, array):
+                f.cache.save_filter(f.cache_key, expr, frames)
+
     def _filter_result(self, view: _View) -> dict[str, Any]:
-        f = self._require_file()
-        return {
+        f, _current = self._require_view()  # brings a streaming view up to date
+        result: dict[str, Any] = {
             "expr": view.expr,
             "matchCount": len(view.matched),
             "total": f.info.frames,
             "filterId": view.filter_id,
         }
+        live = view.live
+        if live is not None and live.running:
+            result["filtering"] = True
+            result["fraction"] = live.fraction
+        if view.partial:
+            result["partial"] = view.partial
+        return result
 
-    def _run_filter(self, f: _Open, expr: str, ctx: RequestContext) -> FrameIndex:
-        frames = array("I")
+    def _run_filter(
+        self, f: _Open, expr: str, ctx: RequestContext, frames: array[int] | None = None
+    ) -> FrameIndex:
+        """Run filter ``expr`` over the capture; matches are appended to ``frames``
+        (a new array by default) as they come."""
+        if frames is None:
+            frames = array("I")
         result = StreamResult()
         argv = f.tshark.argv("-Y", expr, "-T", "fields", "-e", "frame.number", capture=str(f.path))
         total = max(1, f.info.frames)
         last_emit = 0.0
         for line in stream_lines(argv, result, ctx.token):
+            if ctx.token.cancelled:  # (lines tshark wrote already would still come)
+                raise CancelledError("filter stopped")
             try:
                 n = int(line)
             except ValueError:
@@ -939,10 +1181,10 @@ class PcapService:
         if sort and sort[0] == _TIME_FIELD and params.get("timeFormat") in _DELTA_SORTS:
             # "Since previous packet" formats sort by that delta, not by capture time.
             sort = (_DELTA_SORTS[params["timeFormat"]], sort[1])
-        if sort == view.sort:
-            return view.ordered
+        if sort == view.sort or view.live is not None:
+            return view.ordered  # (a streaming filter's matches stay in capture order)
         if sort is not None:
-            self._require_indexed()
+            self._require_complete()
         ordered = self._sorted(f, view, sort, ctx) if sort else view.matched
         with self._lock:
             if self._view is view:
@@ -1184,7 +1426,7 @@ class PcapService:
         from the top or bottom) in view order (current filter and sort) and
         wraps around. The search filter runs once and is cached like any filter.
         """
-        self._require_indexed()
+        self._require_complete()
         mode = param(params, "mode", str)
         direction = param(params, "direction", str, "next")
         if mode not in navigation.FIND_MODES or direction not in ("next", "previous"):
@@ -1242,7 +1484,7 @@ class PcapService:
         The conversation is the tcp.stream or udp.stream (extracted once into the
         row store), else the Source/Destination address pair. No wrap-around.
         """
-        self._require_indexed()
+        self._require_complete()
         frame = param(params, "frame", int)
         direction = param(params, "direction", str, "next")
         if direction not in ("next", "previous"):
@@ -1825,7 +2067,7 @@ class PcapService:
     def _export_list(
         self, f: _Open, fmt: str, dest: Path, params: dict[str, Any], ctx: RequestContext
     ) -> dict[str, Any]:
-        self._require_indexed()
+        self._require_complete()
         _f, view = self._require_view()
         base_fields = {c.field for c in BASE_COLUMNS}
         requested = str_list(params, "columns") if "columns" in params else list(f.columns)
@@ -2120,6 +2362,7 @@ def rpc_methods(service: PcapService) -> dict[str, Callable[[dict[str, Any], Req
         "capture_info": service.capture_info,
         "validate_filter": service.validate_filter,
         "set_filter": service.set_filter,
+        "stop_filter": service.stop_filter,
         "list_packets": service.list_packets,
         "find_frame": service.find_frame,
         "view_frames": service.view_frames,

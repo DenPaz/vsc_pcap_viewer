@@ -1,6 +1,22 @@
 import * as assert from "node:assert/strict";
 import * as path from "node:path";
-import { COLORIZE_PALETTE, captureStem, configTargetFor, exportFileName, isColor, normalizeColoringRules, normalizeColumns, prependColoringRule, normalizeSavedFilters, pushHistory, resolveLuaScripts, upsertSavedFilter } from "../../../src/settingsModel";
+import {
+  COLORIZE_PALETTE,
+  captureStem,
+  configTargetFor,
+  exportFileName,
+  isColor,
+  looksLikeKeyLog,
+  normalizeColoringRules,
+  normalizeColumns,
+  prependColoringRule,
+  normalizeSavedFilters,
+  pushHistory,
+  resolveLuaScripts,
+  resolveSettingPath,
+  upsertSavedFilter,
+  withTlsKeyLog,
+} from "../../../src/settingsModel";
 
 suite("settingsModel", () => {
   test("normalizeColumns accepts strings and objects, drops junk", () => {
@@ -125,5 +141,26 @@ suite("settingsModel", () => {
     for (const [name, stem] of cases) {
       assert.equal(captureStem(path.join("dir", name)), stem, name);
     }
+  });
+
+  test("TLS key log: resolved path, merged into the preferences", () => {
+    const base = path.resolve("ws");
+    assert.equal(resolveSettingPath("keys/ssl.log", base), path.join(base, "keys", "ssl.log"));
+    assert.equal(resolveSettingPath("  ", base), undefined);
+    const prefs = { "tcp.desegment_tcp_streams": false, "tls.keylog_file": "/old.log" };
+    assert.deepEqual(withTlsKeyLog(prefs, "/new.log"), { "tcp.desegment_tcp_streams": false, "tls.keylog_file": "/new.log" });
+    assert.deepEqual(withTlsKeyLog(prefs, ""), prefs, "without the setting, prefs stay as they are");
+  });
+
+  test("looksLikeKeyLog", () => {
+    const random = `CLIENT_RANDOM ${"ab".repeat(32)} ${"cd".repeat(48)}`;
+    const tls13 = `CLIENT_TRAFFIC_SECRET_0 ${"ab".repeat(32)} ${"ef".repeat(32)}`;
+    assert.equal(looksLikeKeyLog(`# TLS secrets log file\n${random}\n`), true);
+    assert.equal(looksLikeKeyLog(`${tls13}\r\nSERVER_HANDSHAKE_TRAFFIC_SECRET ${"12".repeat(32)} ${"34".repeat(32)}\r\n`), true);
+    assert.equal(looksLikeKeyLog(""), true, "a fresh SSLKEYLOGFILE is empty");
+    assert.equal(looksLikeKeyLog(`${random}\nCLIENT_RAN`), true, "the last line may be cut short");
+    assert.equal(looksLikeKeyLog("hello world\n"), false);
+    assert.equal(looksLikeKeyLog("# only comments\n"), false);
+    assert.equal(looksLikeKeyLog(`${random}\n-----BEGIN PRIVATE KEY-----\n`), false);
   });
 });

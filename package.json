@@ -234,6 +234,11 @@
         "category": "PCAP"
       },
       {
+        "command": "pcapViewer.setTlsKeyLogFile",
+        "title": "Set TLS Key Log File…",
+        "category": "PCAP"
+      },
+      {
         "command": "pcapViewer.followStream",
         "title": "Follow Stream\u2026",
         "category": "PCAP"
@@ -646,6 +651,12 @@
           },
           "default": {},
           "markdownDescription": "Wireshark preference overrides passed as `-o <name>:<value>`, e.g. `{ \"tcp.desegment_tcp_streams\": false }`."
+        },
+        "pcapViewer.tlsKeyLogFile": {
+          "type": "string",
+          "scope": "resource",
+          "default": "",
+          "markdownDescription": "Key log file (the `SSLKEYLOGFILE` format browsers and curl write) used to decrypt TLS and QUIC traffic; passed to tshark as the `tls.keylog_file` preference (it overrides one in `#pcapViewer.prefs#`). Relative paths resolve against the capture's workspace folder. Set it with **PCAP: Set TLS Key Log File…**; changing it reloads the captures it applies to, and the viewer offers a reload when the file changes."
         },
         "pcapViewer.columns": {
           "type": "array",

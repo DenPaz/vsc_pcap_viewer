@@ -152,13 +152,50 @@ export function upsertDecodeAsRule(rules: readonly string[], rule: DecodeAsRule)
   return [...kept, formatDecodeAsRule(rule)];
 }
 
-/** Resolve `pcapViewer.dissectorsFolder` like the Lua scripts (relative to the workspace, ~ expanded). */
-export function resolveDissectorsFolder(folder: string | undefined, baseDir: string | undefined): string | undefined {
-  if (!folder || !folder.trim()) {
+/** Resolve a path setting like the Lua scripts (relative to the workspace, ~ expanded). */
+export function resolveSettingPath(setting: string | undefined, baseDir: string | undefined): string | undefined {
+  if (!setting || !setting.trim()) {
     return undefined;
   }
-  const expanded = expandHome(folder.trim());
+  const expanded = expandHome(setting.trim());
   return path.normalize(path.isAbsolute(expanded) ? expanded : baseDir ? path.join(baseDir, expanded) : expanded);
+}
+
+/** Resolve `pcapViewer.dissectorsFolder` (see resolveSettingPath). */
+export const resolveDissectorsFolder = resolveSettingPath;
+
+/** tshark's preference for the TLS (and QUIC) key log file. */
+export const TLS_KEYLOG_PREF = "tls.keylog_file";
+
+/** The preferences to pass: `prefs` with `pcapViewer.tlsKeyLogFile` (already resolved) as tls.keylog_file. */
+export function withTlsKeyLog<T>(prefs: Record<string, T>, keyLogFile: string | undefined): Record<string, T | string> {
+  return keyLogFile ? { ...prefs, [TLS_KEYLOG_PREF]: keyLogFile } : { ...prefs };
+}
+
+const KEYLOG_LINE = /^(CLIENT_RANDOM|RSA|(CLIENT|SERVER)_(HANDSHAKE_TRAFFIC_SECRET|TRAFFIC_SECRET_\d+)|CLIENT_EARLY_TRAFFIC_SECRET|(EARLY_)?EXPORTER_SECRET) [0-9A-Fa-f]+ [0-9A-Fa-f]+\s*$/;
+
+/**
+ * Whether the start of a file looks like an SSLKEYLOGFILE key log: an empty file
+ * (a browser that has not written keys yet), or comment/blank lines and at least
+ * one key line. `text` may end mid-line (only complete lines are checked).
+ */
+export function looksLikeKeyLog(text: string): boolean {
+  const lines = text.split("\n");
+  if (lines.length > 1) {
+    lines.pop(); // possibly cut short
+  }
+  let keys = 0;
+  for (const raw of lines) {
+    const line = raw.replace(/\r$/, "");
+    if (!line.trim() || line.startsWith("#")) {
+      continue;
+    }
+    if (!KEYLOG_LINE.test(line)) {
+      return false;
+    }
+    keys++;
+  }
+  return keys > 0 || !text.trim();
 }
 
 /** Packet-list time column formats (pcapViewer.timeFormat); computed by the backend. */

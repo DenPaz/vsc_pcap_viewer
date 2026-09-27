@@ -54,16 +54,24 @@ class UnsupportedFormatError(RpcError):
 
 
 class IndexingError(RpcError):
-    """Needs the whole capture indexed, and the (streaming) index pass is still running."""
+    """Needs the whole capture indexed (or the whole filter run), and the
+    streaming index pass (or filter pass) is still running."""
 
     code = INDEXING
 
-    def __init__(self, frames: int) -> None:
-        super().__init__(
-            f"The capture is still being indexed ({frames:,} packets so far); "
-            "this is available when indexing finishes.",
-            {"frames": frames},
-        )
+    def __init__(self, frames: int, *, filtering: bool = False) -> None:
+        if filtering:
+            super().__init__(
+                f"The filter is still running ({frames:,} matches so far); "
+                "this is available when it finishes.",
+                {"matched": frames, "filtering": True},
+            )
+        else:
+            super().__init__(
+                f"The capture is still being indexed ({frames:,} packets so far); "
+                "this is available when indexing finishes.",
+                {"frames": frames},
+            )
 
 
 ProgressFn = Callable[[Mapping[str, Any]], None]

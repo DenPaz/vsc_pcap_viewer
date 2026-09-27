@@ -50,6 +50,8 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     server = await serveWebview();
     const origin = `http://127.0.0.1:${server.address().port}`;
     client = await startBackend(deps);
+    // Streaming filters report their matches as "filter" notifications (see src/pcapEditor.ts).
+    client.onNotification("filter", (p) => void post({ type: "filterEvent", ...p }));
 
     try {
       browser = await deps.chromium.launch();
@@ -842,20 +844,35 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     await reopen({ after: 20000, window: 300 });
   });
 
-  test("streaming open: rows show while indexing; a filter waits for it, sorting says why", async function () {
-    this.timeout(120_000);
+  test("streaming open and streaming filters on a big capture", async function () {
+    this.timeout(180_000);
     const venv = path.join(ROOT, ".venv", process.platform === "win32" ? "Scripts/python.exe" : "bin/python");
     const py = process.env.PCAP_VIEWER_PYTHON ?? venv;
     const big = path.join(os.tmpdir(), `pcapviewer-e2e-${process.pid}.pcap`);
-    // Big enough that indexing takes a few seconds (the small fixtures finish before the first batch).
+    // Big enough that indexing and filtering take a few seconds (the small fixtures finish before the first batch).
     const gen = spawnSync(py, [path.join(ROOT, "test", "fixtures", "generate.py"), "--large", "150000", big], { encoding: "utf8" });
     if (gen.status !== 0) {
       console.warn(`skipping streaming e2e: could not generate a capture (${gen.stderr || gen.error})`);
       this.skip();
     }
     const status = () => page.textContent("#status-left");
+    const notice = () => page.textContent("#filter-error");
+    const stopButton = () => page.$eval("#filter-cancel", (b) => !b.classList.contains("hidden"));
+    /** Text of column `id` in the first loaded rows (columns may have been moved by earlier tests). */
+    const column = (id, n = 5) =>
+      page.evaluate(
+        ([id, n]) => {
+          const at = [...document.querySelectorAll("#list-header > div")].findIndex((h) => /** @type {HTMLElement} */ (h).dataset.id === id);
+          return [...document.querySelectorAll("#list-rows .list-row:not(.loading)")].slice(0, n).map((r) => r.children[at]?.textContent ?? "");
+        },
+        [id, n],
+      );
     const stop = client.onNotification("index", (p) => {
-      void post(p.event === "progress" ? { type: "indexProgress", frames: p.frames, fraction: p.fraction ?? null } : { type: "indexDone", info: p.info, error: p.event === "failed" ? p.message : undefined });
+      void post(
+        p.event === "progress"
+          ? { type: "indexProgress", frames: p.frames, fraction: p.fraction ?? null, view: p.view }
+          : { type: "indexDone", info: p.info, error: p.event === "failed" ? p.message : undefined, view: p.view },
+      );
     });
     try {
       const info = await client.request("open", { path: big, stream: true, prefs: { "tcp.analyze_sequence_numbers": false } }, { timeoutMs: 0 });
@@ -865,16 +882,43 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
       await page.waitForFunction(() => /^Indexing… [\d,]+ packets so far/.test(document.querySelector("#status-left")?.textContent ?? ""));
       await page.waitForFunction(() => document.querySelector("#list-rows .list-row:not(.loading)")?.children[0]?.textContent === "1");
 
+      // A filter starts at once, over the packets indexed so far.
       await page.fill("#filter-input", "dns");
       await page.press("#filter-input", "Enter");
-      await page.waitForFunction(() => /The filter is applied when indexing finishes/.test(document.getElementById("filter-error")?.textContent ?? ""));
+      await page.waitForFunction(() => /^Indexing… .* · (Filtering… [\d,]+ matches so far|Displayed: [\d,]+)/.test(document.querySelector("#status-left")?.textContent ?? ""));
+      await page.waitForFunction(() => document.querySelectorAll("#list-rows .list-row:not(.loading)").length > 0);
+      assert.deepEqual([...new Set(await column("protocol"))], ["DNS"]);
       await page.click("#list-header > div[data-id='length']");
       await page.waitForFunction(() => /Sorting is available when indexing finishes/.test(document.getElementById("filter-error")?.textContent ?? ""));
       assert.equal(await page.$("#list-header .sort-indicator"), null, "not sorted");
+      // When indexing is done, every match is shown.
+      await page.waitForFunction(() => /^Packets: 150,000 · Displayed: [\d,]+ \(33\.\d%\)/.test(document.querySelector("#status-left")?.textContent ?? ""), null, { timeout: 120_000 });
+      assert.doesNotMatch(await status(), /Indexing|Filtering/);
 
-      // When indexing is done, the waiting filter is applied.
-      await page.waitForFunction(() => /Packets: 150,000 · Displayed: [\d,]+/.test(document.querySelector("#status-left")?.textContent ?? ""), null, { timeout: 90_000 });
-      assert.doesNotMatch(await status(), /Indexing/);
+      // A new filter streams its matches; ■ stops it and keeps what was found.
+      await page.fill("#filter-input", "tcp");
+      await page.press("#filter-input", "Enter");
+      await page.waitForFunction(() => /Filtering… [\d,]+ matches so far/.test(document.querySelector("#status-left")?.textContent ?? ""));
+      assert.equal(await stopButton(), true);
+      await page.click("#filter-cancel");
+      await page.waitForFunction(() => /^Filter stopped: showing the [\d,]+ matches found so far\.$/.test(document.getElementById("filter-error")?.textContent ?? ""));
+      assert.match(await status(), /Displayed: [\d,]+ \([\d.]+%, filter stopped early\)/);
+      assert.equal(await stopButton(), false);
+      const stoppedAt = Number(/Displayed: ([\d,]+)/.exec(await status())?.[1].replace(/,/g, ""));
+      assert.ok(stoppedAt > 0 && stoppedAt < 100_000, `stopped at ${stoppedAt}`);
+
+      // Sorting while a filter runs applies when it's done.
+      await page.fill("#filter-input", "tcp");
+      await page.press("#filter-input", "Enter");
+      await page.waitForFunction(() => /Filtering…/.test(document.querySelector("#status-left")?.textContent ?? ""));
+      await page.click("#list-header > div[data-id='length']");
+      assert.match(await notice(), /The list is sorted when the filter finishes/);
+      await page.waitForFunction(() => /^Packets: 150,000 · Displayed: [\d,]+ \(66\.\d%\)/.test(document.querySelector("#status-left")?.textContent ?? ""), null, { timeout: 60_000 });
+      await page.waitForFunction(() => document.querySelector("#list-rows .list-row:not(.loading)")?.children[0]?.textContent !== "2");
+      const lengths = (await column("length")).map(Number);
+      assert.deepEqual(lengths, [...lengths].sort((a, b) => a - b), `sorted by length: ${lengths}`);
+      await page.click("#list-header > div[data-id='length']");
+      await page.click("#list-header > div[data-id='length']"); // back to capture order
     } finally {
       stop();
       fs.rmSync(big, { force: true });

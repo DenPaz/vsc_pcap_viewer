@@ -28,6 +28,11 @@ Feature: Display filters
       | tcp.port ==                     | invalid |
       | ip.src == 1.2.3                 | invalid |
 
+  Scenario: A streaming filter shows its matches as they come
+    When I apply the display filter "http" as a stream
+    Then the filter finishes with 2 matches
+    And the displayed frames are 4 and 7
+
   Scenario: A filter with no matches
     When I apply the display filter "dns"
     Then 0 packets are displayed
