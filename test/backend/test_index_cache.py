@@ -1,5 +1,6 @@
 """Saved indexes (reopening skips the index pass) and streaming open."""
 
+import json
 import os
 import threading
 import time
@@ -71,11 +72,12 @@ def test_save_load_prune_and_clear(tmp_path: Path) -> None:
     rows.write_bytes(b"1\ta\n2\tb\n")
     offsets = array("Q", [0, 4])
     assert cache.load("a" * 64) is None
-    assert cache.save("a" * 64, rows, offsets, {"info": {"frames": 2}})
+    assert cache.save("a" * 64, rows, offsets, {"info": {"frames": 2}}, complete=True)
     hit = cache.load("a" * 64)
     assert hit is not None and hit.offsets.tolist() == [0, 4] and hit.meta["info"] == {"frames": 2}
     assert hit.rows.read_bytes() == rows.read_bytes()
     assert hit.meta["format"] == CACHE_FORMAT and hit.meta["rows"] == 2
+    assert hit.complete and hit.meta["complete"] is True and hit.meta["frames"] == 2
 
     colors = array("B", [0, 1, 2])
     cache.save_colors("a" * 64, "r1", colors, {"colored": 2, "errors": {"3": "bad"}})
@@ -93,21 +95,56 @@ def test_save_load_prune_and_clear(tmp_path: Path) -> None:
     # Least recently used entries go first once the total exceeds max_bytes.
     big = tmp_path / "big.tsv"
     big.write_bytes(b"z" * 6000)
-    cache.save("b" * 64, big, array("Q", [0]), {})
+    cache.save("b" * 64, big, array("Q", [0]), {}, complete=True)
     time.sleep(0.01)
     assert cache.load("a" * 64) is not None  # touch: now the most recent
-    cache.save("c" * 64, big, array("Q", [0]), {})  # over the limit: b goes
+    cache.save("c" * 64, big, array("Q", [0]), {}, complete=True)  # over the limit: b goes
     assert cache.load("b" * 64) is None
     assert cache.load("a" * 64) is not None and cache.load("c" * 64) is not None
     removed, freed = cache.clear()
     assert removed == 2 and freed > 6000 and cache.entries() == []
 
 
+def test_an_incomplete_entry_is_never_a_finished_index(tmp_path: Path) -> None:
+    cache = IndexCache(tmp_path, max_bytes=1 << 20)
+    key = "p" * 64
+    rows = tmp_path / "rows.tsv"
+    rows.write_bytes(b"1\ta\n2\tb\n")
+    assert cache.save(key, rows, array("Q", [0, 4]), {"fields": ["x"]}, complete=False)
+    hit = cache.load(key)
+    assert hit is not None and not hit.complete
+    assert (hit.meta["complete"], hit.meta["frames"]) == (False, 2)
+    # Colors and filter results belong to finished indexes only.
+    cache.save_colors(key, "r", array("B", [0, 1, 1]), {"colored": 2})
+    cache.save_filter(key, "udp", array("I", [1]))
+    assert not list((tmp_path / key).glob("colors-*")) and not list(
+        (tmp_path / key).glob("filter-*")
+    )
+    assert cache.load_colors(key, "r", 2) is None and cache.load_filter(key, "udp", 2) is None
+    # Planted by hand (or left by an older version): still never used.
+    (tmp_path / key / "filter-x.bin").write_bytes(array("I", [1]).tobytes())
+    assert cache.load_filter(key, "x", 2) is None
+    # Once complete, the entry is replaced as a whole.
+    assert cache.save(key, rows, array("Q", [0, 4]), {}, complete=True)
+    assert cache.load(key).complete  # type: ignore[union-attr]
+    assert not (tmp_path / key / "filter-x.bin").exists()
+    cache.discard(key)
+    assert cache.load(key) is None
+    # An entry of the old format (which could hold a closed pass) is ignored.
+    assert cache.save(key, rows, array("Q", [0, 4]), {}, complete=True)
+    meta = tmp_path / key / "meta.json"
+    old = json.loads(meta.read_text())
+    meta.write_text(json.dumps({**old, "format": 1}))
+    assert cache.load(key) is None
+    meta.write_text(json.dumps({k: v for k, v in old.items() if k != "complete"}))
+    assert cache.load(key) is None
+
+
 def test_broken_entries_are_ignored(tmp_path: Path) -> None:
     cache = IndexCache(tmp_path, max_bytes=1 << 20)
     rows = tmp_path / "rows.tsv"
     rows.write_bytes(b"1\n")
-    cache.save("d" * 64, rows, array("Q", [0]), {})
+    cache.save("d" * 64, rows, array("Q", [0]), {}, complete=True)
     (tmp_path / ("d" * 64) / "offsets.bin").write_bytes(b"\0" * 16)  # 2 offsets, meta says 1
     assert cache.load("d" * 64) is None
     (tmp_path / ("e" * 64)).mkdir()

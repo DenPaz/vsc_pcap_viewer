@@ -65,7 +65,7 @@ def test_saved_filter_results(tmp_path: Path) -> None:
     assert cache.load_filter(key, "udp", 3) is None
     rows = tmp_path / "rows.tsv"
     rows.write_bytes(b"1\n2\n3\n")
-    cache.save(key, rows, array("Q", [0, 2, 4]), {})
+    cache.save(key, rows, array("Q", [0, 2, 4]), {}, complete=True)
     cache.save_filter(key, "udp", array("I", [1, 3]))
     assert cache.load_filter(key, "udp", 3) == array("I", [1, 3])
     assert cache.load_filter(key, "udp", 2) is None, "matches beyond the capture"

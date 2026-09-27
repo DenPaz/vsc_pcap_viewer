@@ -34,6 +34,11 @@ export interface OpenResult {
   /** Opened from a saved index (no index pass). */
   fromCache?: boolean;
   /**
+   * Resumed from an unfinished saved index: these rows are shown at once while
+   * the index pass re-reads them ("catching-up"), then goes on.
+   */
+  resumedAt?: number;
+  /**
    * The coloring rules sent with `open` were evaluated by the index pass (or
    * their colors were saved with the index): rows come with colors of this
    * `coloringId`. `colored`/`errors` once known (else in the "done" event).
@@ -186,7 +191,18 @@ export type HostToWebview =
    * Streaming open: `frames` indexed so far (`fraction` when the format allows an
    * estimate); with a filter applied, `view` is how many of its matches are shown.
    */
-  | { type: "indexProgress"; frames: number; fraction: number | null; view?: ViewCounts }
+  | {
+      type: "indexProgress";
+      frames: number;
+      fraction: number | null;
+      view?: ViewCounts;
+      /** "catching-up": a resumed open re-reads the rows it already shows. */
+      phase?: "catching-up" | "indexing";
+      /** Rows a resumed open started with. */
+      resumedAt?: number;
+      /** A resumed open's saved rows didn't match: indexing started over (`frames` rows now). */
+      restarted?: boolean;
+    }
   /** A live capture's statistics, or its end. */
   | ({ type: "captureEvent" } & CaptureEvent)
   /** The index pass ended: the final capture info (with `error` if it stopped early). */
@@ -204,6 +220,8 @@ export type HostToWebview =
     }
   /** A separate coloring pass is running (`fraction` when known), or it ended without new colors (`done`). */
   | { type: "coloringProgress"; fraction: number | null; done?: boolean }
+  /** An export of this capture is running (`fraction` when known), or it ended (`done`). */
+  | { type: "exportProgress"; fraction: number | null; done?: boolean }
   /** Whether to show the "✨ Ask AI" action (a language model is available and allowed). */
   | { type: "aiAvailable"; available: boolean }
   /** Validated suggestions for an aiSuggest request (empty with a `message` when there are none). */

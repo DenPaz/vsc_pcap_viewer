@@ -2,6 +2,7 @@ import importlib.util
 import shutil
 import ssl
 import threading
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -9,6 +10,7 @@ from typing import Any
 import pytest
 
 from pcap_backend import pcap_service
+from pcap_backend.cancellation import CancelToken
 from pcap_backend.pcap_service import PcapService
 from pcap_backend.protocol import RequestContext
 
@@ -53,15 +55,22 @@ def slow_index(monkeypatch: pytest.MonkeyPatch) -> Iterator[threading.Event]:
     """The index pass shows its first rows after 3 packets, takes 0.1 s per
     packet up to the 8th, then holds the rest until ``release`` is set (at most
     20 s; then it goes at full speed). The hold keeps a slow machine from
-    finishing the pass while a test still expects it to run."""
+    finishing the pass while a test still expects it to run. Cancelling the
+    pass (closing the capture) ends a wait at once."""
     release = threading.Event()
     real = pcap_service.stream_lines
 
-    def slow(argv: list[str], *args: Any, **kwargs: Any) -> Iterator[bytes]:
+    def slow(
+        argv: list[str], result: Any, token: CancelToken | None = None, **kwargs: Any
+    ) -> Iterator[bytes]:
         index_pass = "-T" in argv and "_ws.col.info" in argv
-        for i, line in enumerate(real(argv, *args, **kwargs)):
-            if index_pass and 3 <= i <= 8 and not release.is_set():
-                release.wait(0.1 if i < 8 else 20)
+        for i, line in enumerate(real(argv, result, token, **kwargs)):
+            if index_pass and 3 <= i <= 8:
+                end = time.monotonic() + (0.1 if i < 8 else 20)
+                while not release.is_set() and time.monotonic() < end:
+                    if token is not None and token.cancelled:
+                        break
+                    release.wait(0.02)
             yield line
 
     monkeypatch.setattr(pcap_service, "stream_lines", slow)

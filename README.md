@@ -123,11 +123,16 @@ is anything unusual?`) describes the capture from its statistics only:
   **two-way highlighting** (select a field to see its bytes; click a byte to
   find its field), including reassembled data (e.g. HTTP over several TCP segments).
 - **Fast opening of big captures**: the first packets show within about half a
-  second while tshark indexes the rest; the status bar counts along
-  ("Indexing… 250,000 packets so far"). A filter you apply meanwhile starts
-  at once and shows its matches among the packets indexed so far; sorting
-  needs every packet, so it says it is waiting. The finished index is saved, so **reopening an unchanged
-  capture is instant** (0.01 s instead of ~30 s per million packets). It is
+  second while tshark indexes the rest; a thin progress bar above the packet
+  list and the status bar count along ("Indexing… 42% · 420,000 packets"). A
+  filter you apply meanwhile starts at once and shows its matches among the
+  packets indexed so far; sorting needs every packet, so it says it is
+  waiting. The finished index is saved, so **reopening an unchanged capture
+  is instant** (0.01 s instead of ~30 s per million packets). **Closing a
+  capture before it is fully indexed keeps the progress**: the next open
+  shows the packets indexed so far at once, while tshark re-reads them
+  ("Resuming… re-reading packets 1–420,000 (already shown)"; tshark can
+  only read a capture from its start) and then goes on with the rest. It is
   rebuilt when the file or anything that changes dissection changes (tshark
   version, Lua scripts, Decode As rules, preferences, the TLS key log file's
   contents, custom columns, your Wireshark configuration). Saved indexes take about 100 MB per million
@@ -507,6 +512,7 @@ Measured with `test/perf/bench.py` on 1,000,000 synthetic packets (146 MB,
 | Open (index pass)                           | 29–36 s (tshark-bound); the first rows show after 0.5 s, already colored                                    |
 | Coloring with the 14 default rules          | +2 s on the index pass (a separate pass, used when rules change: ~30 s)                                     |
 | Reopen an unchanged capture (saved index)   | 0.01 s                                                                                                      |
+| Reopen after closing half-way (resume)      | 501,575 saved rows after 0.2 s; re-reading them 18.6 s, the whole index after 36.7 s                        |
 | Fetch a 200-row page (any position)         | < 1 ms                                                                                                      |
 | 1000 random scroll pages                    | 0.09 s total                                                                                                |
 | Apply a filter                              | 26 s (one tshark pass; the first matches show after 0.5 s; re-applying a cached or saved filter is instant) |

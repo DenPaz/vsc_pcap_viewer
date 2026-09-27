@@ -117,7 +117,7 @@ suite("BackendClient", function () {
       { timeoutMs: 0, onProgress: (p) => progress.push(p) },
     );
     assert.equal(info.frames, 11);
-    assert.ok(progress.some((p) => p.phase === "index"));
+    assert.ok(progress.some((p) => p.phase === "indexing"));
     const filtered = await client.request<{ matchCount: number }>("set_filter", { expr: "http" });
     assert.equal(filtered.matchCount, 2);
     const page = await client.request<{ rows: { number: number }[] }>("list_packets", {

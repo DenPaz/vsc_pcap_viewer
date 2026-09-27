@@ -61,6 +61,7 @@ async function runExport(
       { location: vscode.ProgressLocation.Notification, title, cancellable: true },
       async (progress, token) => {
         let reported = 0;
+        session.showExportProgress(null); // (the viewer's bar too)
         const pending = backend.send<ExportResult>("export", params, {
           timeoutMs: 0,
           onProgress: (p) => {
@@ -68,11 +69,16 @@ async function runExport(
               const pct = Math.round(p.fraction * 100);
               progress.report({ increment: pct - reported, message: `${pct}%` });
               reported = pct;
+              session.showExportProgress(p.fraction);
             }
           },
         });
         token.onCancellationRequested(() => backend.cancel(pending.id));
-        return pending.promise;
+        try {
+          return await pending.promise;
+        } finally {
+          session.showExportProgress(null, true);
+        }
       },
     );
   } catch (err) {

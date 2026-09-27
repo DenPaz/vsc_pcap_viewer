@@ -16,6 +16,13 @@ written to a temporary folder and renamed into place, so a reader never sees
 half an entry. The total size is capped: the least recently used entries go
 first (``meta.json``'s mtime is touched on every hit).
 
+``meta.json`` says whether the entry is ``complete`` (the index pass read the
+whole capture and tshark ended on its own) and how many ``frames`` it holds.
+An incomplete entry is what a streaming open had indexed when it was closed:
+the next open shows those rows at once and re-reads the capture from the
+start to go on (see pcap_service). Only complete entries are loaded as a
+finished index, and only they keep colors and filter results.
+
 The rows file holds packet summaries (addresses, the Info column); it lives in
 the user's own extension storage and can be turned off or cleared.
 """
@@ -33,7 +40,9 @@ from pathlib import Path
 from typing import Any
 
 # Bump when the rows, offsets or meta change meaning: old entries are then ignored.
-CACHE_FORMAT = 1
+# 2: meta.json has ``complete`` and ``frames`` (format 1 could save a closed,
+# unfinished pass as a finished index).
+CACHE_FORMAT = 2
 MAX_COLORINGS = 4  # coloring results kept per entry
 MAX_FILTERS = 8  # display-filter results kept per entry
 _MAX_CONFIG_FILES = 500  # personal config/plugin files hashed into the key
@@ -44,6 +53,11 @@ class CachedIndex:
     rows: Path
     offsets: array[int]
     meta: dict[str, Any]
+
+    @property
+    def complete(self) -> bool:
+        """The whole capture (else the rows indexed before a streaming open was closed)."""
+        return self.meta.get("complete") is True
 
 
 def _log(message: str) -> None:
@@ -156,7 +170,8 @@ class IndexCache:
         return self.root / key
 
     def load(self, key: str) -> CachedIndex | None:
-        """The saved index for ``key``, or None (missing or unreadable)."""
+        """The saved index for ``key``, complete or not (see ``complete``), or
+        None (missing or unreadable)."""
         entry = self._entry(key)
         try:
             meta = json.loads((entry / "meta.json").read_text(encoding="utf-8"))
@@ -165,15 +180,30 @@ class IndexCache:
             offsets = array("Q")
             offsets.frombytes((entry / "offsets.bin").read_bytes())
             rows = entry / "rows.tsv"
-            if len(offsets) != meta.get("rows") or not rows.is_file():
+            if (
+                len(offsets) != meta.get("rows")
+                or meta.get("frames") != len(offsets)
+                or not isinstance(meta.get("complete"), bool)
+                or not rows.is_file()
+            ):
                 return None
             os.utime(entry / "meta.json")  # most recently used
         except OSError, ValueError, TypeError:
             return None
         return CachedIndex(rows, offsets, meta)
 
-    def save(self, key: str, rows: Path, offsets: array[int], meta: Mapping[str, Any]) -> bool:
-        """Save an index (``rows`` is copied, or hard-linked when possible)."""
+    def save(
+        self,
+        key: str,
+        rows: Path,
+        offsets: array[int],
+        meta: Mapping[str, Any],
+        *,
+        complete: bool,
+    ) -> bool:
+        """Save an index (``rows`` is copied, or hard-linked when possible):
+        ``complete``, or the rows a closed streaming open had indexed. Either
+        replaces the entry as a whole (colors and filter results included)."""
         entry = self._entry(key)
         tmp = self.root / f".{key}.{os.getpid()}.tmp"
         try:
@@ -185,7 +215,13 @@ class IndexCache:
             except OSError:  # another filesystem, or no hard links
                 shutil.copyfile(rows, tmp / "rows.tsv")
             (tmp / "offsets.bin").write_bytes(offsets.tobytes())
-            full = {**meta, "format": CACHE_FORMAT, "rows": len(offsets)}
+            full = {
+                **meta,
+                "format": CACHE_FORMAT,
+                "rows": len(offsets),
+                "frames": len(offsets),
+                "complete": complete,
+            }
             (tmp / "meta.json").write_text(json.dumps(full), encoding="utf-8")
             shutil.rmtree(entry, ignore_errors=True)
             tmp.rename(entry)
@@ -201,6 +237,8 @@ class IndexCache:
     ) -> tuple[array[int], dict[str, Any]] | None:
         """Saved coloring result: one rule byte per frame, and its ``{colored, errors}``."""
         entry = self._entry(key)
+        if not self._complete(entry):
+            return None
         try:
             data = (entry / f"colors-{rules}.bin").read_bytes()
             extra = json.loads((entry / f"colors-{rules}.json").read_text(encoding="utf-8"))
@@ -214,8 +252,8 @@ class IndexCache:
         self, key: str, rules: str, colors: array[int], extra: Mapping[str, Any]
     ) -> None:
         entry = self._entry(key)
-        if not (entry / "meta.json").is_file():
-            return  # no index saved for this capture (yet)
+        if not self._complete(entry):
+            return  # no finished index saved for this capture (yet)
         try:
             for suffix, data in ((".json", json.dumps(extra).encode()), (".bin", colors.tobytes())):
                 tmp = entry / f".colors-{rules}{suffix}.{os.getpid()}.tmp"
@@ -230,7 +268,10 @@ class IndexCache:
 
     def load_filter(self, key: str, expr: str, frames: int) -> array[int] | None:
         """Saved matches of display filter ``expr`` (ascending frame numbers)."""
-        path = self._entry(key) / f"filter-{filter_key(expr)}.bin"
+        entry = self._entry(key)
+        if not self._complete(entry):
+            return None
+        path = entry / f"filter-{filter_key(expr)}.bin"
         try:
             data = path.read_bytes()
             os.utime(path)  # most recently used filter of this entry
@@ -247,8 +288,8 @@ class IndexCache:
     def save_filter(self, key: str, expr: str, matched: array[int]) -> None:
         """Save a display filter's matches; only the MAX_FILTERS most recent stay."""
         entry = self._entry(key)
-        if not (entry / "meta.json").is_file():
-            return  # no index saved for this capture (yet)
+        if not self._complete(entry):
+            return  # no finished index saved for this capture (yet)
         name = f"filter-{filter_key(expr)}.bin"
         try:
             tmp = entry / f".{name}.{os.getpid()}.tmp"
@@ -261,6 +302,25 @@ class IndexCache:
             _log(f"could not save filter results: {exc}")
             return
         self.prune()
+
+    @staticmethod
+    def _complete(entry: Path) -> bool:
+        """Whether ``entry`` holds a finished index (colors and filter results
+        belong only to those: an incomplete entry's frame count grows)."""
+        try:
+            meta = json.loads((entry / "meta.json").read_text(encoding="utf-8"))
+        except OSError, ValueError:
+            return False
+        return (
+            isinstance(meta, dict)
+            and meta.get("format") == CACHE_FORMAT
+            and meta.get("complete") is True
+        )
+
+    def discard(self, key: str) -> None:
+        """Remove ``key``'s entry (an incomplete one that no longer matches)."""
+        with contextlib.suppress(OSError):
+            shutil.rmtree(self._entry(key))
 
     def entries(self) -> list[tuple[Path, float, int]]:
         """(folder, last use, size in bytes) of every entry."""

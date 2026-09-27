@@ -864,6 +864,9 @@ export class PcapEditorSession {
         frames: Number(p.frames) || 0,
         fraction: typeof p.fraction === "number" ? p.fraction : null,
         view: p.view as ViewCounts | undefined,
+        phase: p.phase === "catching-up" ? "catching-up" : "indexing",
+        resumedAt: typeof p.resumedAt === "number" ? p.resumedAt : undefined,
+        restarted: p.restarted === true ? true : undefined,
       });
       return false;
     }
@@ -1593,6 +1596,11 @@ export class PcapEditorSession {
 
   private history(): string[] {
     return this.context.globalState.get<string[]>(HISTORY_KEY, []);
+  }
+
+  /** An export of this capture: its progress in the viewer's progress bar (`done` hides it). */
+  showExportProgress(fraction: number | null, done = false): void {
+    this.post({ type: "exportProgress", fraction, done: done || undefined });
   }
 
   private post(msg: HostToWebview): void {
