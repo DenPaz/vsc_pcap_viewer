@@ -100,6 +100,8 @@ suite("PCAP Viewer smoke test", () => {
       "pcapViewer.askAboutPackets",
       "pcapViewer.clearIndexCache",
       "pcapViewer.setTlsKeyLogFile",
+      "pcapViewer.exportDissections",
+      "pcapViewer.mergeCaptures",
       "pcapViewer.toggleTimeReference",
       "pcapViewer.timeFormat",
     ]) {

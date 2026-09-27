@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- *PCAP: Export Packet Dissections…*: the full packet details of the
+  displayed, all, selected or marked packets as plain text, PDML or JSON,
+  optionally with the packet bytes.
+- Merging captures: opening a piece of a rotated capture (`tcpdump -C`, or a
+  dumpcap/Wireshark ring buffer) offers to merge all its pieces into one
+  capture; *PCAP: Merge Captures…* merges them, or any captures by timestamp.
+- *PCAP: Edit Coloring Rules* (was *Manage Coloring Rules*, which opened the
+  settings) is an editor: reorder, enable, rename, recolor with a preview, add
+  and remove rules, with filters checked by tshark as you type.
+- CI uses the Node 24 versions of its GitHub Actions.
 - Colors come with the packets: opening a capture evaluates the coloring rules
   in the same tshark pass that builds the packet list, so rows are colored as
   soon as they show (0.5 s on a million packets) instead of after indexing and

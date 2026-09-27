@@ -123,7 +123,10 @@ by **tshark** (Wireshark's command-line tool), so results match Wireshark exactl
   SYN/FIN, HTTP, DNS, SMB, routing, TCP, UDP, broadcast) comes with the
   extension. Rules live in `pcapViewer.coloringRules`, so they can be edited,
   disabled (`"enabled": false`) or shared per workspace. *Colorize with Filter…*
-  adds a rule on top, *PCAP: Toggle Packet Coloring* turns coloring off.
+  adds a rule on top, *PCAP: Toggle Packet Coloring* turns coloring off, and
+  *PCAP: Edit Coloring Rules* opens an editor: reorder rules (the first match
+  wins), turn them on and off, pick colors with a preview, and see filters
+  checked by tshark as you type.
   Colors come with the packets: opening a capture evaluates the rules in the
   same tshark pass that builds the packet list (about 6% slower than without
   colors), so even a big capture shows colored rows within half a second, and
@@ -135,9 +138,17 @@ by **tshark** (Wireshark's command-line tool), so results match Wireshark exactl
   *PCAP: Export Packet List as CSV/JSON…* saves the displayed (or selected)
   rows (current filter and sort order, including custom columns). *PCAP: Export Packet
   Bytes…* (also in the packet list's right-click menu) saves a packet's raw
-  bytes or its reassembled data. The follow-stream panel saves stream data.
-  Exports appear only once complete, so cancelling leaves no partial file,
-  and the open capture can never be overwritten.
+  bytes or its reassembled data. *PCAP: Export Packet Dissections…* saves the
+  full packet details of the displayed, all, selected or marked packets as
+  plain text, **PDML** or **JSON** (optionally with each packet's bytes), like
+  Wireshark's *Export Packet Dissections*. The follow-stream panel saves
+  stream data. Exports appear only once complete, so cancelling leaves no
+  partial file, and the open capture can never be overwritten.
+- **Merge captures**: opening one piece of a rotated capture (`tcpdump -C`'s
+  `trace.pcap`, `trace.pcap1`, …, or a Wireshark/dumpcap ring buffer's
+  `name_00001_<time>.pcapng`, …) offers to merge all the pieces into one
+  capture and open it. *PCAP: Merge Captures…* does the same, or merges any
+  capture files you choose by timestamp (with `mergecap`).
 - **Follow TCP / UDP / TLS / HTTP stream** from the selected packet (right-click
   a packet or use the command palette). The stream opens in a panel with the
   two directions coloured and labelled. You can show one direction only, switch
@@ -229,8 +240,10 @@ tshark built with them (`tshark --version` lists "with Zstandard", "with LZ4").
 | PCAP: Export Selected Packets… | | The selected packets to pcapng or pcap |
 | PCAP: Export Packet List as CSV/JSON… | | The displayed (or selected) rows with their columns |
 | PCAP: Export Packet Bytes… | | Raw bytes of the selected packet (or a reassembled source) |
+| PCAP: Export Packet Dissections… | | Full packet details as plain text, PDML or JSON |
+| PCAP: Merge Captures… | | Merge a rotated capture's pieces, or any captures, into one file and open it |
 | PCAP: Colorize with Filter… | | Add a coloring rule (also in the detail tree's right-click menu) |
-| PCAP: Toggle Packet Coloring / Manage Coloring Rules | | Turn coloring on or off / edit `pcapViewer.coloringRules` |
+| PCAP: Toggle Packet Coloring / Edit Coloring Rules | | Turn coloring on or off / edit `pcapViewer.coloringRules` in a rules editor |
 | PCAP: Show Log | | Backend and tshark messages (Lua errors, warnings) |
 
 Keyboard: in the list use ↑/↓/PgUp/PgDn/Home/End, `Enter`/`→` to move to the
@@ -336,8 +349,9 @@ something in the meantime.
 
 ## Roadmap
 
-Every item of the project brief is implemented. Possible next steps:
-exporting full dissections (PDML/JSON), and a visual editor for coloring rules.
+Every item of the project brief is implemented. Possible next steps: live
+capture from a network interface (`dumpcap`), and getting ready to publish
+(an icon, a release workflow, screenshots).
 
 ## Running locally (Linux)
 

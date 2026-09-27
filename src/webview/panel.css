@@ -293,3 +293,102 @@ table.stats td.wrap {
 .segment.dir1 {
   background: color-mix(in srgb, var(--vscode-charts-blue, #3794ff) 8%, transparent);
 }
+
+/* ------------------------------------------------------------------ coloring rules editor */
+
+table.rules td {
+  vertical-align: top;
+  padding: 3px 6px;
+}
+
+table.rules th {
+  cursor: default;
+}
+
+table.rules tbody tr:hover {
+  background: none;
+}
+
+table.rules tr.disabled .rule-sample,
+table.rules tr.disabled input[type="text"] {
+  opacity: 0.55;
+}
+
+table.rules input[type="text"] {
+  font-family: var(--mono);
+  font-size: var(--mono-size);
+  color: var(--vscode-input-foreground);
+  background: var(--vscode-input-background);
+  border: 1px solid var(--vscode-input-border, transparent);
+  padding: 2px 4px;
+  border-radius: 2px;
+  box-sizing: border-box;
+}
+
+table.rules input[type="text"]:focus {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+table.rules .rule-name {
+  width: 12em;
+}
+
+table.rules .rule-filter-cell {
+  width: 100%;
+}
+
+table.rules .rule-filter {
+  width: 100%;
+  min-width: 16em;
+}
+
+table.rules .rule-filter.invalid {
+  border-color: var(--vscode-inputValidation-errorBorder, var(--vscode-errorForeground));
+}
+
+table.rules .rule-problem {
+  color: var(--vscode-errorForeground);
+  white-space: normal;
+  font-size: 0.9em;
+}
+
+table.rules .rule-problem:empty {
+  display: none;
+}
+
+table.rules input[type="color"] {
+  width: 2.2em;
+  height: 1.6em;
+  padding: 0;
+  border: 1px solid var(--vscode-input-border, var(--border));
+  background: none;
+  cursor: pointer;
+}
+
+table.rules .rule-colors {
+  white-space: nowrap;
+}
+
+table.rules .rule-sample {
+  padding: 1px 8px;
+  border-radius: 2px;
+  min-width: 10em;
+  max-width: 18em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+table.rules .rule-actions {
+  white-space: nowrap;
+}
+
+table.rules button.icon {
+  min-width: 1.8em;
+  padding: 0 4px;
+}
+
+table.rules .empty-rules {
+  color: var(--vscode-descriptionForeground);
+  white-space: normal;
+}

@@ -3,7 +3,9 @@ import * as path from "node:path";
 import {
   COLORIZE_PALETTE,
   captureStem,
+  coloringRulesSetting,
   configTargetFor,
+  editableColoringRules,
   exportFileName,
   isColor,
   looksLikeKeyLog,
@@ -162,5 +164,26 @@ suite("settingsModel", () => {
     assert.equal(looksLikeKeyLog("hello world\n"), false);
     assert.equal(looksLikeKeyLog("# only comments\n"), false);
     assert.equal(looksLikeKeyLog(`${random}\n-----BEGIN PRIVATE KEY-----\n`), false);
+  });
+
+  test("coloring rules for the editor, and back", () => {
+    const raw = [
+      { name: "DNS", filter: " dns ", foreground: "#12272E", background: "#c8e2ff" },
+      { filter: "arp", enabled: false },
+      "junk",
+      { name: "Bad colors", filter: "icmp", foreground: "red", background: "#12" },
+    ];
+    const rules = editableColoringRules(raw);
+    assert.deepEqual(rules, [
+      { name: "DNS", filter: "dns", foreground: "#12272e", background: "#c8e2ff", enabled: true },
+      { name: "", filter: "arp", foreground: "#000000", background: "#ffffff", enabled: false },
+      { name: "Bad colors", filter: "icmp", foreground: "#000000", background: "#ffffff", enabled: true },
+    ]);
+    assert.deepEqual(coloringRulesSetting(rules), [
+      { name: "DNS", filter: "dns", foreground: "#12272e", background: "#c8e2ff" },
+      { name: "arp", filter: "arp", foreground: "#000000", background: "#ffffff", enabled: false },
+      { name: "Bad colors", filter: "icmp", foreground: "#000000", background: "#ffffff" },
+    ]);
+    assert.deepEqual(editableColoringRules("nope"), []);
   });
 });

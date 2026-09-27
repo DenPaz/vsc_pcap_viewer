@@ -8,6 +8,7 @@ import type { ExplainOutcome, ExplainSink, FilterAssistant, SuggestOutcome } fro
 import { ColoringResult, FilterEvent, HostToWebview, OpenResult, ViewCounts, ViewerCommand, WEBVIEW_RPC_METHODS, WebviewToHost } from "./messages";
 import { saveFilterInteractive, showSavedFilters } from "./commands/savedFilters";
 import { FollowPanel } from "./panels/followPanel";
+import { rotatedSiblings } from "./rotation";
 import { ColoringRule, ColumnLayout, ColumnSetting, QuickDetail, SavedFilter, TimeFormat, addColumn, normalizeColumns, pushHistory } from "./settingsModel";
 
 const HISTORY_KEY = "pcapViewer.filterHistory";
@@ -116,6 +117,8 @@ export class PcapEditorSession {
   /** TLS key log file this capture was last loaded with ("" = none). */
   keyLogFile = "";
   private keyLogWatcher?: vscode.Disposable;
+  /** Merging this rotated capture's pieces was offered (once per editor). */
+  private mergeOffered = false;
   private readonly disposeEmitter = new vscode.EventEmitter<void>();
   /** Fires when the editor closes (auxiliary panels close with it). */
   readonly onDidDispose = this.disposeEmitter.event;
@@ -271,6 +274,7 @@ export class PcapEditorSession {
         }
       }
       void this.postAiAvailability();
+      void this.offerMerge();
     } catch (err) {
       if (seq !== this.loadSeq || this.disposed) {
         return;
@@ -328,6 +332,31 @@ export class PcapEditorSession {
         watcher.dispose();
       },
     };
+  }
+
+  /** A piece of a rotated capture (tcpdump -C, dumpcap ring buffer): offer to merge all of them. */
+  private async offerMerge(): Promise<void> {
+    const never = "pcapViewer.mergeOffer.never";
+    if (this.mergeOffered || this.context.globalState.get<boolean>(never)) {
+      return;
+    }
+    this.mergeOffered = true;
+    const pieces = await rotatedSiblings(this.uri.fsPath);
+    if (pieces.length < 2 || this.disposed) {
+      return;
+    }
+    const merge = "Merge…";
+    const stop = "Don't Ask Again";
+    const choice = await vscode.window.showInformationMessage(
+      `PCAP Viewer: ${path.basename(this.uri.fsPath)} is one of ${pieces.length} pieces of a rotated capture. Merge them into one capture?`,
+      merge,
+      stop,
+    );
+    if (choice === merge) {
+      await vscode.commands.executeCommand("pcapViewer.mergeCaptures", pieces);
+    } else if (choice === stop) {
+      await this.context.globalState.update(never, true);
+    }
   }
 
   private reportWarnings(warnings: string[]): void {

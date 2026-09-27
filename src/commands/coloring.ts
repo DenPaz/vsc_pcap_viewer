@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { getSetting, updateSetting } from "../config";
 import type { PcapEditorProvider } from "../pcapEditor";
+import { ColoringPanel } from "../panels/coloringPanel";
 import { COLORIZE_FOREGROUND, COLORIZE_PALETTE, ColoringRule, prependColoringRule } from "../settingsModel";
 
 /**
@@ -54,6 +55,6 @@ export function registerColoringCommands(context: vscode.ExtensionContext, provi
       await updateSetting("colorize", on, scope);
       vscode.window.setStatusBarMessage(`Packet coloring ${on ? "on" : "off"}`, 3000);
     }),
-    vscode.commands.registerCommand("pcapViewer.manageColoringRules", () => vscode.commands.executeCommand("workbench.action.openSettings", "pcapViewer.coloringRules")),
+    vscode.commands.registerCommand("pcapViewer.manageColoringRules", () => ColoringPanel.show(context, provider)),
   );
 }

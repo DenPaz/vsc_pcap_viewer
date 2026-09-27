@@ -277,6 +277,40 @@ export function normalizeColoringRules(raw: unknown): ColoringRule[] {
   return out.slice(0, MAX_COLORING_RULES);
 }
 
+/** A coloring rule as the rules editor shows it: disabled ones and all. */
+export interface EditableColoringRule extends ColoringRule {
+  enabled: boolean;
+}
+
+/** `pcapViewer.coloringRules` for the editor: every rule, in order, with defaults filled in. */
+export function editableColoringRules(raw: unknown): EditableColoringRule[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const text = (v: unknown) => (typeof v === "string" ? v.trim() : "");
+  const color = (v: unknown, fallback: string) => (typeof v === "string" && COLOR_RE.test(v) ? v.toLowerCase() : fallback);
+  return raw
+    .filter((item): item is Record<string, unknown> => !!item && typeof item === "object")
+    .map((item) => ({
+      name: text(item.name),
+      filter: text(item.filter),
+      foreground: color(item.foreground, "#000000"),
+      background: color(item.background, "#ffffff"),
+      enabled: item.enabled !== false,
+    }));
+}
+
+/** The editor's rules as the setting stores them (`enabled` only when false). */
+export function coloringRulesSetting(rules: readonly EditableColoringRule[]): Record<string, unknown>[] {
+  return rules.map((r) => ({
+    name: r.name.trim() || r.filter.trim(),
+    filter: r.filter.trim(),
+    foreground: r.foreground,
+    background: r.background,
+    ...(r.enabled ? {} : { enabled: false }),
+  }));
+}
+
 /** Colors offered by "Colorize with Filter" (Wireshark's conversation colors). */
 export const COLORIZE_PALETTE: readonly { label: string; background: string }[] = [
   { label: "Red", background: "#ffc0c0" },

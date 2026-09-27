@@ -213,6 +213,106 @@ maybe("statistics and follow panels (Chromium + real backend)", function () {
     assert.equal(await page.locator("pre.segment").count(), 0);
   });
 
+  /** Open coloring.js with a stand-in for ColoringPanel (src/panels/coloringPanel.ts). */
+  async function openColoring(rules, defaults) {
+    const { page, problems, post } = await newPage(browser);
+    const log = [];
+    await page.exposeFunction("__toHost", async (raw) => {
+      const msg = JSON.parse(raw);
+      log.push(msg);
+      if (msg.type === "ready") {
+        await post({ type: "init", rules, defaults, canValidate: true });
+      } else if (msg.type === "validate") {
+        const res = await client.request("validate_filter", { expr: msg.filter });
+        await post({ type: "validation", id: msg.id, filter: msg.filter, error: res.valid ? null : res.error });
+      }
+    });
+    await page.setContent(renderPanelHtml(origin, "coloring.js"), { waitUntil: "load" });
+    pages.push(problems);
+    return { page, log, post };
+  }
+
+  test("coloring rules editor: edit, check filters, reorder, add, remove and save", async () => {
+    const dns = { name: "DNS", filter: "dns", foreground: "#12272e", background: "#c8e2ff", enabled: true };
+    const tcp = { name: "TCP", filter: "tcp", foreground: "#000000", background: "#e7e6ff", enabled: true };
+    const arp = { name: "ARP", filter: "arp", foreground: "#000000", background: "#faf0d7", enabled: false };
+    const { page, log, post } = await openColoring([dns, tcp, arp], [dns]);
+    const rowsOf = () =>
+      page.$$eval("table.rules tbody tr[data-id]", (trs) =>
+        trs.map((tr) => ({
+          on: /** @type {HTMLInputElement} */ (tr.querySelector("input[type=checkbox]")).checked,
+          name: /** @type {HTMLInputElement} */ (tr.querySelector(".rule-name")).value,
+          filter: /** @type {HTMLInputElement} */ (tr.querySelector(".rule-filter")).value,
+          sample: /** @type {HTMLElement} */ (tr.querySelector(".rule-sample")).style.backgroundColor,
+        })),
+      );
+    await page.waitForSelector("table.rules tbody tr[data-id]");
+    assert.deepEqual(await rowsOf(), [
+      { on: true, name: "DNS", filter: "dns", sample: "rgb(200, 226, 255)" },
+      { on: true, name: "TCP", filter: "tcp", sample: "rgb(231, 230, 255)" },
+      { on: false, name: "ARP", filter: "arp", sample: "rgb(250, 240, 215)" },
+    ]);
+    const save = "button:has-text('Save')";
+    assert.equal(await page.isDisabled(save), true, "nothing to save yet");
+
+    // A filter tshark rejects is marked (it can still be saved: tshark skips it).
+    const second = "table.rules tbody tr[data-id] >> nth=1";
+    await page.fill(`${second} >> .rule-filter`, "tcp.port ==");
+    await page.waitForFunction(() => /\S/.test(document.querySelectorAll("table.rules .rule-problem")[1]?.textContent ?? ""));
+    assert.equal(await page.getAttribute(`${second} >> .rule-filter`, "aria-invalid"), "true");
+    assert.equal(await page.isDisabled(save), false);
+    // An empty filter can't be saved.
+    await page.fill(`${second} >> .rule-filter`, "");
+    assert.match(await page.textContent(`${second} >> .rule-problem`), /Enter a display filter/);
+    assert.equal(await page.isDisabled(save), true);
+    await page.fill(`${second} >> .rule-filter`, "tcp.port == 80");
+    await page.waitForFunction(() => document.querySelectorAll("table.rules .rule-problem")[1]?.textContent === "");
+
+    // Add a rule on top, give it a filter and a color; move it down; remove ARP.
+    await page.click("button:has-text('Add Rule')");
+    await page.keyboard.type("udp");
+    await page.$eval("table.rules tbody tr[data-id] input[aria-label='Row color']", (el) => {
+      const input = /** @type {HTMLInputElement} */ (el);
+      input.value = "#ff0000";
+      input.dispatchEvent(new window.Event("input", { bubbles: true }));
+    });
+    await page.focus("table.rules tbody tr[data-id] >> nth=0 >> .rule-filter");
+    await page.keyboard.press("Alt+ArrowDown");
+    assert.equal(await page.evaluate(() => /** @type {HTMLInputElement} */ (document.activeElement)?.value), "udp", "focus follows the moved rule");
+    await page.click("table.rules tbody tr[data-id] >> nth=3 >> button[aria-label='Remove rule']");
+    await page.uncheck("table.rules tbody tr[data-id] >> nth=0 >> input[type=checkbox]");
+    assert.deepEqual(await rowsOf(), [
+      { on: false, name: "DNS", filter: "dns", sample: "rgb(200, 226, 255)" },
+      { on: true, name: "", filter: "udp", sample: "rgb(255, 0, 0)" },
+      { on: true, name: "TCP", filter: "tcp.port == 80", sample: "rgb(231, 230, 255)" },
+    ]);
+    assert.match(await page.textContent(".status"), /3 rules, 2 enabled · unsaved changes/);
+
+    await page.click(save);
+    const saved = log.find((m) => m.type === "save");
+    assert.deepEqual(saved.rules, [
+      { ...dns, enabled: false },
+      { name: "", filter: "udp", foreground: "#000000", background: "#ff0000", enabled: true },
+      { ...tcp, filter: "tcp.port == 80" },
+    ]);
+    // The host answers with what the setting now holds (empty names become the filter).
+    const stored = [saved.rules[0], { ...saved.rules[1], name: "udp" }, saved.rules[2]];
+    await post({ type: "rules", rules: stored }); // the settings change can come first
+    await post({ type: "saved", rules: stored });
+    await page.waitForFunction(() => !/unsaved|changed in settings/.test(document.querySelector(".status")?.textContent ?? ""));
+    assert.equal(await page.isDisabled(save), true);
+    assert.equal((await rowsOf())[1].name, "udp");
+
+    // Edited elsewhere while there are unsaved edits: say so; Revert loads them.
+    await page.fill("table.rules tbody tr[data-id] >> nth=2 >> .rule-name", "Web");
+    await post({ type: "rules", rules: [dns] });
+    await page.waitForFunction(() => /changed in settings/.test(document.querySelector(".status")?.textContent ?? ""));
+    await page.click("button:has-text('Restore Defaults')");
+    assert.deepEqual((await rowsOf()).map((r) => r.name), ["DNS"]);
+    await page.click("button:has-text('Open settings.json')");
+    assert.equal(log.at(-1).type, "openSettings");
+  });
+
   test("no script errors or CSP violations in any panel", () => {
     for (const p of pages) {
       assert.deepEqual(p.errors, []);

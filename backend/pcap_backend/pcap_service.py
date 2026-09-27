@@ -40,8 +40,10 @@ from .cache import FrameIndex, LruCache, RowStore, sort_frames, sort_frames_by_k
 from .cancellation import CancelledError, CancelToken
 from .export import (
     CAPTURE_FORMATS,
+    DISSECTION_FORMATS,
     EXPORT_KINDS,
     LIST_FORMATS,
+    DissectionWriter,
     PacketListWriter,
     atomic_output,
     check_destination,
@@ -2011,6 +2013,9 @@ class PcapService:
           the parallel ``titles`` list); only the rows of ``frames`` if given.
         * ``bytes``: the raw bytes of frame ``number`` (data ``source`` index,
           default 0: the frame itself).
+        * ``dissections``: tshark's full packet details, ``format`` ``text``
+          (``-V``), ``pdml`` or ``json``, with the hex bytes too if ``bytes``;
+          packets chosen as for pcapng (filter, ``marked`` or ``frames``).
 
         The file only appears once complete; cancelling leaves nothing behind.
         """
@@ -2023,6 +2028,8 @@ class PcapService:
             result = self._export_capture(f, kind, dest, params, ctx)
         elif kind in LIST_FORMATS:
             result = self._export_list(f, kind, dest, params, ctx)
+        elif kind == "dissections":
+            result = self._export_dissections(f, dest, params, ctx)
         else:
             result = self._export_bytes(dest, params, ctx)
         result.update({"ok": True, "path": str(dest), "size": dest.stat().st_size})
@@ -2180,6 +2187,75 @@ class PcapService:
         label = "selected packets" if "frames" in params else view.expr
         return {"packets": total, "filter": label, "columns": keys}
 
+    def _export_scope(
+        self, f: _Open, params: dict[str, Any]
+    ) -> tuple[list[str], str, int | None, bool]:
+        """Which packets an export takes, as display filters (one pass each;
+        ``""`` = every packet): (filters, label, expected packets if known,
+        whether the filter came from the user and needs validating)."""
+        if params.get("marked"):
+            with self._lock:
+                frames = sorted(self._marks)
+            if not frames:
+                raise InvalidParamsError("No packets are marked")
+            label = "marked packets"
+        elif "frames" in params:
+            n_frames = f.frame_count()
+            frames = sorted({n for n in _frame_list(params, "frames") if 1 <= n <= n_frames})
+            if not frames:
+                raise InvalidParamsError("No packets are selected")
+            label = "selected packets"
+        else:
+            _f, view = self._require_view()
+            flt = param(params, "filter", str, "").strip() if "filter" in params else view.expr
+            if not flt:
+                return [""], "", f.info.frames, False
+            known = flt == view.expr and view.live is None and view.partial is None
+            return [flt], flt, len(view.matched) if known else None, True
+        return navigation.frame_set_filters(frames, MAX_FILTER_ARG), label, len(frames), False
+
+    def _export_dissections(
+        self, f: _Open, dest: Path, params: dict[str, Any], ctx: RequestContext
+    ) -> dict[str, Any]:
+        """Full dissections (Wireshark's "Export Packet Dissections"), streamed
+        from tshark to the file; big frame sets are filtered in chunks and joined."""
+        fmt = param(params, "format", str, "text")
+        if fmt not in DISSECTION_FORMATS:
+            raise InvalidParamsError(f"format must be one of {', '.join(DISSECTION_FORMATS)}")
+        filters, label, expected, user_filter = self._export_scope(f, params)
+        if user_filter:
+            error = f.tshark.validate_filter(filters[0], ctx.token)
+            if error:
+                raise FilterError(error, {"expr": filters[0]})
+        options = [*DISSECTION_FORMATS[fmt], *(["-x"] if params.get("bytes") else [])]
+        packets = 0
+        warnings: list[str] = []
+        last_emit = 0.0
+        ctx.progress({"phase": "export", "fraction": None})
+        with atomic_output(dest) as tmp, tmp.open("wb") as out:
+            writer = DissectionWriter(fmt, out)
+            for flt in filters:
+                writer.next_pass()
+                argv = f.tshark.argv(*(["-Y", flt] if flt else []), *options, capture=str(f.path))
+                result = StreamResult()
+                for line in stream_lines(argv, result, ctx.token):
+                    if not writer.line(line):
+                        continue
+                    packets += 1
+                    now = time.monotonic()
+                    if expected and now - last_emit >= PROGRESS_INTERVAL_S:
+                        last_emit = now
+                        fraction = min(0.99, packets / expected)
+                        ctx.progress({"phase": "export", "fraction": fraction})
+                truncated = any(h in result.stderr for h in _TRUNCATION_HINTS)
+                if result.returncode not in (0, None) and not (truncated and result.lines):
+                    raise f.tshark.error(
+                        result.stderr, result.returncode, "tshark could not dissect the packets"
+                    )
+                warnings += _stderr_warnings(result.stderr)
+            writer.close()
+        return {"packets": packets, "filter": label, "format": fmt, "warnings": warnings}
+
     def _export_bytes(
         self, dest: Path, params: dict[str, Any], ctx: RequestContext
     ) -> dict[str, Any]:
@@ -2192,6 +2268,38 @@ class PcapService:
         with atomic_output(dest) as tmp:
             tmp.write_bytes(data)
         return {"number": number, "source": sources[source]["name"], "bytes": len(data)}
+
+    # ------------------------------------------------------------------ merging
+
+    def merge(self, params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
+        """Merge capture files into ``dest`` with mergecap: by timestamp, or one
+        after another in the given order with ``append`` (a rotated capture's
+        files). ``format``: ``pcapng`` (default) or ``pcap``. Needs no open
+        capture. The file only appears once complete."""
+        inputs = [Path(p).expanduser() for p in str_list(params, "inputs")]
+        if len(inputs) < 2:
+            raise InvalidParamsError("choose at least two capture files to merge")
+        for path in inputs:
+            if not path.is_file():
+                raise InvalidParamsError(f"capture file not found: {path}")
+        fmt = param(params, "format", str, "pcapng")
+        if fmt not in CAPTURE_FORMATS:
+            raise InvalidParamsError(f"format must be one of {', '.join(CAPTURE_FORMATS)}")
+        dest = check_destination(param(params, "dest", str), inputs[0])
+        for path in inputs[1:]:
+            check_destination(str(dest), path)  # never over one of the inputs
+        tshark = self._require_tshark()
+        try:
+            mergecap = find_tool("mergecap", sibling_of=tshark.path)
+        except ToolNotFoundError as exc:
+            raise ToolError("merging captures needs mergecap (part of Wireshark)") from exc
+        ctx.progress({"phase": "merge", "fraction": None})
+        with atomic_output(dest) as tmp:
+            argv = [str(mergecap), *(["-a"] if params.get("append") else []), "-F", fmt]
+            res = run([*argv, "-w", str(tmp), *map(str, inputs)], ctx.token)
+            if res.returncode != 0 or not tmp.exists():
+                raise ToolError(res.stderr.strip() or "mergecap failed", res.stderr, res.returncode)
+        return {"ok": True, "path": str(dest), "size": dest.stat().st_size, "inputs": len(inputs)}
 
     # ------------------------------------------------------------------ dissectors
 
@@ -2534,6 +2642,7 @@ def rpc_methods(service: PcapService) -> dict[str, Callable[[dict[str, Any], Req
         "unmark_all": service.unmark_all,
         "field_types": service.field_types,
         "export": service.export,
+        "merge": service.merge,
         "close": service.close,
     }
 
