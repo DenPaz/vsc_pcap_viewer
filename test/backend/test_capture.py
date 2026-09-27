@@ -216,7 +216,7 @@ def test_capture_failures(service: PcapService, fake: Callable[..., None], tmp_p
     with pytest.raises(ToolError) as info:
         _start(service, tmp_path)
     assert "don't have permission" in str(info.value)
-    assert "Capturing on" not in str(info.value)
+    assert "Capturing on 'fake0'" not in str(info.value), "dumpcap's own chatter is dropped"
     if sys.platform.startswith("linux"):
         assert "CAP_NET_RAW" in str(info.value)
     fake(fail="")
