@@ -14,6 +14,9 @@ import { registerIndexCacheCommands } from "./commands/indexCache";
 import { registerTlsCommands } from "./commands/tls";
 import { registerMergeCommands } from "./commands/merge";
 import { registerCommentCommands } from "./commands/comments";
+import { registerCaptureCommands } from "./commands/capture";
+import { registerEditCaptureCommands } from "./commands/editCapture";
+import { pruneTemporaryCaptures } from "./tempCaptures";
 import { PcapEditorProvider } from "./pcapEditor";
 import { sameNameResolution } from "./settingsModel";
 
@@ -46,6 +49,10 @@ export function activate(context: vscode.ExtensionContext): PcapViewerApi {
   registerTlsCommands(context, p);
   registerMergeCommands(context, p, log);
   registerCommentCommands(context, p);
+  registerCaptureCommands(context, p, log);
+  registerEditCaptureCommands(context, p, log);
+  // Unsaved captures left behind (a crash, or a restored editor long closed).
+  void pruneTemporaryCaptures(context, new Set(p.allSessions.map((s) => s.uri.fsPath)));
   context.subscriptions.push(
     vscode.commands.registerCommand("pcapViewer.showLog", () => log.show()),
     vscode.workspace.onDidChangeConfiguration(async (e) => {

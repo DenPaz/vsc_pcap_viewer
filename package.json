@@ -379,6 +379,53 @@
         "category": "PCAP"
       },
       {
+        "command": "pcapViewer.startCapture",
+        "title": "Start Capture…",
+        "category": "PCAP",
+        "icon": "$(record)"
+      },
+      {
+        "command": "pcapViewer.stopCapture",
+        "title": "Stop Capture",
+        "category": "PCAP",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "pcapViewer.editCapture",
+        "title": "Edit Capture…",
+        "category": "PCAP"
+      },
+      {
+        "command": "pcapViewer.timeShift",
+        "title": "Time Shift…",
+        "category": "PCAP"
+      },
+      {
+        "command": "pcapViewer.removeDuplicates",
+        "title": "Remove Duplicate Packets…",
+        "category": "PCAP"
+      },
+      {
+        "command": "pcapViewer.keepPackets",
+        "title": "Keep Packets in a Range…",
+        "category": "PCAP"
+      },
+      {
+        "command": "pcapViewer.truncatePackets",
+        "title": "Truncate Packets…",
+        "category": "PCAP"
+      },
+      {
+        "command": "pcapViewer.splitCapture",
+        "title": "Split Capture…",
+        "category": "PCAP"
+      },
+      {
+        "command": "pcapViewer.embedTlsKeys",
+        "title": "Embed TLS Keys in Capture…",
+        "category": "PCAP"
+      },
+      {
         "command": "pcapViewer.exportPacketBytes",
         "title": "Export Packet Bytes…",
         "category": "PCAP"
@@ -606,6 +653,45 @@
         {
           "command": "pcapViewer.timeFormat",
           "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/"
+        },
+        {
+          "command": "pcapViewer.stopCapture",
+          "when": "pcapViewer.capturing"
+        },
+        {
+          "command": "pcapViewer.editCapture",
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/"
+        },
+        {
+          "command": "pcapViewer.timeShift",
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/"
+        },
+        {
+          "command": "pcapViewer.removeDuplicates",
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/"
+        },
+        {
+          "command": "pcapViewer.keepPackets",
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/"
+        },
+        {
+          "command": "pcapViewer.truncatePackets",
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/"
+        },
+        {
+          "command": "pcapViewer.splitCapture",
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/"
+        },
+        {
+          "command": "pcapViewer.embedTlsKeys",
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "pcapViewer.stopCapture",
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ && pcapViewer.capturing",
+          "group": "navigation"
         }
       ]
     },
@@ -992,6 +1078,29 @@
           "default": 5000000,
           "minimum": 10000,
           "markdownDescription": "Budget (in frame numbers) for cached filter results and sort orders in the backend. Each entry costs 4 bytes."
+        },
+        "pcapViewer.capture.stopAfterPackets": {
+          "type": "integer",
+          "default": 0,
+          "minimum": 0,
+          "markdownDescription": "Stop a live capture (**PCAP: Start Capture…**) after this many packets. `0`: no limit."
+        },
+        "pcapViewer.capture.stopAfterSeconds": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "markdownDescription": "Stop a live capture after this many seconds. `0`: no limit."
+        },
+        "pcapViewer.capture.stopAfterMegabytes": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "markdownDescription": "Stop a live capture once its file reaches this size (MB). `0`: no limit. Until it is saved, the capture is kept in the extension's storage."
+        },
+        "pcapViewer.capture.promiscuous": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Capture in promiscuous mode: also packets not addressed to this computer (on networks where they reach it)."
         },
         "pcapViewer.indexCache.enabled": {
           "type": "boolean",

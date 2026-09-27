@@ -83,6 +83,9 @@
     statusTime: $("status-time"),
     statusNames: $("status-names"),
     statusInfo: $("status-info"),
+    statusCapture: $("status-capture"),
+    captureText: $("capture-text"),
+    captureStop: $("capture-stop"),
     findBar: $("find-bar"),
     findMode: /** @type {HTMLSelectElement} */ ($("find-mode")),
     findInput: /** @type {HTMLInputElement} */ ($("find-input")),
@@ -157,6 +160,12 @@
     /** @type {number | null} */ quickRequest: null,
     /** Streaming open: the index pass still runs (rows keep arriving; sorting waits). */
     indexing: false,
+    /**
+     * A live capture writing this file: its interfaces, whether it still runs,
+     * and its latest statistics (``seconds`` since ``startedAt``, epoch seconds).
+     * @type {{running: boolean, interfaces: string[], filter: string, startedAt: number, packets: number, bytes: number, seconds: number, dropped: number | null} | null}
+     */
+    capture: null,
     /** @type {number | null} */ indexFraction: null,
     /** Streaming filter: its matches are still arriving (a sort applies when it's done). */
     filtering: false,
@@ -275,6 +284,9 @@
       case "indexProgress":
         onIndexProgress(msg.frames, msg.fraction, msg.view);
         break;
+      case "captureEvent":
+        onCaptureEvent(msg);
+        break;
       case "indexDone":
         onIndexDone(msg.info, msg.error, msg.view);
         break;
@@ -336,6 +348,20 @@
     state.filterId = msg.info.filterId;
     state.indexing = !!msg.info.indexing;
     state.indexFraction = null;
+    const capture = msg.info.capture;
+    state.capture = capture
+      ? {
+          running: !!capture.running,
+          interfaces: capture.interfaces || [],
+          filter: capture.filter || "",
+          startedAt: capture.startedAt || Date.now() / 1000,
+          packets: capture.packets || 0,
+          bytes: capture.bytes || 0,
+          seconds: 0,
+          dropped: capture.dropped ?? null,
+        }
+      : null;
+    tickCapture();
     state.filtering = false;
     state.filterFraction = null;
     state.filterPartial = false;
@@ -565,6 +591,8 @@
     if (!state.indexing || !state.info) {
       return;
     }
+    // Live capture: while the end of the list is in view, it stays in view.
+    const follow = !!state.capture?.running && atListEnd();
     state.info.frames = frames;
     state.indexFraction = fraction;
     const matches = viewCount(view);
@@ -573,7 +601,61 @@
     } else if (matches !== null && matches !== state.total) {
       growList(matches);
     }
+    if (follow) {
+      el.viewport.scrollTop = el.viewport.scrollHeight;
+    }
     updateStatus();
+  }
+
+  /** Whether the list is scrolled to its end (or is too short to scroll). */
+  function atListEnd() {
+    const vp = el.viewport;
+    return vp.scrollTop + vp.clientHeight >= vp.scrollHeight - state.rowHeight * 1.5;
+  }
+
+  /**
+   * The backend's "capture" notification: statistics while capturing, then "stopped".
+   * @param {any} msg
+   */
+  function onCaptureEvent(msg) {
+    const capture = state.capture;
+    if (!capture) {
+      return;
+    }
+    capture.packets = Number(msg.packets) || capture.packets;
+    capture.bytes = Number(msg.bytes) || capture.bytes;
+    capture.seconds = Number(msg.seconds) || capture.seconds;
+    if (msg.event === "stopped") {
+      capture.running = false;
+      capture.dropped = typeof msg.dropped === "number" ? msg.dropped : null;
+      if (msg.error) {
+        showNotice(`The capture stopped: ${msg.error}`);
+      }
+    }
+    tickCapture();
+  }
+
+  let captureTimer = 0;
+  /** Show the capture's state in the status bar (and keep its clock running). */
+  function tickCapture() {
+    clearTimeout(captureTimer);
+    const capture = state.capture;
+    el.statusCapture.classList.toggle("hidden", !capture);
+    if (!capture) {
+      return;
+    }
+    const on = capture.interfaces.join(", ");
+    el.statusCapture.classList.toggle("stopped", !capture.running);
+    el.statusCapture.title = capture.filter ? `Capture filter: ${capture.filter}` : "";
+    if (!capture.running) {
+      // What was captured, until the capture is reloaded as a plain file.
+      const dropped = capture.dropped ? ` · ${capture.dropped.toLocaleString()} dropped` : "";
+      el.captureText.textContent = `Captured on ${on} in ${lib.formatDuration(capture.seconds)}${dropped}`;
+      return;
+    }
+    const seconds = Math.max(capture.seconds, Date.now() / 1000 - capture.startedAt);
+    el.captureText.textContent = `Capturing on ${on} · ${lib.formatDuration(seconds)} · ${lib.formatBytes(capture.bytes)}`;
+    captureTimer = window.setTimeout(tickCapture, 1000);
   }
 
   /**
@@ -584,6 +666,11 @@
     state.indexing = false;
     state.indexFraction = null;
     state.info = info;
+    const captured = !!state.capture;
+    if (state.capture) {
+      state.capture.running = false;
+      tickCapture();
+    }
     const matches = viewCount(view);
     if (!state.appliedFilter) {
       state.total = info.frames;
@@ -597,6 +684,10 @@
     updateStatus();
     if (error) {
       showNotice(`Indexing stopped after ${info.frames.toLocaleString()} packets: ${error}`);
+    }
+    if (captured && state.appliedFilter) {
+      // The filter only saw the packets captured by the time it ran: run it again.
+      void applyFilter(state.appliedFilter);
     }
   }
 
@@ -655,7 +746,11 @@
       return;
     }
     if (state.indexing) {
-      showNotice("Sorting is available when indexing finishes.");
+      showNotice(
+        state.capture
+          ? "Sorting is available when the capture stops."
+          : "Sorting is available when indexing finishes.",
+      );
       return;
     }
     if (state.filtering) {
@@ -3128,6 +3223,7 @@
   });
 
   el.statusTime.addEventListener("click", () => vscode.postMessage({ type: "pickTimeFormat" }));
+  el.captureStop.addEventListener("click", () => vscode.postMessage({ type: "stopCapture" }));
   el.statusNames.addEventListener("click", () =>
     vscode.postMessage({ type: "pickNameResolution" }),
   );
@@ -3493,7 +3589,7 @@
       return;
     }
     const parts = [`Packets: ${info.frames.toLocaleString()}`];
-    if (state.indexing) {
+    if (state.indexing && !state.capture) {
       const pct =
         state.indexFraction !== null ? ` (${Math.round(state.indexFraction * 100)}%)` : "";
       parts[0] = `Indexing… ${info.frames.toLocaleString()} packets so far${pct}`;

@@ -35,9 +35,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import coloring, comments, navigation, objects, pdml, stats
+from . import coloring, comments, editing, navigation, objects, pdml, stats
 from .cache import FrameIndex, LruCache, RowStore, sort_frames, sort_frames_by_key
 from .cancellation import CancelledError, CancelToken
+from .capture import (
+    CaptureOptions,
+    LiveCapture,
+    capture_error,
+    dumpcap_command,
+    filter_problem,
+    parse_interfaces,
+)
 from .export import (
     CAPTURE_FORMATS,
     DISSECTION_FORMATS,
@@ -228,6 +236,8 @@ class _Open:
     comments: dict[int, list[str]] = field(default_factory=dict)
     comments_error: str | None = None
     comments_ready: threading.Event = field(default_factory=threading.Event)
+    # A live capture writing this file (capture_start), running or not.
+    capture: LiveCapture | None = None
 
     def frame_count(self) -> int:
         """Frames known so far: during a streaming open, the rows published
@@ -256,6 +266,13 @@ class _PassProgress:
         self.bytes_seen = 0
         self.last_emit = 0.0
         self.started = time.monotonic()
+
+    def ready(self) -> None:
+        """Hand the store over now, rows or not (a live capture may be quiet)."""
+        if self.on_rows is not None:
+            on_rows, self.on_rows = self.on_rows, None
+            self.store.rows.publish()
+            on_rows(self.store)
 
     def row(self, number: int, rest: bytes) -> None:
         rows = self.store.rows
@@ -336,6 +353,9 @@ class _Filtering:
     running: bool = True
     done: threading.Event = field(default_factory=threading.Event)
     future: Future[None] | None = None
+    # Started while a live capture was running: it only saw the packets
+    # captured by then, so its result is never cached.
+    during_capture: bool = False
 
 
 @dataclass(slots=True)
@@ -349,6 +369,9 @@ class _View:
     live: _Filtering | None = None
     # The filter pass stopped early ("stopped", or tshark's error): matches so far.
     partial: str | None = None
+    # Its filter ran while a live capture was still writing the file: applying
+    # the same filter again reruns it.
+    stale: bool = False
 
 
 class PcapService:
@@ -506,7 +529,7 @@ class PcapService:
                     view.matched = view.ordered = shown
                 if not live.running and not indexing:
                     view.live = None  # final: sorting etc. work from now on
-                    if view.partial is None:
+                    if view.partial is None and not live.during_capture:
                         self._filters.put(view.expr, view.matched)
             return self._file, view
 
@@ -532,6 +555,74 @@ class PcapService:
             old.live.token.cancel()
         self._view = view
 
+    # ------------------------------------------------------------------ live capture
+
+    def list_interfaces(self, _params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
+        """The interfaces dumpcap can capture on (``dumpcap -D -M``)."""
+        command = dumpcap_command(self._require_tshark().path)
+        res = run([*command, "-D", "-M"], ctx.token)
+        interfaces = parse_interfaces(res.stdout.decode("utf-8", "replace"))
+        if res.returncode != 0 and not interfaces:
+            raise capture_error(res.stderr, res.returncode, "dumpcap could not list interfaces")
+        return {"interfaces": [i.to_json() for i in interfaces]}
+
+    def validate_capture_filter(
+        self, params: dict[str, Any], ctx: RequestContext
+    ) -> dict[str, Any]:
+        """Compile a capture (BPF) filter for an interface (``dumpcap -d``).
+        ``checked: false`` when dumpcap couldn't try (e.g. no permission to
+        open the interface): the capture itself then reports the problem."""
+        expr = param(params, "filter", str, "").strip()
+        interface = param(params, "interface", str)
+        if not expr:
+            return {"valid": True, "checked": True}
+        command = dumpcap_command(self._require_tshark().path)
+        res = run([*command, "-i", interface, "-f", expr, "-d"], ctx.token)
+        problem = filter_problem(res.stderr)
+        if problem:
+            return {"valid": False, "checked": True, "error": problem}
+        if res.returncode != 0 or "dumpcap: " in res.stderr:
+            message = capture_error(res.stderr, res.returncode, "dumpcap failed").args[0]
+            return {"valid": True, "checked": False, "message": message}
+        return {"valid": True, "checked": True}
+
+    def capture_start(self, params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
+        """Capture live into ``dest`` (a new pcapng file) and show it like a
+        streaming ``open`` (same parameters, minus ``path`` and ``cache``).
+
+        ``interfaces`` (dumpcap names), ``filter`` (capture filter), ``limits:
+        {packets, seconds, bytes}``, ``promiscuous`` (default true), ``snaplen``.
+        Returns once dumpcap captures (ToolError with its message, and how to
+        allow capturing, if it can't), with ``indexing: true`` and ``capture``.
+        "capture" notifications report ``stats`` (packets, bytes, seconds) and
+        ``stopped`` (plus ``dropped`` and ``error``); the index pass then ends
+        with the usual "index" ``done``. ``capture_stop`` stops it.
+        """
+        dest = Path(param(params, "dest", str)).expanduser()
+        if not dest.is_absolute():
+            raise InvalidParamsError("dest must be an absolute path")
+        interfaces = tuple(str_list(params, "interfaces"))
+        if not interfaces or any(not i.strip() for i in interfaces):
+            raise InvalidParamsError("interfaces must name at least one interface")
+        limits = param(params, "limits", dict, {})
+        options = CaptureOptions(
+            interfaces=interfaces,
+            capture_filter=param(params, "filter", str, "").strip(),
+            packets=_positive(limits, "packets", int),
+            seconds=_positive(limits, "seconds", float),
+            max_bytes=_positive(limits, "bytes", int),
+            promiscuous=bool(params.get("promiscuous", True)),
+            snaplen=_positive(params, "snaplen", int),
+        )
+        return self._open(params, ctx, live=(options, dest))
+
+    def capture_stop(self, _params: dict[str, Any], _ctx: RequestContext) -> dict[str, Any]:
+        """Stop the live capture (``stopped: false`` if none is running). The
+        packets captured so far stay; "capture" ``stopped`` and "index" ``done`` follow."""
+        with self._lock:
+            capture = self._file.capture if self._file is not None else None
+        return {"stopped": capture is not None and capture.stop()}
+
     # ------------------------------------------------------------------ open
 
     def open(self, params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
@@ -551,7 +642,16 @@ class PcapService:
         saved index, the colors saved for these rules are used, if any (else no
         ``coloring``: run set_coloring).
         """
-        path = _readable_capture(param(params, "path", str))
+        return self._open(params, ctx)
+
+    def _open(
+        self,
+        params: dict[str, Any],
+        ctx: RequestContext,
+        live: tuple[CaptureOptions, Path] | None = None,
+    ) -> dict[str, Any]:
+        """``open``, or with ``live`` (capture_start) a capture into that file."""
+        path = _readable_capture(param(params, "path", str)) if live is None else live[1]
         options = DissectionOptions.from_params(
             str_list(params, "lua"),
             str_list(params, "decodeAs"),
@@ -564,16 +664,17 @@ class PcapService:
         ]
         requested_columns = list(columns)  # _index_pass removes fields tshark rejects
         tshark = self._require_tshark().with_options(options)
-        stream = bool(params.get("stream"))
-        cache = _cache_from(params.get("cache"))
+        stream = bool(params.get("stream")) or live is not None
+        cache = _cache_from(params.get("cache")) if live is None else None
         inline = _inline_coloring(params.get("coloring"))
+        command = dumpcap_command(tshark.path) if live is not None else []
 
         with self._lock:
             self._close_file()
             self._work_dir = Path(tempfile.mkdtemp(prefix="pcapviewer-"))
             work_dir = self._work_dir
 
-        info = CaptureInfo(path=str(path), size=path.stat().st_size)
+        info = CaptureInfo(path=str(path), size=path.stat().st_size if live is None else 0)
         info.warnings += options.check_scripts()
         key = self._index_key(tshark, path, options, requested_columns, ctx) if cache else None
         if cache is not None and key is not None:
@@ -581,17 +682,42 @@ class PcapService:
             if hit is not None:
                 return self._open_cached(path, tshark, hit, work_dir, cache, key, inline)
 
-        info_future = self._pool.submit(self._capinfos, tshark, path, ctx.token)
+        capture: LiveCapture | None = None
+        info_future: Future[dict[str, Any]] | None = None
+        if live is None:
+            info_future = self._pool.submit(self._capinfos, tshark, path, ctx.token)
+        else:
+            capture = LiveCapture(command, live[0], path, lambda e: self.notify("capture", e))
+            capture.start(ctx.token)  # raises when dumpcap can't capture
         indexing = _Indexing(token=CancelToken(), report=ctx.progress, inline=inline)
         ctx.token.on_cancel(indexing.token.cancel)
+        if capture is not None:
+            indexing.token.on_cancel(capture.abort)
         indexing.future = self._pool.submit(
             self._run_index, tshark, path, work_dir, columns, info, info_future, indexing,
-            cache, key,
+            cache, key, capture,
         )  # fmt: skip
         wait_for = indexing.first if stream else indexing.done
         while not wait_for.wait(0.1):
             ctx.token.raise_if_cancelled()
         ctx.token.raise_if_cancelled()
+        rejected = {c for c in requested_columns if c not in columns}
+        return self._attach(path, tshark, info, indexing, columns, rejected, cache, key, capture)
+
+    def _attach(
+        self,
+        path: Path,
+        tshark: Tshark,
+        info: CaptureInfo,
+        indexing: _Indexing,
+        columns: list[str],
+        rejected: set[str],
+        cache: IndexCache | None,
+        key: str | None,
+        capture: LiveCapture | None,
+    ) -> dict[str, Any]:
+        """Make the capture being indexed the open one; ``open``'s result."""
+        inline = indexing.inline
         with self._lock:
             if indexing.error is not None:
                 raise indexing.error
@@ -603,11 +729,15 @@ class PcapService:
                 info,
                 indexing.store,
                 columns=columns,
-                rejected={c for c in requested_columns if c not in columns},
+                rejected=rejected,
                 cache=cache,
                 cache_key=key,
+                capture=capture,
             )
-            self._pool.submit(self._load_comments, self._file)
+            if capture is None:
+                self._pool.submit(self._load_comments, self._file)
+            else:
+                self._file.comments_ready.set()  # dumpcap writes no packet comments
             if not complete:
                 info.frames = len(indexing.store.rows)
                 indexing.attached = True
@@ -638,6 +768,8 @@ class PcapService:
         result["indexing"] = indexing
         # Comment edits can be saved into the file itself only if it is plain pcapng.
         result["comments"] = {"inPlace": comments.is_pcapng(f.path)}
+        if f.capture is not None:
+            result["capture"] = f.capture.describe()
         return result
 
     def _run_index(
@@ -647,14 +779,16 @@ class PcapService:
         work_dir: Path,
         columns: list[str],
         info: CaptureInfo,
-        info_future: Future[dict[str, Any]],
+        info_future: Future[dict[str, Any]] | None,
         indexing: _Indexing,
         cache: IndexCache | None,
         key: str | None,
+        capture: LiveCapture | None = None,
     ) -> None:
         """The index pass (in the pool). Rows become visible as they come
-        (``indexing.first`` once there are some); finishing it completes the
-        capture's info, updates an attached (streaming) capture and saves the index."""
+        (``indexing.first`` once there are some; at once for a live capture);
+        finishing it completes the capture's info, updates an attached
+        (streaming) capture and saves the index."""
         # Not `progress=indexing.report`: open() swaps it for notifications when it returns.
         ctx = RequestContext(token=indexing.token, progress=lambda p: indexing.report(p))  # noqa: PLW0108
 
@@ -665,10 +799,17 @@ class PcapService:
         try:
             base = self._index_pass(
                 tshark, path, work_dir, columns, info, ctx, base=True, on_rows=rows_ready,
-                inline=indexing.inline,
+                inline=indexing.inline, live=capture,
             )  # fmt: skip
             indexing.store = base
-            meta = info_future.result()
+            if capture is not None:
+                capture.join()  # the file is complete
+                self._capture_warnings(info, capture)
+                info.size = path.stat().st_size
+                meta = self._capinfos(tshark, path, indexing.token)
+            else:
+                assert info_future is not None
+                meta = info_future.result()
             for name in ("start_time", "end_time", "link_type", "file_type"):
                 if getattr(info, name) is None and meta.get(name) is not None:
                     setattr(info, name, meta[name])
@@ -676,6 +817,10 @@ class PcapService:
                 info.start_time = self._first_epoch(tshark, path, indexing.token)
         except BaseException as exc:  # noqa: BLE001 - handed to `open` or the client
             indexing.error = exc
+            if capture is not None:
+                capture.abort()
+                capture.close_reader()
+                capture.join()
         with self._lock:
             if indexing.error is None:
                 assert indexing.store is not None
@@ -706,6 +851,13 @@ class PcapService:
             if inline is not None and inline.enabled:
                 extra = {"colored": inline.colored, "errors": inline.summary()["errors"]}
                 cache.save_colors(key, rules_key(inline.raw), inline.colors, extra)
+
+    @staticmethod
+    def _capture_warnings(info: CaptureInfo, capture: LiveCapture) -> None:
+        if capture.error:
+            info.warnings.append(f"The capture stopped: {capture.error}")
+        if capture.dropped:
+            info.warnings.append(f"{capture.dropped:,} packets were dropped while capturing")
 
     def _index_progress(self, progress: Any) -> None:
         """A streaming open's "index" progress notification. With a filter
@@ -871,6 +1023,7 @@ class PcapService:
         base: bool,
         on_rows: Callable[[_Store], None] | None = None,
         inline: _InlineColoring | None = None,
+        live: LiveCapture | None = None,
     ) -> _Store:
         """Run one ``-T fields`` pass, writing every frame's row to a RowStore.
 
@@ -880,6 +1033,11 @@ class PcapService:
         (FIRST_BATCH rows, or FIRST_BATCH_S with at least one). With ``inline``
         (base pass only), the coloring rules are evaluated too: the last field
         is the matching rule, kept in ``inline.colors`` (not in the row store).
+
+        With ``live``, tshark reads the capture's pipe (``-r - -l``) and
+        ``on_rows`` gets the store at once. That stream can be read only once,
+        so the fields are first tried against the empty capture (tshark checks
+        them before reading any packet) and the retries happen there.
         """
         # (name the caller asked for, name actually passed to tshark)
         pairs = [(c.field, c.field) for c in BASE_COLUMNS] if base else []
@@ -889,7 +1047,7 @@ class PcapService:
             pairs += [(fld, fld) for fld in UNRESOLVED_FIELDS]
         legacy = {c.field: c.legacy_field for c in BASE_COLUMNS}
         size = max(1, info.size)
-        overhead = _RECORD_OVERHEAD.get(sniff_format(path) or "") if base else None
+        overhead = _RECORD_OVERHEAD.get(sniff_format(path) or "") if base and not live else None
         if not base:
             inline = None
         env = self._coloring_env(tshark, work_dir, inline, ctx) if inline else None
@@ -908,16 +1066,23 @@ class PcapService:
                 color_args = ["--color"]
                 inline.colors, inline.colored = array("B", [0]), 0
             column_args = ["-o", _UNRESOLVED_FORMAT] if unresolved else []
-            argv = tshark.argv(*column_args, *color_args, *_fields_args(fields), capture=str(path))
+            options = [*column_args, *color_args, *_fields_args(fields)]
             store = _Store(rows, tuple(name for name, _ in pairs))
             tracker = _PassProgress(ctx, store, on_rows, size, overhead)
             try:
-                lines = stream_lines(argv, result, ctx.token, env=env)
+                lines = _pass_lines(tshark, path, options, result, ctx, env, live, tracker)
                 bad_lines = _read_rows(
-                    lines, rows, tracker, base=base, inline=inline, unresolved=unresolved
+                    lines or iter(()),
+                    rows,
+                    tracker,
+                    base=base,
+                    inline=inline,
+                    unresolved=unresolved,
                 )
             finally:
                 rows.finish()
+            # (A live pass that fails after its probe has no rejected fields to
+            # retry without: the stream is read once.)
             if result.lines == 0 and result.returncode not in (0, None):
                 rows.close()
                 store_path.unlink(missing_ok=True)
@@ -1011,7 +1176,12 @@ class PcapService:
             seq = self._filter_seq
             current = self._view
             indexing = self._indexing is not None
-        if current is not None and current.expr == expr and current.partial is None:
+        if (
+            current is not None
+            and current.expr == expr
+            and current.partial is None
+            and not current.stale
+        ):
             return self._filter_result(current)
 
         matched = self._filters.get(expr) if expr else FrameIndex.all(f.info.frames)
@@ -1048,7 +1218,9 @@ class PcapService:
         self, f: _Open, expr: str, seq: int, current: _View | None, ctx: RequestContext
     ) -> dict[str, Any]:
         """Show a new view whose matches arrive from a background filter pass."""
-        live = _Filtering(expr)
+        live = _Filtering(
+            expr, during_capture=f.capture is not None and not f.capture.ended.is_set()
+        )
         with self._lock:
             if seq != self._filter_seq:
                 raise CancelledError("superseded by a newer filter")
@@ -1056,6 +1228,7 @@ class PcapService:
             empty = FrameIndex.of(())
             # Capture order while matches arrive; a sort applies once the pass is done.
             view = _View(self._next_filter_id, expr, empty, None, empty, live=live)
+            view.stale = live.during_capture
             self._install_view(view)
             live.future = self._pool.submit(self._filter_pass, f, view, live)
         deadline = time.monotonic() + FIRST_BATCH_S
@@ -1120,7 +1293,12 @@ class PcapService:
                 live.version += 1
             live.done.set()
             # Matches beyond a streaming open's rows so far can't be reused as they are.
-            complete = matched is not None and self._indexing is None and self._file is f
+            complete = (
+                matched is not None
+                and self._indexing is None
+                and self._file is f
+                and not live.during_capture
+            )
             if complete and matched is not None:
                 self._filters.put(live.expr, matched)
             event: dict[str, Any] | None = None
@@ -2382,6 +2560,72 @@ class PcapService:
                 raise ToolError(res.stderr.strip() or "mergecap failed", res.stderr, res.returncode)
         return {"ok": True, "path": str(dest), "size": dest.stat().st_size, "inputs": len(inputs)}
 
+    # ------------------------------------------------------------------ editing
+
+    def edit_capture(self, params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
+        """Write an edited copy of the open capture with editcap (editing.py):
+        ``operation`` (timeShift, dedup, keep, truncate, injectSecrets or split)
+        and its parameters. The result goes to ``dest`` (pcapng, appears once
+        complete) or, for split, into the existing folder ``dir`` as several
+        files (never overwriting one). Unsaved comment edits are not included.
+        Returns ``{path | files, packets, removed?}``.
+        """
+        f = self._require_file()
+        self._require_indexed()  # (a live capture is still writing the file)
+        operation = param(params, "operation", str)
+        options, selections = editing.editcap_options(operation, params, f.info.frames)
+        try:
+            editcap = find_tool("editcap", sibling_of=f.tshark.path)
+        except ToolNotFoundError as exc:
+            raise ToolError("editing captures needs editcap (part of Wireshark)") from exc
+        ctx.progress({"phase": "edit", "fraction": None})
+        if operation == "split":
+            return self._split_capture(f, editcap, options, params, ctx)
+        dest = check_destination(param(params, "dest", str), f.path)
+        with atomic_output(dest) as tmp:
+            argv = [str(editcap), "-F", "pcapng", *options, str(f.path), str(tmp), *selections]
+            res = run(argv, ctx.token)
+            if res.returncode != 0 or not tmp.exists():
+                raise ToolError(res.stderr.strip() or "editcap failed", res.stderr, res.returncode)
+        result: dict[str, Any] = {"path": str(dest), "packets": comments.packet_count(dest)}
+        if operation == "dedup":
+            result["removed"] = editing.skipped_packets(res.stderr) or 0
+        return result
+
+    def _split_capture(
+        self,
+        f: _Open,
+        editcap: Path,
+        options: list[str],
+        params: dict[str, Any],
+        ctx: RequestContext,
+    ) -> dict[str, Any]:
+        """editcap -c/-i into a scratch folder inside ``dir``, then each piece
+        moved next to it under a name not taken yet."""
+        folder = Path(param(params, "dir", str)).expanduser()
+        if not folder.is_absolute() or not folder.is_dir():
+            raise InvalidParamsError(f"folder does not exist: {folder}")
+        name = param(params, "name", str, "") or f"{f.path.name.split('.')[0]}.pcapng"
+        name = objects.safe_name(Path(name).name)
+        if not name.lower().endswith(".pcapng"):
+            name += ".pcapng"
+        scratch = Path(tempfile.mkdtemp(prefix=".pcapviewer-split-", dir=folder))
+        try:
+            res = run([str(editcap), "-F", "pcapng", *options, str(f.path), str(scratch / name)],
+                      ctx.token)  # fmt: skip
+            pieces = sorted(scratch.iterdir())
+            if res.returncode != 0 or not pieces:
+                raise ToolError(res.stderr.strip() or "editcap failed", res.stderr, res.returncode)
+            taken: set[str] = set()
+            files = []
+            for piece in pieces:
+                target = objects.unique_path(folder, piece.name, taken)
+                piece.replace(target)
+                files.append(str(target))
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+        return {"files": files, "packets": f.info.frames}
+
     # ------------------------------------------------------------------ flow graph
 
     def flow_graph(self, params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
@@ -2859,6 +3103,30 @@ def _drop_rejected(
     return changed
 
 
+def _pass_lines(
+    tshark: Tshark,
+    path: Path,
+    options: list[str],
+    result: StreamResult,
+    ctx: RequestContext,
+    env: dict[str, str] | None,
+    live: LiveCapture | None,
+    tracker: _PassProgress,
+) -> Iterable[bytes] | None:
+    """An index pass's output lines. A live capture's pipe can be read once,
+    so its fields are tried against the empty capture first: None if tshark
+    rejected them (``result`` then holds its complaint, for a retry)."""
+    if live is None:
+        return stream_lines(tshark.argv(*options, capture=str(path)), result, ctx.token, env=env)
+    probe = run(tshark.argv(*options, capture=str(EMPTY_CAPTURE.get())), ctx.token, env)
+    if probe.returncode != 0:
+        result.returncode, result.stderr = probe.returncode, probe.stderr
+        return None
+    tracker.ready()
+    argv = tshark.argv("-l", *options, capture="-")
+    return stream_lines(argv, result, ctx.token, env=env, stdin=live.take_reader())
+
+
 def _finish_index_pass(
     info: CaptureInfo,
     result: StreamResult,
@@ -2937,6 +3205,20 @@ def parse_tcp_graph(text: str) -> dict[str, Any]:
             ]
         )
     return {"endpoints": endpoints[:2], "fields": list(TCP_GRAPH_POINT), "points": points}
+
+
+def _positive[T: (int, float)](params: dict[str, Any], key: str, kind: type[T]) -> T | None:
+    """An optional positive number parameter (None when absent or 0)."""
+    raw = params.get(key)
+    if raw is None or raw == 0:
+        return None
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        raise InvalidParamsError(f"{key} must be a number")
+    if kind is int and not float(raw).is_integer():
+        raise InvalidParamsError(f"{key} must be a whole number")
+    if raw < 0:
+        raise InvalidParamsError(f"{key} must be positive")
+    return kind(raw)
 
 
 def _comment_edits(params: dict[str, Any], frames: int) -> dict[int, str | None]:
@@ -3168,6 +3450,10 @@ def rpc_methods(service: PcapService) -> dict[str, Callable[[dict[str, Any], Req
     return {
         "initialize": service.initialize,
         "open": service.open,
+        "list_interfaces": service.list_interfaces,
+        "validate_capture_filter": service.validate_capture_filter,
+        "capture_start": service.capture_start,
+        "capture_stop": service.capture_stop,
         "capture_info": service.capture_info,
         "validate_filter": service.validate_filter,
         "set_filter": service.set_filter,
@@ -3189,6 +3475,7 @@ def rpc_methods(service: PcapService) -> dict[str, Callable[[dict[str, Any], Req
         "field_types": service.field_types,
         "export": service.export,
         "merge": service.merge,
+        "edit_capture": service.edit_capture,
         "flow_graph": service.flow_graph,
         "tcp_graph": service.tcp_graph,
         "set_comments": service.set_comments,

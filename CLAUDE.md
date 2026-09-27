@@ -74,6 +74,10 @@ wireshark`, `C:\Program Files\Wireshark` added to PATH): lint, backend and
   pure settings helpers. `src/commands/` command implementations
   (`export.ts`, `coloring.ts`, `dissectors.ts`, `tls.ts`, `merge.ts`, …).
   `src/rotation.ts` recognises rotated capture pieces (pure).
+  `src/captureModel.ts` pure capture/editing helpers (file names, durations,
+  date-times as bigint ns); `src/tempCaptures.ts` unsaved captures;
+  `src/commands/capture.ts` and `editCapture.ts` (start/stop, editing),
+  `src/commands/withBackend.ts` (active or short-lived backend).
 - `src/webview/` plain JS/CSS/HTML (no build step). `lib.js` = pure helpers
   shared with Node tests; `main.js` = UI. Type-checked via JSDoc +
   `tsconfig.webview.json`.
@@ -90,7 +94,9 @@ wireshark`, `C:\Program Files\Wireshark` added to PATH): lint, backend and
   expressions, hex parsing, frame-set filters, time formatting), `export.py` (destination
   checks, atomic output, CSV/JSON writers), `objects.py` (export objects:
   linking files to packets, safe names), `comments.py` (pcapng packet
-  comments, editcap options), `protocol.py` (error codes,
+  comments, editcap options, packet counts), `capture.py` (live capture:
+  dumpcap interfaces, filters, the pcapng tee), `editing.py` (editcap options
+  of capture editing), `protocol.py` (error codes,
   request context), `cancellation.py`, `index_cache.py` (saved indexes),
   `procs.py` (stopping children, also
   when the kill is refused), `sandbox.py` (AppArmor/Snap detection and hints).
@@ -100,7 +106,8 @@ wireshark`, `C:\Program Files\Wireshark` added to PATH): lint, backend and
   steps in its `conftest.py`, feature tag `@tshark` → skip without tshark,
   `@lua` → skip as root), `test/extension/unit` mocha (Node), `test/extension/suite`
   VS Code smoke test, `test/webview` mocha (lib + Chromium e2e), `test/fixtures`
-  scapy-generated captures, `test/perf/bench.py`.
+  scapy-generated captures and `fake_dumpcap.py` (a stand-in dumpcap for
+  capture tests: `PCAP_VIEWER_DUMPCAP` = JSON argv), `test/perf/bench.py`.
 
 ## Rules (from the brief — do not break)
 
@@ -115,8 +122,9 @@ wireshark`, `C:\Program Files\Wireshark` added to PATH): lint, backend and
   cancels requests and kills tshark (`PROCESSES.kill_all`) → SIGTERM/SIGKILL
   (tree kill with `taskkill /T` on Windows) as fallbacks.
 - Never call `proc.kill()`/`terminate()` directly: use `procs.kill_process`
-  (never raises) and `procs.stop_process` (reaps, closes pipes). A sandbox can
-  refuse the signal (see _Sandboxed tshark_).
+  (never raises) and `procs.stop_process` (reaps, closes pipes), or
+  `procs.interrupt_process` (SIGINT for a clean stop; a kill on Windows). A
+  sandbox can refuse the signal (see _Sandboxed tshark_).
 
 ## Writing acceptance scenarios
 
@@ -559,6 +567,80 @@ transport,external}`, `open {names}`): `DissectionOptions.names` holds the
   sent more data, draws at most 6000 marks, and puts the time axis around the
   stream (`lib.niceRange`). One panel per editor; showing it again switches
   stream. Opened from the command or the row menu (`tcpGraph` message).
+- **Live capture** (`capture.py`, `capture_start {dest, interfaces, filter,
+limits: {packets, seconds, bytes}, promiscuous, snaplen}` + the open
+  parameters minus `path`/`cache`, `capture_stop`, `list_interfaces` =
+  `dumpcap -D -M`, `validate_capture_filter` = `dumpcap -i -f -d`, which exits
+  0 either way: `filter_problem` reads stderr). `dumpcap -q … -w -` writes
+  pcapng to its stdout (it flushes per packet on a pipe); `LiveCapture` cuts
+  the stream into complete blocks (`_Blocks`, both byte orders) and writes
+  them to `dest` and to an `os.pipe()` that the index pass reads as `tshark
+-r - -l` (`stream_lines(stdin=fd)`), so rows appear as packets arrive and
+  `dest` is a valid pcapng at every block boundary: detail, streaming filters
+  and follow read it while it grows. Neither dumpcap nor tshark touch `dest`,
+  so AppArmor's tshark profile doesn't matter. The pipe can be read once, so
+  the index pass first runs its argv against the empty capture (tshark checks
+  `-e` fields before reading) and does its rejected-field retries there
+  (`_pass_lines`). `capture_start` = `_open(live=…)`: returns once dumpcap
+  wrote its first bytes (interfaces open) or failed (`capture_error`: its
+  message plus `permission_hint` per OS), with `indexing: true` and
+  `capture` (`describe()`); `on_rows` is called at once (`_PassProgress.ready`:
+  a quiet interface has no rows). "capture" notifications: `stats` (packets,
+  bytes, seconds, about every second, POSIX only when idle) and `stopped`
+  (`dropped` from dumpcap's "received/dropped" line, `error`); then the
+  usual "index" `done`, after which the capture is a plain file (capinfos
+  runs then; no saved index; no comments to read). Stop: SIGINT
+  (`procs.interrupt_process`), a kill on Windows (only complete blocks are
+  written, so the file stays readable); a refused signal makes the copy loop
+  close dumpcap's stdout. `limits.bytes` is enforced by the copy loop (`-a
+filesize` needs a file), packets/seconds by dumpcap (`-c`, `-a duration`).
+  Closing cancels the index token, which aborts the capture. A streaming
+  filter started while capturing only sees the packets captured so far: its
+  view is `stale` (the same filter reruns) and never cached
+  (`_Filtering.during_capture`); the webview reapplies the filter when a
+  capture's index is done. Host: _PCAP: Start Capture…_ (`commands/capture.ts`:
+  interface QuickPick with the last choice checked, filter InputBox validated
+  by the backend, debounced) creates an empty unsaved capture
+  (`newTemporaryCapture`, named by `captureFileName`) and `queueCapture`s the
+  request, so the document's first load sends `capture_start` (a failed start
+  keeps the request: Reload retries). `session.capturing` →
+  `pcapViewer.capturing` context key (Stop in the editor title) via
+  `onDidChangeCapture`; `load()` while capturing only sets
+  `reloadWhenCaptured` (restarting would end the capture). Webview:
+  `state.capture`, `#status-capture` (red dot, "Capturing on eth0 · 0:12 ·
+  1.2 KB", Stop; after it "Captured on eth0 in 0:12 · N dropped"), the list
+  follows new rows while its end is in view (`atListEnd`), sorting says it
+  waits for the capture. Tests use `fake_dumpcap.py` (replays a pcapng; knows
+  `-D -M`, `-d`, `-c`, `-a duration:`, SIGINT; `FAKE_DUMPCAP_*` env), and a
+  real loopback capture when allowed (CI sets dumpcap's capabilities on
+  Linux).
+- **Unsaved captures** (`tempCaptures.ts`; live captures and editing results):
+  files in `globalStorageUri/captures/<random>/<name>.pcapng`
+  (`isTemporaryCapture` by path). `PcapDocument.temporary`; the provider fires
+  a `CustomDocumentContentChangeEvent` when the first editor resolves, so the
+  tab is dirty: `Ctrl+S` (`saveTemporary`) asks where, writes through
+  `save_comments {dest}` (comment edits included), opens the saved file and
+  closes the unsaved one; Save As works as usual; either stops a running
+  capture first (modal). Revert drops the edits and leaves it clean (closing
+  then discards it). Disposing the document deletes its folder 5 s later
+  (`discardTemporaryCapture`): at shutdown the extension host is gone by then,
+  so a hot-exit backup still finds its file. Activation prunes folders older
+  than 7 days. No saved index for them; no merge offer.
+- **Capture editing** (`editing.py`, `edit_capture {operation, …, dest | dir}`;
+  `commands/editCapture.ts`): one editcap run over the whole file (not the
+  view; comment edits not included) into `dest` via `atomic_output`, `-F
+pcapng` always: `timeShift` `-t` (offset as an exact decimal string; the
+  host parses durations and date-times to bigint ns: `captureModel.ts`),
+  `dedup` `-D N`/`-w S` (editcap reports "N packets seen, M skipped" on
+  stderr), `keep` `-r` + ranges after the file names and/or `-A`/`-B` (epoch
+  seconds; `-B` is exclusive), `truncate` `-s`, `injectSecrets`
+  `--inject-secrets tls,<keylog>` (a Decryption Secrets Block), `split` `-c
+N`/`-i S` into a scratch folder inside `dir`, then each piece moved out
+  under a free name (`objects.unique_path`); editcap's
+  `<name>_NNNNN_<time>.pcapng` names are what `rotation.ts` recognises.
+  Refused while indexing or capturing. Results report `packets`
+  (`comments.packet_count`) and `removed`. The host writes into a new unsaved
+  capture and opens it.
 - **AI filter help** (`src/aiFilter.ts` pure, `src/ai.ts` host, `src/commands/ai.ts`):
   Copilot's inline completions can't reach the webview, so the host uses
   `vscode.lm.selectChatModels({ vendor: "copilot" })` (stable in 1.90 = our
@@ -711,4 +793,4 @@ filters and explaining packets, a quick view for late packets in huge files,
 streaming open and filters with saved indexes, TLS decryption with a key log,
 export of packet dissections, merging captures, a coloring rules editor,
 Export Objects, name resolution, packet comments, the flow graph and TCP
-stream graphs.
+stream graphs, live capture and capture editing.

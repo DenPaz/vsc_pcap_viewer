@@ -18,6 +18,9 @@ jobs:
           echo "wireshark-common wireshark-common/install-setuid boolean false" | sudo debconf-set-selections
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y tshark xvfb
+          # Let dumpcap capture (the loopback live-capture test), as
+          # dpkg-reconfigure wireshark-common would for the wireshark group.
+          sudo setcap cap_net_raw,cap_net_admin=eip /usr/bin/dumpcap
       # Python 3.14 on PATH for the extension (it looks for python3.14/python3);
       # uv uses the same version from .python-version for the dev venv.
       - uses: actions/setup-python@v7

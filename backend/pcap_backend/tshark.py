@@ -245,12 +245,14 @@ class ProcessRegistry:
 PROCESSES = ProcessRegistry()
 
 
-def _popen(argv: Sequence[str], env: Mapping[str, str] | None = None) -> subprocess.Popen[bytes]:
+def _popen(
+    argv: Sequence[str], env: Mapping[str, str] | None = None, stdin: int | None = None
+) -> subprocess.Popen[bytes]:
     # No console window flashing up for every tshark run on Windows.
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if IS_WINDOWS else 0
     return subprocess.Popen(
         list(argv),
-        stdin=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL if stdin is None else stdin,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         creationflags=flags,
@@ -336,15 +338,21 @@ def stream_lines(
     result: StreamResult,
     token: CancelToken | None = None,
     env: Mapping[str, str] | None = None,
+    stdin: int | None = None,
 ) -> Iterator[bytes]:
     """Yield stdout lines (with trailing newline stripped) as the process runs.
 
     ``result`` receives the exit code and stderr when the generator finishes.
     Closing the generator early kills the process. ``env`` replaces the
-    environment when given.
+    environment when given. ``stdin`` is a file descriptor the child reads
+    (e.g. a live capture's pipe); it is closed here once the child has it.
     """
     token = token or CancelToken()
-    proc = _popen(argv, env)
+    try:
+        proc = _popen(argv, env, stdin)
+    finally:
+        if stdin is not None:
+            os.close(stdin)
     PROCESSES.add(proc)
     collector = _StderrCollector(proc)
     collector.start()

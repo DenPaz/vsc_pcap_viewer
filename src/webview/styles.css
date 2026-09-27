@@ -670,6 +670,56 @@ button.icon:hover {
   overflow: hidden;
 }
 
+#status-bar #status-left {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#status-capture {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--vscode-foreground);
+}
+
+#status-capture.hidden {
+  display: none;
+}
+
+#status-capture .status-link {
+  margin-right: 0;
+}
+
+#status-capture.stopped {
+  color: inherit;
+}
+
+#status-capture.stopped .rec-dot,
+#status-capture.stopped .status-link {
+  display: none;
+}
+
+.rec-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--vscode-charts-red, #f14c4c);
+  animation: rec-blink 1.2s steps(2, start) infinite;
+}
+
+@keyframes rec-blink {
+  to {
+    visibility: hidden;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rec-dot {
+    animation: none;
+  }
+}
+
 /* ------------------------------------------------------------------ overlay & menu */
 
 .overlay {

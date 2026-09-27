@@ -49,8 +49,8 @@ def denied(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[subprocess.Popen[by
     started: list[subprocess.Popen[bytes]] = []
     real_popen = ts._popen
 
-    def popen(argv: Any, env: Any = None) -> subprocess.Popen[bytes]:
-        proc = real_popen(argv, env)
+    def popen(argv: Any, env: Any = None, stdin: Any = None) -> subprocess.Popen[bytes]:
+        proc = real_popen(argv, env, stdin)
         proc.kill = proc.terminate = _deny  # type: ignore[method-assign]
         proc.send_signal = _deny  # type: ignore[method-assign]
         started.append(proc)

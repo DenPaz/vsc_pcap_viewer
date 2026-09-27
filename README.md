@@ -8,6 +8,24 @@ by **tshark** (Wireshark's command-line tool), so results match Wireshark exactl
 
 ## Features
 
+- **Live capture**: _PCAP: Start Capture…_ asks for the interfaces (several
+  can be checked) and a capture filter (checked as you type), then opens a new
+  capture that fills as packets arrive, like Wireshark. The list follows new
+  packets while its end is in view; the status bar shows the interfaces, the
+  time and the size with a **Stop** button (also in the editor's title bar and
+  as _PCAP: Stop Capture_). Display filters and the packet details work
+  meanwhile; sorting waits for the end. The capture is unsaved until you save
+  it: `Ctrl+S` asks where, and closing it without saving discards it. Stop
+  conditions: `pcapViewer.capture.stopAfter*`. Capturing needs permission, see
+  [Live capture](#live-capture).
+- **Capture editing** (_PCAP: Edit Capture…_, or each operation on its own):
+  _Time Shift…_ (by an offset such as `-1h`, or so the first packet has a given
+  time), _Remove Duplicate Packets…_ (within N packets or a time window),
+  _Keep Packets in a Range…_ (by number, `1-100, 250, 300-`, or between two
+  times), _Truncate Packets…_ (keep the first N bytes of each), _Split
+  Capture…_ (files of N packets or N seconds) and _Embed TLS Keys in
+  Capture…_ (the key log goes into the pcapng, so it decrypts anywhere). The
+  result opens as a new unsaved capture; the original is never changed.
 - **Packet list** (No., Time, Source, Destination, Protocol, Length, Info) that
   stays smooth on captures with millions of packets: the webview renders only
   the visible rows and the backend pages through a cached index; scrolling
@@ -296,6 +314,22 @@ and in the find bar closes it. On macOS use `Cmd` instead of `Ctrl`. The viewer
 shortcuts only apply while a capture is the active editor and focus isn't in
 the side bar or panel.
 
+### Live capture
+
+The extension runs Wireshark's `dumpcap`, which needs permission to capture:
+
+- **Linux**: `sudo dpkg-reconfigure wireshark-common` (answer _Yes_), then
+  `sudo usermod -aG wireshark $USER` and log in again. Elsewhere,
+  `sudo setcap cap_net_raw,cap_net_admin=eip $(command -v dumpcap)`.
+- **macOS**: install ChmodBPF (_Install ChmodBPF_ in Wireshark's disk image,
+  or `brew install --cask wireshark-chmodbpf`), then log in again.
+- **Windows**: install [Npcap](https://npcap.com) (the Wireshark installer
+  includes it).
+
+Without it, starting a capture says so and explains how to allow it. Until
+saved, a capture lives in the extension's storage; captures left there (a
+crash) are removed after 7 days.
+
 ## Settings
 
 | Setting                                 | Description                                                                                                                                     |
@@ -321,6 +355,10 @@ the side bar or panel.
 | `pcapViewer.ai.enabled`                 | Offer AI help when a language model is available (default `true`)                                                                               |
 | `pcapViewer.ai.allowPacketData`         | Let _Ask Copilot About This Packet…_ / `@pcap /explain` send packet rows and dissection trees (default `false`; asked once; user settings only) |
 | `pcapViewer.ai.allowPacketBytes`        | Also send raw bytes when explaining packets (default `false`; user settings only)                                                               |
+| `pcapViewer.capture.stopAfterPackets`   | Stop a live capture after this many packets (`0`: no limit)                                                                                     |
+| `pcapViewer.capture.stopAfterSeconds`   | Stop a live capture after this many seconds (`0`: no limit)                                                                                     |
+| `pcapViewer.capture.stopAfterMegabytes` | Stop a live capture once its file is this big (`0`: no limit)                                                                                   |
+| `pcapViewer.capture.promiscuous`        | Capture in promiscuous mode (default `true`)                                                                                                    |
 | `pcapViewer.maxCachedFrames`            | Backend cache budget for filter results / sort orders                                                                                           |
 | `pcapViewer.indexCache.enabled`         | Save each capture's packet-list index so reopening it is instant (default `true`)                                                               |
 | `pcapViewer.indexCache.maxSizeMB`       | Disk space the saved indexes may use (default `1024`)                                                                                           |
