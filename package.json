@@ -2,6 +2,11 @@
   "name": "pcap-viewer",
   "displayName": "PCAP Viewer",
   "description": "Wireshark-like packet capture viewer for VS Code, powered by tshark.",
+  "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#0b3a73",
+    "theme": "dark"
+  },
   "version": "0.1.0",
   "publisher": "denpaz",
   "license": "MIT",
@@ -9,19 +14,39 @@
     "type": "git",
     "url": "https://github.com/DenPaz/vsc_pcap_viewer"
   },
+  "homepage": "https://github.com/DenPaz/vsc_pcap_viewer#readme",
+  "bugs": {
+    "url": "https://github.com/DenPaz/vsc_pcap_viewer/issues"
+  },
+  "qna": false,
+  "pricing": "Free",
   "engines": {
     "vscode": "^1.90.0"
   },
   "categories": [
-    "Other",
-    "Visualization"
+    "Visualization",
+    "AI",
+    "Chat",
+    "Other"
   ],
   "keywords": [
     "pcap",
     "pcapng",
     "wireshark",
     "tshark",
-    "network"
+    "network",
+    "packet",
+    "capture",
+    "packet analyzer",
+    "protocol",
+    "dissector",
+    "lua",
+    "tcpdump",
+    "sniffer",
+    "traffic",
+    "tls",
+    "dns",
+    "http"
   ],
   "main": "./out/src/extension.js",
   "activationEvents": [],
@@ -463,6 +488,21 @@
       {
         "command": "pcapViewer.showLog",
         "title": "Show Log",
+        "category": "PCAP"
+      },
+      {
+        "command": "pcapViewer.checkEnvironment",
+        "title": "Check Python and TShark",
+        "category": "PCAP"
+      },
+      {
+        "command": "pcapViewer.openSample",
+        "title": "Open Sample Capture",
+        "category": "PCAP"
+      },
+      {
+        "command": "pcapViewer.openWalkthrough",
+        "title": "Get Started",
         "category": "PCAP"
       }
     ],
@@ -1348,20 +1388,100 @@
           ]
         }
       }
+    ],
+    "walkthroughs": [
+      {
+        "id": "gettingStarted",
+        "title": "Get Started with PCAP Viewer",
+        "description": "Set up Python and TShark, open a capture, and find your way around the viewer.",
+        "steps": [
+          {
+            "id": "python",
+            "title": "Install Python 3.14",
+            "description": "The viewer's backend is a small Python program (standard library only). It needs Python 3.14 or newer.\n[Check Again](command:pcapViewer.checkEnvironment)\nInstalled somewhere else? [Set the Python path](command:workbench.action.openSettings?%5B%22pcapViewer.pythonPath%22%5D).",
+            "media": {
+              "markdown": "media/walkthrough/python.md"
+            },
+            "completionEvents": [
+              "onContext:pcapViewer.pythonFound"
+            ]
+          },
+          {
+            "id": "tshark",
+            "title": "Install TShark",
+            "description": "TShark, Wireshark's command-line dissector, reads the captures. It comes with Wireshark.\n[Check Again](command:pcapViewer.checkEnvironment)\nInstalled somewhere else? [Set the TShark path](command:workbench.action.openSettings?%5B%22pcapViewer.tsharkPath%22%5D).",
+            "media": {
+              "markdown": "media/walkthrough/tshark.md"
+            },
+            "completionEvents": [
+              "onContext:pcapViewer.tsharkFound"
+            ]
+          },
+          {
+            "id": "open",
+            "title": "Open a capture",
+            "description": "Open any .pcap or .pcapng file from the Explorer, or try the sample capture.\n[Open Sample Capture](command:pcapViewer.openSample)",
+            "media": {
+              "markdown": "media/walkthrough/open.md"
+            },
+            "completionEvents": [
+              "onCommand:pcapViewer.openSample",
+              "onContext:pcapViewer.captureOpened"
+            ]
+          },
+          {
+            "id": "filter",
+            "title": "Filter packets",
+            "description": "Type a display filter such as dns or tcp.port == 443 in the filter bar above the packet list. Fields are completed as you type.\n[Apply a Display Filter](command:pcapViewer.applyFilter)",
+            "media": {
+              "markdown": "media/walkthrough/filter.md"
+            },
+            "completionEvents": [
+              "onCommand:pcapViewer.applyFilter",
+              "onContext:pcapViewer.filterApplied"
+            ]
+          },
+          {
+            "id": "analyze",
+            "title": "Follow streams and see statistics",
+            "description": "Follow a TCP stream from a packet's menu, or open the statistics: conversations, endpoints, protocol hierarchy, I/O graph and more.\n[Show Conversations](command:pcapViewer.statistics.conversations)",
+            "media": {
+              "markdown": "media/walkthrough/analyze.md"
+            },
+            "completionEvents": [
+              "onCommand:pcapViewer.statistics.conversations",
+              "onCommand:pcapViewer.followTcpStream"
+            ]
+          },
+          {
+            "id": "ai",
+            "title": "Ask Copilot (optional)",
+            "description": "With GitHub Copilot, get display filters from a description, summaries of a capture and explanations of anomalies. Nothing from your capture is sent until you allow it.\n[Review AI Settings](command:workbench.action.openSettings?%5B%22pcapViewer.ai%22%5D)",
+            "media": {
+              "markdown": "media/walkthrough/ai.md"
+            },
+            "completionEvents": [
+              "onCommand:workbench.action.openSettings",
+              "onSettingChanged:pcapViewer.ai"
+            ]
+          }
+        ]
+      }
     ]
   },
   "scripts": {
     "vscode:prepublish": "pnpm run compile",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "lint": "eslint src test && tsc -p tsconfig.webview.json",
+    "lint": "eslint src test scripts && tsc -p tsconfig.webview.json",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "pnpm run test:unit && pnpm run test:backend",
-    "test:unit": "pnpm run compile && mocha --ui tdd \"out/test/extension/unit/**/*.test.js\" \"test/webview/**/*.test.js\"",
+    "test:unit": "pnpm run compile && mocha --ui tdd \"out/test/extension/unit/**/*.test.js\" \"test/webview/**/*.test.js\" \"test/scripts/**/*.test.mjs\"",
     "test:backend": "uv run pytest",
     "test:extension": "pnpm run compile && node ./out/test/extension/runTest.js",
-    "package": "vsce package --no-dependencies"
+    "package": "vsce package --no-dependencies",
+    "release:prepare": "node scripts/release.mjs prepare"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

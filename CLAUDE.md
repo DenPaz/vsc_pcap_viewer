@@ -19,6 +19,8 @@ user-facing description.
 | Regenerate fixtures       | `uv run python test/fixtures/generate.py`                                                                                                                |
 | Perf check                | `uv run python test/fixtures/generate.py --large 1000000 test/fixtures/large-1m.pcap && uv run python -u test/perf/bench.py test/fixtures/large-1m.pcap` |
 | Package                   | `pnpm run package` (vsce, `--no-dependencies`)                                                                                                           |
+| Prepare a release         | `pnpm run release:prepare 0.2.0` (then commit, tag `v0.2.0`, push the tag: `release.yml`)                                                                |
+| Icon / screenshots        | `node scripts/render-icon.js` / `node scripts/screenshots.js` (after `pnpm run compile`; `CHROMIUM_PATH` for another Chromium)                           |
 | Update dev deps           | `make update` (`ncu -u` within `.ncurc.cjs`, `pnpm install`, `uv lock --upgrade`, `uv sync`)                                                             |
 
 The `Makefile` wraps all of these (`make` lists the targets; `make check` = lint + tests).
@@ -83,6 +85,8 @@ wireshark`, `C:\Program Files\Wireshark` added to PATH): lint, backend and
   date-times as bigint ns); `src/tempCaptures.ts` unsaved captures;
   `src/commands/capture.ts` and `editCapture.ts` (start/stop, editing),
   `src/commands/withBackend.ts` (active or short-lived backend).
+  `src/environment.ts` the setup check (pure); `src/commands/setup.ts` the
+  walkthrough's commands and context keys.
 - `src/webview/` plain JS/CSS/HTML (no build step). `lib.js` = pure helpers
   shared with Node tests; `main.js` = UI. Type-checked via JSDoc +
   `tsconfig.webview.json`.
@@ -106,6 +110,11 @@ wireshark`, `C:\Program Files\Wireshark` added to PATH): lint, backend and
   `procs.py` (stopping children, also
   when the kill is refused), `sandbox.py` (AppArmor/Snap detection and hints).
 - `backend/dissectors/example.lua` sample dissector (UDP/9999).
+- `media/` icon (`icon.svg` → `icon.png`), `sample.pcapng` (a copy of the
+  `mixed.pcapng` fixture that `generate.py` writes), `walkthrough/*.md` (the
+  walkthrough's pages) and `screenshots/` (README only, not packaged).
+- `scripts/` release helper (`release.mjs`, tests in `test/scripts`), icon and
+  screenshot renderers. Not packaged.
 - `test/backend` pytest; `test/backend/acceptance` pytest-bdd scenarios
   (`features/*.feature` = brief's acceptance criteria against the backend,
   steps in its `conftest.py`, feature tag `@tshark` → skip without tshark,
@@ -745,6 +754,36 @@ stream, sessionId}`. The query stays short: expert rows (sanitized by
   default `@pcap` route uses the loop when tools exist and statistics are
   allowed (asking once); tools invoked by other participants use the active
   capture's backend.
+- **Get Started walkthrough** (`contributes.walkthroughs` id `gettingStarted`,
+  pages in `media/walkthrough/`): Python, TShark, open a capture, filter,
+  analyze, AI. The setup steps complete on context keys
+  `pcapViewer.pythonFound`/`tsharkFound`, set by _PCAP: Check Python and
+  TShark_ (`pcapViewer.checkEnvironment`: `checkEnvironment` = `findPython`
+  then a short-lived backend's `initialize`, which locates tshark; returns the
+  status, `{quiet: true}` shows nothing) and by every capture load
+  (`setEnvironmentContext`: a load proves both, a pythonPath/tsharkPath
+  failure clears them). `pcapViewer.captureOpened` and
+  `pcapViewer.filterApplied` complete the next two. A load that fails for a
+  missing tool calls `offerSetupHelp` (_Setup Guide_ opens the walkthrough by
+  `<publisher>.<name>#gettingStarted`, download page, settings). _PCAP: Open
+  Sample Capture_ copies `media/sample.pcapng` to
+  `globalStorageUri/samples/` first, so a comment saved in place never writes
+  into the installed extension. A unit test checks that every step's command
+  links, setting links, media and completion events exist.
+- **Releases** (`scripts/release.mjs`, `.github/workflows/release.yml`):
+  `CHANGELOG.md` keeps `## Unreleased` on top; `prepare <version>` moves it
+  under `## <version> — <date>` and bumps `package.json` (a regex, keeping
+  its formatting); versions are plain x.y.z (the Marketplace has no semver
+  pre-releases). A `v*` tag (or a manual run on one) calls `ci.yml`
+  (`workflow_call`) first, then `check <tag>` (tag = package.json version,
+  and CHANGELOG notes exist), `vsce package`, `gh release create` with the
+  notes (or `upload --clobber` when the release exists), then
+  `vsce publish --skip-duplicate` and `ovsx publish` (pinned, via npx: pnpm
+  would refuse its install scripts), each skipped with a notice when its
+  secret (`VSCE_PAT`, `OVSX_PAT`) is missing. CI uploads the `.vsix` as an
+  artifact. Marketplace details: `icon` (PNG: vsce refuses SVG icons),
+  `galleryBanner`, categories, keywords; README images are relative (vsce
+  rewrites them to the repository), so `media/screenshots/` is not packaged.
 - **Navigation and customisation** (Wireshark-like; all over the _current view_,
   i.e. the filter and sort order, which only the backend knows in full):
   - _Find Packet_ is backend `find_packet`. It turns the search into a display
@@ -852,5 +891,6 @@ filters and explaining packets, a quick view for late packets in huge files,
 streaming open and filters with saved indexes, TLS decryption with a key log,
 export of packet dissections, merging captures, a coloring rules editor,
 Export Objects, name resolution, packet comments, the flow graph and TCP
-stream graphs, live capture and capture editing, and AI capture summaries,
-anomaly explanations and `@pcap` tools.
+stream graphs, live capture and capture editing, AI capture summaries,
+anomaly explanations and `@pcap` tools, and publishing: a release workflow,
+Marketplace details, and the Get Started walkthrough.

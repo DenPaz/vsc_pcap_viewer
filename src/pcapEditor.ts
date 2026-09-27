@@ -4,6 +4,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { BackendClient, ErrorCodes, RpcError, findPython } from "./backendClient";
+import {
+  CAPTURE_OPENED,
+  FILTER_APPLIED,
+  offerSetupHelp,
+  setEnvironmentContext,
+} from "./commands/setup";
 import type { CaptureLimits } from "./captureModel";
 import { discardTemporaryCapture, isTemporaryCapture } from "./tempCaptures";
 import { Settings, getSetting, readQuickDetail, readSettings, updateSetting } from "./config";
@@ -635,6 +641,7 @@ export class PcapEditorSession {
         { timeoutMs: 30_000 },
       );
       this.log.info(`using ${init.version} at ${init.tsharkPath} (python ${py.version})`);
+      setEnvironmentContext(true, true);
       this.post({ type: "loading", message: "Indexing packets…" });
       // A streaming open's "index" events can arrive before the open response:
       // keep them until the viewer has its init, then replay them.
@@ -675,6 +682,7 @@ export class PcapEditorSession {
       this.reportWarnings([...settings.luaWarnings, ...info.warnings]);
       this.indexing = !!info.indexing;
       this.coloringStale = false;
+      void vscode.commands.executeCommand("setContext", CAPTURE_OPENED, true);
       this.post({
         type: "init",
         info,
@@ -994,18 +1002,13 @@ export class PcapEditorSession {
   private fail(message: string, setting?: "tsharkPath" | "pythonPath"): void {
     this.log.error(`${this.uri.fsPath}: ${message}`);
     this.post({ type: "error", message, canReload: true });
-    const actions = setting
-      ? ["Open Settings", ...(setting === "tsharkPath" ? ["Download Wireshark"] : [])]
-      : ["Show Log"];
-    void vscode.window.showErrorMessage(`PCAP Viewer: ${message}`, ...actions).then((choice) => {
-      if (choice === "Open Settings") {
-        void vscode.commands.executeCommand(
-          "workbench.action.openSettings",
-          `pcapViewer.${setting}`,
-        );
-      } else if (choice === "Download Wireshark") {
-        void vscode.env.openExternal(vscode.Uri.parse("https://www.wireshark.org/download.html"));
-      } else if (choice === "Show Log") {
+    if (setting) {
+      setEnvironmentContext(setting !== "pythonPath", false);
+      void offerSetupHelp(this.context, message, setting);
+      return;
+    }
+    void vscode.window.showErrorMessage(`PCAP Viewer: ${message}`, "Show Log").then((choice) => {
+      if (choice === "Show Log") {
         this.log.show();
       }
     });
@@ -1035,6 +1038,7 @@ export class PcapEditorSession {
         this.filter = msg.expr;
         this.filterEmitter.fire(msg.expr);
         if (msg.expr.trim()) {
+          void vscode.commands.executeCommand("setContext", FILTER_APPLIED, true);
           const history = pushHistory(this.history(), msg.expr);
           await this.context.globalState.update(HISTORY_KEY, history);
           this.post({ type: "history", history });

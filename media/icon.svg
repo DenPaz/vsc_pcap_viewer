@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <!-- PCAP Viewer icon: a packet list with a selected row over a waveform.
+       Render to media/icon.png with `node scripts/render-icon.js`. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1c6fd1"/>
+      <stop offset="1" stop-color="#0b3a73"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="240" height="240" rx="44" fill="url(#bg)"/>
+  <!-- packet rows -->
+  <g fill="#ffffff">
+    <rect x="44" y="52" width="24" height="20" rx="5" opacity="0.55"/>
+    <rect x="76" y="52" width="136" height="20" rx="5" opacity="0.55"/>
+    <rect x="44" y="84" width="24" height="20" rx="5" opacity="0.75"/>
+    <rect x="76" y="84" width="104" height="20" rx="5" opacity="0.75"/>
+  </g>
+  <!-- the selected row -->
+  <rect x="36" y="112" width="184" height="36" rx="9" fill="#ffb627"/>
+  <rect x="48" y="122" width="22" height="16" rx="4" fill="#0b3a73" opacity="0.85"/>
+  <rect x="78" y="122" width="126" height="16" rx="4" fill="#0b3a73" opacity="0.85"/>
+  <g fill="#ffffff">
+    <rect x="44" y="156" width="24" height="20" rx="5" opacity="0.75"/>
+    <rect x="76" y="156" width="120" height="20" rx="5" opacity="0.75"/>
+  </g>
+  <!-- traffic over time -->
+  <polyline points="40,214 72,214 88,190 104,222 124,184 142,214 160,200 176,214 216,214"
+    fill="none" stroke="#7fd4ff" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

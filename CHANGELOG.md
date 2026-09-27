@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **Get Started with PCAP Viewer** walkthrough (_Help › Welcome_, or _PCAP:
+  Get Started_): checks Python and tshark and says how to install what's
+  missing on your system, opens a sample capture, and introduces filters,
+  statistics and the optional AI features. _PCAP: Check Python and TShark_
+  runs the check at any time; a capture that can't open because either is
+  missing offers the guide.
+- _PCAP: Open Sample Capture_: a small capture with ARP, ICMP, DNS and HTTP.
+- An icon, screenshots and Marketplace details.
+- Releases: pushing a `v<version>` tag builds the `.vsix` and attaches it to
+  a GitHub release with the version's CHANGELOG notes, and publishes it to the
+  VS Code Marketplace and Open VSX when their tokens are configured.
+
 - Capture summary with Copilot: _PCAP: Summarize Capture with Copilot_ or
   `@pcap /summary` describes the capture from its statistics (properties,
   protocol hierarchy, top conversations and endpoints, expert counts, traffic

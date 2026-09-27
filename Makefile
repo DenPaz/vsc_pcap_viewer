@@ -13,7 +13,8 @@ PERF_ARGS ?= --no-tcp-analysis
 
 .DEFAULT_GOAL := help
 .PHONY: help install update outdated compile watch lint format test test-backend \
-	test-acceptance test-unit test-extension check fixtures large-fixture perf package clean
+	test-acceptance test-unit test-extension check fixtures large-fixture perf package \
+	release-prepare icon screenshots clean
 
 help: ## List the targets
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z_-]+:.*## / {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -87,6 +88,16 @@ perf: ## Benchmark the backend on the large capture (made if missing; PERF_ARGS=
 
 package: ## Build the .vsix (vsce package)
 	$(PNPM) run package
+
+release-prepare: ## Bump the version and date the CHANGELOG (VERSION=x.y.z); then tag and push vx.y.z
+	@test -n "$(VERSION)" || { echo "usage: make release-prepare VERSION=x.y.z"; exit 1; }
+	node scripts/release.mjs prepare $(VERSION)
+
+icon: ## Render media/icon.svg to media/icon.png
+	node scripts/render-icon.js
+
+screenshots: compile ## Render media/screenshots/*.png from the webviews and the sample capture
+	node scripts/screenshots.js
 
 clean: ## Remove build output, test downloads, caches and .vsix files
 	rm -rf out .vscode-test .pytest_cache .ruff_cache .mypy_cache *.vsix

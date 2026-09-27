@@ -11,6 +11,11 @@ src/**/*.ts
 !src/webview/**
 src/webview/**/*.d.ts
 test/**
+# Release/asset scripts, the icon's source and the README's screenshots.
+scripts/**
+media/*.svg
+media/screenshots/**
+*.vsix
 **/.ruff_cache/**
 **/.mypy_cache/**
 **/.pytest_cache/**

@@ -120,6 +120,9 @@ suite("PCAP Viewer smoke test", () => {
       "pcapViewer.askAboutPackets",
       "pcapViewer.summarizeCapture",
       "pcapViewer.askAboutAnomaly",
+      "pcapViewer.checkEnvironment",
+      "pcapViewer.openSample",
+      "pcapViewer.openWalkthrough",
       "pcapViewer.clearIndexCache",
       "pcapViewer.setTlsKeyLogFile",
       "pcapViewer.exportDissections",
@@ -321,6 +324,34 @@ suite("PCAP Viewer smoke test", () => {
     assert.match(await text("pcap_count", { filter: "dns" }), /Not allowed/);
     await vscode.commands.executeCommand("workbench.action.closeAllEditors");
     await waitFor(() => (api.provider.allSessions.length ? undefined : true), 10_000);
+  });
+
+  test("setup: the environment check finds Python and tshark, and the sample opens", async () => {
+    const ext = vscode.extensions.all.find((e) => e.packageJSON.name === "pcap-viewer");
+    const api = (await ext!.activate()) as PcapViewerApi;
+    const status = await vscode.commands.executeCommand<{
+      python: { ok: boolean; version?: string; error?: string };
+      tshark: { ok: boolean; version?: string; error?: string };
+    }>("pcapViewer.checkEnvironment", { quiet: true });
+    assert.ok(status.python.ok, status.python.error);
+    assert.ok(status.tshark.ok, status.tshark.error);
+    assert.match(status.tshark.version ?? "", /^\d+\.\d+\.\d+$/);
+
+    const sample = await vscode.commands.executeCommand<vscode.Uri>("pcapViewer.openSample");
+    // A copy in the extension's storage (which the test run keeps under .vscode-test/).
+    assert.notEqual(sample.fsPath, path.join(ext!.extensionPath, "media", "sample.pcapng"));
+    assert.equal(path.basename(path.dirname(sample.fsPath)), "samples");
+    const session = await waitFor(() =>
+      api.provider.allSessions.find((s) => s.uri.fsPath === sample.fsPath),
+    );
+    const info = await waitFor(() => (indexed(session) ? session.openInfo : undefined));
+    assert.equal(info.frames, 26);
+
+    const [walkthrough] = ext!.packageJSON.contributes.walkthroughs;
+    assert.equal(walkthrough.id, "gettingStarted");
+    // Opening it must not throw (the id is `<publisher>.<name>#gettingStarted`).
+    await vscode.commands.executeCommand("pcapViewer.openWalkthrough");
+    await vscode.commands.executeCommand("workbench.action.closeAllEditors");
   });
 
   test("changing name resolution re-indexes open captures", async () => {

@@ -1,0 +1,80 @@
+name: Release
+
+# Push a tag made by `node scripts/release.mjs prepare <version>` (v<version>):
+# CI runs on the tag, then the .vsix is attached to a GitHub release whose
+# notes are that version's CHANGELOG section. It is also published to the
+# VS Code Marketplace and Open VSX when the VSCE_PAT / OVSX_PAT secrets exist.
+# Running it by hand (workflow_dispatch) on a tag retries a failed release.
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    name: GitHub release and Marketplace
+    needs: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write # create the release and upload the .vsix
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - name: Only tags are released
+        if: github.ref_type != 'tag'
+        run: |
+          echo "::error::Run this workflow on a tag (v<major>.<minor>.<patch>), not on ${GITHUB_REF}."
+          exit 1
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Check the tag, package.json and CHANGELOG agree
+        run: node scripts/release.mjs check "$TAG"
+      - name: Package
+        run: |
+          pnpm run package
+          echo "VSIX=$(ls pcap-viewer-*.vsix)" >> "$GITHUB_ENV"
+          node scripts/release.mjs notes > "$RUNNER_TEMP/notes.md"
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" "$VSIX" --clobber
+          else
+            gh release create "$TAG" "$VSIX" --verify-tag \
+              --title "PCAP Viewer ${TAG#v}" --notes-file "$RUNNER_TEMP/notes.md"
+          fi
+      - name: VS Code Marketplace
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          if [ -z "$VSCE_PAT" ]; then
+            echo "::notice::VSCE_PAT is not set: not published to the VS Code Marketplace."
+            exit 0
+          fi
+          pnpm exec vsce publish --no-dependencies --skip-duplicate --packagePath "$VSIX"
+      - name: Open VSX
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: |
+          if [ -z "$OVSX_PAT" ]; then
+            echo "::notice::OVSX_PAT is not set: not published to Open VSX."
+            exit 0
+          fi
+          npx --yes ovsx@1.2.0 publish --skip-duplicate --packagePath "$VSIX"
