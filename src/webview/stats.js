@@ -296,6 +296,8 @@
   const CHART_HEIGHT = 220;
   const MARGIN = { top: 12, right: 16, bottom: 28, left: 64 };
   let hoverIndex = -1;
+  /** Chart width at the last render: only a width change needs a redraw. */
+  let renderedWidth = -1;
 
   /** @param {string} tag @param {Record<string, string | number>} attrs */
   function s(tag, attrs) {
@@ -313,6 +315,7 @@
     }
     const col = state.metric === "bytes" ? 3 : 2;
     const width = Math.max(320, chartBox.clientWidth || 600);
+    renderedWidth = chartBox.clientWidth;
     const innerW = width - MARGIN.left - MARGIN.right;
     const innerH = CHART_HEIGHT - MARGIN.top - MARGIN.bottom;
     const rows = t.rows;
@@ -413,10 +416,15 @@
       }
     };
     chartBox.onblur = hide;
+    // A redraw (resize, metric switch) keeps the hovered point: the old overlay is
+    // gone without a pointerleave, and the pointer may not move again.
+    if (hoverIndex >= 0) {
+      show(Math.min(hoverIndex, points.length - 1));
+    }
   }
 
   new ResizeObserver(() => {
-    if (state.table && state.table.kind === "io") {
+    if (state.table && state.table.kind === "io" && chartBox.clientWidth !== renderedWidth) {
       renderChart();
     }
   }).observe(chartBox);

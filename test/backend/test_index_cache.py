@@ -4,13 +4,11 @@ import os
 import threading
 import time
 from array import array
-from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from pcap_backend import pcap_service
 from pcap_backend import tshark as ts
 from pcap_backend.index_cache import CACHE_FORMAT, IndexCache, index_key, rules_key
 from pcap_backend.pcap_service import PcapService
@@ -58,6 +56,13 @@ def test_index_key_changes_with_everything_that_changes_the_index(tmp_path: Path
     st = capture.stat()
     os.utime(capture, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000))
     assert _key(capture, lua_scripts=[str(lua)]) != base, "modified capture"
+    # A preference naming a file (the TLS key log) depends on the file's contents.
+    keylog = tmp_path / "keys.log"
+    keylog.write_text("CLIENT_RANDOM aa bb\n")
+    with_keys = _key(capture, prefs={"tls.keylog_file": str(keylog)})
+    assert with_keys == _key(capture, prefs={"tls.keylog_file": str(keylog)})
+    keylog.write_text("CLIENT_RANDOM aa bb\nCLIENT_RANDOM cc dd\n")  # the browser added keys
+    assert _key(capture, prefs={"tls.keylog_file": str(keylog)}) != with_keys
 
 
 def test_save_load_prune_and_clear(tmp_path: Path) -> None:
@@ -183,27 +188,6 @@ def test_coloring_is_saved_with_the_index(
 
 
 # ---------------------------------------------------------------------- service: streaming open
-
-
-@pytest.fixture
-def slow_index(monkeypatch: pytest.MonkeyPatch) -> Iterator[threading.Event]:
-    """The index pass shows its first rows after 3 packets, then takes 0.1 s per
-    packet until ``release`` is set (then goes at full speed)."""
-    release = threading.Event()
-    real = pcap_service.stream_lines
-
-    def slow(argv: list[str], *args: Any, **kwargs: Any) -> Iterator[bytes]:
-        index_pass = "-T" in argv and "_ws.col.info" in argv
-        for i, line in enumerate(real(argv, *args, **kwargs)):
-            if index_pass and i >= 3 and not release.is_set():
-                release.wait(0.1)
-            yield line
-
-    monkeypatch.setattr(pcap_service, "stream_lines", slow)
-    monkeypatch.setattr(pcap_service, "FIRST_BATCH", 3)
-    monkeypatch.setattr(pcap_service, "FIRST_BATCH_S", 60.0)
-    yield release
-    release.set()
 
 
 @pytest.mark.tshark

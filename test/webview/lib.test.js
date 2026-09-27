@@ -71,6 +71,10 @@ suite("webview lib: virtualization", () => {
     assert.equal(m.has("b"), false);
     assert.equal(m.has("a"), true);
     assert.equal(m.size, 2);
+    // delete: the packet list drops the short last page when the list grows.
+    assert.equal(m.delete("a"), true);
+    assert.equal(m.delete("a"), false);
+    assert.deepEqual([...m.entries()], [["c", 3]]);
   });
 });
 

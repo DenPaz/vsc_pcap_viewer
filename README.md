@@ -25,7 +25,17 @@ by **tshark** (Wireshark's command-line tool), so results match Wireshark exactl
   any tshark field (`tcp.stream`, `http.host`, …) via `pcapViewer.columns` or
   *PCAP: Manage Custom Columns*.
 - **Display filters** with Wireshark syntax, validated as you type (green/red),
-  with inline error messages. Invalid filters are never applied.
+  with inline error messages. Invalid filters are never applied. On big
+  captures the matches show as tshark finds them ("Filtering… 12,000 matches
+  so far (40%)"): scroll and open packets meanwhile, or press ■ to stop and
+  keep the matches found so far. A sort chosen meanwhile applies when the
+  filter is done. Finished filter results are cached, also with the saved
+  index, so reapplying a recent filter after reopening a capture is instant.
+- **TLS decryption** with a key log file: *PCAP: Set TLS Key Log File…* picks
+  the file your browser or curl writes when `SSLKEYLOGFILE` is set
+  (`pcapViewer.tlsKeyLogFile`). The capture reloads with HTTP, HTTP/2 and
+  QUIC traffic decrypted, and when the browser adds keys to the file, the
+  viewer offers to reload so newer sessions are decrypted too.
 - **Filter autocomplete** from tshark's own field list (including fields added
   by your Lua dissectors): field and protocol names with their type and
   description, then operators (`==`, `contains`, `&&`, …) after a field.
@@ -55,13 +65,13 @@ by **tshark** (Wireshark's command-line tool), so results match Wireshark exactl
   find its field), including reassembled data (e.g. HTTP over several TCP segments).
 - **Fast opening of big captures**: the first packets show within about half a
   second while tshark indexes the rest; the status bar counts along
-  ("Indexing… 250,000 packets so far"). Filtering and sorting need every packet,
-  so a filter you apply meanwhile is applied when indexing finishes, and sorting
-  says it is waiting. The finished index is saved, so **reopening an unchanged
+  ("Indexing… 250,000 packets so far"). A filter you apply meanwhile starts
+  at once and shows its matches among the packets indexed so far; sorting
+  needs every packet, so it says it is waiting. The finished index is saved, so **reopening an unchanged
   capture is instant** (0.01 s instead of ~30 s per million packets). It is
   rebuilt when the file or anything that changes dissection changes (tshark
-  version, Lua scripts, Decode As rules, preferences, custom columns, your
-  Wireshark configuration). Saved indexes take about 100 MB per million
+  version, Lua scripts, Decode As rules, preferences, the TLS key log file's
+  contents, custom columns, your Wireshark configuration). Saved indexes take about 100 MB per million
   packets, are capped at 1 GB (`pcapViewer.indexCache.maxSizeMB`, least
   recently opened first) and hold the packet list's text; turn them off with
   `pcapViewer.indexCache.enabled` or delete them with *PCAP: Clear Index Cache*.
@@ -189,6 +199,7 @@ tshark built with them (`tshark --version` lists "with Zstandard", "with LZ4").
 | PCAP: Suggest Display Filter… | | Describe the packets; pick an AI-suggested, tshark-checked filter (also ✨ in the filter bar and `@pcap` in chat) |
 | PCAP: Ask Copilot About Selected Packets… | | Explain the selected packets in chat (`@pcap /explain`; sends packet data, asks first) |
 | PCAP: Clear Index Cache | | Delete the saved packet-list indexes |
+| PCAP: Set TLS Key Log File… | | Decrypt TLS with an `SSLKEYLOGFILE` key log (or stop using it) |
 | PCAP: Saved Display Filters | | Apply or delete saved filters |
 | PCAP: Go to Packet | `Ctrl+G` (`Cmd+G`) | Jump to a frame number |
 | PCAP: Find Packet… / Find Next / Find Previous | `Ctrl+F`, `F3`, `Shift+F3` | Find by display filter, string or hex bytes |
@@ -234,6 +245,7 @@ the side bar or panel.
 | `pcapViewer.dissectorsFolder` | Folder whose `*.lua` files are also loaded |
 | `pcapViewer.decodeAs` | Decode As rules, e.g. `"tcp.port==8080,http"` |
 | `pcapViewer.prefs` | Preference overrides, e.g. `{ "tcp.desegment_tcp_streams": false }` |
+| `pcapViewer.tlsKeyLogFile` | TLS key log file (`SSLKEYLOGFILE` format) for decryption, passed as the `tls.keylog_file` preference (per workspace folder) |
 | `pcapViewer.columns` | Extra columns: `"tcp.stream"` or `{ "field": "http.host", "title": "Host" }` (per workspace folder) |
 | `pcapViewer.columnLayout` | Column order and hidden columns by id, e.g. `{ "order": ["protocol", "number"], "hidden": ["time"] }` (set by the header menu and dragging) |
 | `pcapViewer.timeFormat` | Time column: `relative` (default), `delta_displayed`, `delta_captured`, `absolute`, `utc` or `epoch` |
@@ -272,7 +284,9 @@ Webview (HTML/JS)  --postMessage-->  Extension host (TypeScript)
   first ones right away; the finished file and offsets are saved in the
   extension's storage and reused while nothing that changes them changed.
 - Applying a filter runs `tshark -Y <filter> -T fields -e frame.number` once
-  and caches the matching frame numbers (4 bytes per match).
+  and caches the matching frame numbers (4 bytes per match). The pass runs in
+  the background and the list shows the matches found so far; the result is
+  saved with the capture's index (the 8 most recent filters).
 - Selecting a packet runs `tshark -c N -Y frame.number==N -T pdml` (and `-x`
   for the bytes), so tshark stops reading after that packet. For late packets
   a quick view comes first: `editcap -r` copies the last few hundred packets
@@ -298,7 +312,7 @@ Measured with `test/perf/bench.py` on 1,000,000 synthetic packets (146 MB,
 | Reopen an unchanged capture (saved index) | 0.01 s |
 | Fetch a 200-row page (any position) | < 1 ms |
 | 1000 random scroll pages | 0.09 s total |
-| Apply a filter | 26 s (one tshark pass; re-applying a cached filter is instant) |
+| Apply a filter | 26 s (one tshark pass; the first matches show after 0.5 s; re-applying a cached or saved filter is instant) |
 | Sort 1M rows by Length | 0.6 s |
 | Detail of frame 10 / frame 1,000,000 | 0.2 s / 20–26 s |
 | Quick view of any frame (300-packet window) | 0.25–0.3 s |
@@ -424,6 +438,18 @@ uv run python test/fixtures/generate.py --large 1000000 test/fixtures/large-1m.p
 uv run python -u test/perf/bench.py test/fixtures/large-1m.pcap --no-tcp-analysis
 ```
 
+To try TLS decryption, generate an HTTPS session and the key log that
+decrypts it (open the capture, then *PCAP: Set TLS Key Log File…* with the
+`.log` file):
+
+```sh
+uv run python test/fixtures/generate.py --tls-keylog /tmp/tls.pcap /tmp/tls-keys.log
+```
+
+To capture your own, start the browser with the variable set
+(`SSLKEYLOGFILE=~/tls-keys.log firefox`) and capture with Wireshark or
+`tcpdump -w`.
+
 ### Troubleshooting
 
 | Symptom | Fix |
@@ -434,6 +460,7 @@ uv run python -u test/perf/bench.py test/fixtures/large-1m.pcap --no-tcp-analysi
 | Cancelling a filter is slow, *PCAP: Show Log* says "could not stop tshark … Permission denied", or the kernel log shows `apparmor="DENIED" operation="signal" profile="tshark" … peer="vscode"` | The same AppArmor profile doesn't let tshark receive signals from the extension (VS Code runs under its own `vscode` profile; the tests run unconfined). The backend then closes tshark's output instead, so tshark stops at its next write, but a pass that writes nothing runs to its end. Allow the signals with two more local rules and reload: `printf '%s\n' 'signal (receive) peer=unconfined,' 'signal (receive) peer=vscode,' \| sudo tee -a /etc/apparmor.d/local/tshark` then `sudo apparmor_parser -r /etc/apparmor.d/tshark`. |
 | `make fixtures` fails with "No module named '_zstd'" | Your Python was built without zstd support (common with pyenv when `libzstd-dev` is missing); only the `.zst` test fixtures need it, so `make large-fixture` works anyway. Install `libzstd-dev` and rebuild it (`pyenv install --force 3.14`), or switch the venv to a uv-managed Python: `uv venv --python 3.14 --python-preference only-managed`, then `uv sync`. |
 | Lua dissector isn't applied | Check *PCAP: Show Log* for Lua errors. Don't run as root. Use *PCAP: Reload Capture* after editing the script. |
+| TLS stays encrypted with a key log file set | The key log must hold the keys of the sessions in the capture: start the browser with `SSLKEYLOGFILE` set *before* the capture, and don't clear the file. *PCAP: Show Log* says so if the file doesn't exist. TLS 1.3 needs the `*_TRAFFIC_SECRET` lines, TLS 1.2 the `CLIENT_RANDOM` ones. |
 | Opening a huge file is slow | Indexing speed is tshark's. Settings such as `"pcapViewer.prefs": { "tcp.analyze_sequence_numbers": false }` make it cheaper. |
 | `pnpm install` fails with "Ignored build scripts" | Use the pnpm version pinned in `package.json` (`corepack enable pnpm`). The build-script policy is in `pnpm-workspace.yaml`. |
 

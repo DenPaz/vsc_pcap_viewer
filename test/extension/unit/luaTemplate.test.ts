@@ -43,7 +43,7 @@ suite("Lua dissector template", () => {
       );
       assert.equal(res.stderr.includes("Lua"), false, res.stderr);
       // The template's generic "type" is the first payload byte: 1 in all six fixture packets.
-      assert.deepEqual(res.stdout.trim().split("\n"), Array(6).fill("GENPROTO"));
+      assert.deepEqual(res.stdout.trim().split(/\r?\n/), Array(6).fill("GENPROTO"));
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

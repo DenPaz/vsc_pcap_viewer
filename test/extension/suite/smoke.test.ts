@@ -99,6 +99,7 @@ suite("PCAP Viewer smoke test", () => {
       "pcapViewer.selectAll",
       "pcapViewer.askAboutPackets",
       "pcapViewer.clearIndexCache",
+      "pcapViewer.setTlsKeyLogFile",
       "pcapViewer.toggleTimeReference",
       "pcapViewer.timeFormat",
     ]) {

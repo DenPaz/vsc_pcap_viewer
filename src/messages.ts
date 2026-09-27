@@ -32,6 +32,7 @@ export interface OpenResult {
 /** Backend methods the webview may call directly (anything else is refused). */
 export const WEBVIEW_RPC_METHODS = new Set([
   "set_filter",
+  "stop_filter",
   "validate_filter",
   "list_packets",
   "packet_detail",
@@ -123,10 +124,15 @@ export type HostToWebview =
   | { type: "columns"; columns: ColumnSetting[]; layout: ColumnLayout }
   | { type: "timeFormat"; format: TimeFormat }
   | { type: "quickDetail"; quickDetail: QuickDetail }
-  /** Streaming open: `frames` indexed so far (`fraction` when the format allows an estimate). */
-  | { type: "indexProgress"; frames: number; fraction: number | null }
+  /**
+   * Streaming open: `frames` indexed so far (`fraction` when the format allows an
+   * estimate); with a filter applied, `view` is how many of its matches are shown.
+   */
+  | { type: "indexProgress"; frames: number; fraction: number | null; view?: ViewCounts }
   /** The index pass ended: the final capture info (with `error` if it stopped early). */
-  | { type: "indexDone"; info: OpenResult; error?: string }
+  | { type: "indexDone"; info: OpenResult; error?: string; view?: ViewCounts }
+  /** A streaming filter (set_filter with `stream`): more matches, or its end. */
+  | ({ type: "filterEvent" } & FilterEvent)
   | { type: "command"; command: ViewerCommand }
   | { type: "history"; history: string[] }
   | { type: "savedFilters"; savedFilters: SavedFilter[] }
@@ -136,6 +142,20 @@ export type HostToWebview =
   | { type: "aiAvailable"; available: boolean }
   /** Validated suggestions for an aiSuggest request (empty with a `message` when there are none). */
   | { type: "aiSuggestions"; id: number; suggestions: { filter: string; explanation: string }[]; message?: string };
+
+/** How many matches the filtered view `filterId` shows. */
+export interface ViewCounts {
+  filterId: number;
+  matchCount: number;
+}
+
+/** The backend's "filter" notification of a streaming filter. */
+export interface FilterEvent extends ViewCounts {
+  event: "progress" | "done" | "stopped" | "failed";
+  fraction?: number | null;
+  total?: number;
+  message?: string;
+}
 
 /** Result of the backend's set_coloring. */
 export interface ColoringResult {

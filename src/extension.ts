@@ -11,6 +11,7 @@ import { COLORING_KEYS, RELOAD_KEYS, SECTION, readQuickDetail, readSettings } fr
 import { FilterAssistant } from "./ai";
 import { registerAiCommands } from "./commands/ai";
 import { registerIndexCacheCommands } from "./commands/indexCache";
+import { registerTlsCommands } from "./commands/tls";
 import { PcapEditorProvider } from "./pcapEditor";
 
 let provider: PcapEditorProvider | undefined;
@@ -38,6 +39,7 @@ export function activate(context: vscode.ExtensionContext): PcapViewerApi {
   registerColoringCommands(context, p);
   registerAiCommands(context, p, log);
   registerIndexCacheCommands(context);
+  registerTlsCommands(context, p);
   context.subscriptions.push(
     vscode.commands.registerCommand("pcapViewer.showLog", () => log.show()),
     vscode.workspace.onDidChangeConfiguration(async (e) => {
@@ -71,6 +73,10 @@ export function activate(context: vscode.ExtensionContext): PcapViewerApi {
         for (const s of p.allSessions) {
           void s.applyColoring();
         }
+      }
+      if (e.affectsConfiguration(`${SECTION}.tlsKeyLogFile`)) {
+        // Usually PCAP: Set TLS Key Log File…: reload the captures whose key log changed.
+        await Promise.all(p.allSessions.filter((s) => readSettings(s.uri).tlsKeyLogFile !== s.keyLogFile).map((s) => s.load()));
       }
       if (RELOAD_KEYS.some((k) => e.affectsConfiguration(k)) && p.allSessions.length) {
         const choice = await vscode.window.showInformationMessage(

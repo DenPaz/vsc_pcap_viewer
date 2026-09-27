@@ -126,6 +126,10 @@
     has(key) {
       return this.map.has(key);
     }
+    /** @param {any} key @returns {boolean} whether it was cached */
+    delete(key) {
+      return this.map.delete(key);
+    }
     clear() {
       this.map.clear();
     }

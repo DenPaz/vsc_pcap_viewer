@@ -2,8 +2,21 @@
 
 ## Unreleased
 
+- Fixed: after scrolling to the end of the list while a big capture was still
+  being indexed (or a filter was still running), the list stopped growing.
+- Streaming filters: on big captures the matches show as tshark finds them,
+  with a count and progress in the status bar. ■ stops the filter and keeps
+  the matches found so far; a sort chosen meanwhile applies when it's done.
+  A filter applied while a capture is still being indexed starts at once.
+  Finished filter results are saved with the index, so reapplying one after
+  reopening the capture is instant.
+- TLS decryption: *PCAP: Set TLS Key Log File…* (`pcapViewer.tlsKeyLogFile`)
+  decrypts TLS and QUIC with an `SSLKEYLOGFILE` key log. The capture reloads
+  when the setting changes, the viewer offers a reload when the file gets new
+  keys, and saved indexes follow the file's contents. `generate.py
+  --tls-keylog` makes a sample capture and key log to try it.
 - Big captures open faster: the first packets show within about half a second
-  while the rest is indexed (a filter applied meanwhile waits for it), and the
+  while the rest is indexed, and the
   finished index is saved, so reopening an unchanged capture is instant
   (`pcapViewer.indexCache.enabled`, `pcapViewer.indexCache.maxSizeMB`,
   *PCAP: Clear Index Cache*).

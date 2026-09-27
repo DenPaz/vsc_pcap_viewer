@@ -5,7 +5,7 @@ import * as vscode from "vscode";
 import { BackendClient, ErrorCodes, RpcError, findPython } from "./backendClient";
 import { Settings, getSetting, readQuickDetail, readSettings, updateSetting } from "./config";
 import type { ExplainOutcome, ExplainSink, FilterAssistant, SuggestOutcome } from "./ai";
-import { ColoringResult, HostToWebview, OpenResult, ViewerCommand, WEBVIEW_RPC_METHODS, WebviewToHost } from "./messages";
+import { ColoringResult, FilterEvent, HostToWebview, OpenResult, ViewCounts, ViewerCommand, WEBVIEW_RPC_METHODS, WebviewToHost } from "./messages";
 import { saveFilterInteractive, showSavedFilters } from "./commands/savedFilters";
 import { FollowPanel } from "./panels/followPanel";
 import { ColumnLayout, ColumnSetting, QuickDetail, SavedFilter, TimeFormat, addColumn, normalizeColumns, pushHistory } from "./settingsModel";
@@ -103,6 +103,9 @@ export class PcapEditorSession {
   selectedFrames: number[] = [];
   /** Number of marked packets (the marks themselves live in the backend). */
   markedCount = 0;
+  /** TLS key log file this capture was last loaded with ("" = none). */
+  keyLogFile = "";
+  private keyLogWatcher?: vscode.Disposable;
   private readonly disposeEmitter = new vscode.EventEmitter<void>();
   /** Fires when the editor closes (auxiliary panels close with it). */
   readonly onDidDispose = this.disposeEmitter.event;
@@ -163,6 +166,7 @@ export class PcapEditorSession {
   async load(): Promise<void> {
     const seq = ++this.loadSeq;
     const settings = readSettings(this.uri);
+    this.watchKeyLog(settings.tlsKeyLogFile);
     await this.stopBackend();
     if (this.disposed || seq !== this.loadSeq) {
       return;
@@ -204,6 +208,12 @@ export class PcapEditorSession {
       const early: Record<string, unknown>[] = [];
       let onIndex = (p: Record<string, unknown>) => void early.push(p);
       const stopIndexEvents = client.onNotification("index", (p) => onIndex(p));
+      // Streaming filters report their matches as they come.
+      client.onNotification("filter", (p) => {
+        if (this.client === client && !this.disposed) {
+          this.post({ type: "filterEvent", ...(p as unknown as FilterEvent) });
+        }
+      });
       const info = await this.openFile(client, settings);
       if (seq !== this.loadSeq || this.disposed) {
         stopIndexEvents();
@@ -257,6 +267,47 @@ export class PcapEditorSession {
     }
   }
 
+  /**
+   * Browsers keep appending to their key log: when it changes, offer to reload
+   * so newer TLS sessions are decrypted too (at most one question at a time).
+   */
+  private watchKeyLog(file: string): void {
+    this.keyLogWatcher?.dispose();
+    this.keyLogWatcher = undefined;
+    this.keyLogFile = file;
+    if (!file) {
+      return;
+    }
+    const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.Uri.file(path.dirname(file)), path.basename(file)));
+    let timer: NodeJS.Timeout | undefined;
+    let asking = false;
+    const changed = () => {
+      clearTimeout(timer);
+      timer = setTimeout(async () => {
+        if (asking || this.disposed || this.keyLogFile !== file) {
+          return;
+        }
+        asking = true;
+        const choice = await vscode.window.showInformationMessage(
+          `PCAP Viewer: the TLS key log ${path.basename(file)} changed. Reload ${path.basename(this.uri.fsPath)} to decrypt with the new keys?`,
+          "Reload",
+        );
+        asking = false;
+        if (choice === "Reload" && !this.disposed) {
+          void this.load();
+        }
+      }, 1000); // browsers write one key at a time
+    };
+    watcher.onDidChange(changed);
+    watcher.onDidCreate(changed);
+    this.keyLogWatcher = {
+      dispose: () => {
+        clearTimeout(timer);
+        watcher.dispose();
+      },
+    };
+  }
+
   private reportWarnings(warnings: string[]): void {
     for (const w of warnings) {
       this.log.warn(`${this.uri.fsPath}: ${w}`);
@@ -288,7 +339,12 @@ export class PcapEditorSession {
       return true;
     }
     if (p.event === "progress") {
-      this.post({ type: "indexProgress", frames: Number(p.frames) || 0, fraction: typeof p.fraction === "number" ? p.fraction : null });
+      this.post({
+        type: "indexProgress",
+        frames: Number(p.frames) || 0,
+        fraction: typeof p.fraction === "number" ? p.fraction : null,
+        view: p.view as ViewCounts | undefined,
+      });
       return false;
     }
     const info = p.info as OpenResult | undefined;
@@ -301,7 +357,7 @@ export class PcapEditorSession {
       this.log.warn(`${this.uri.fsPath}: indexing stopped: ${error}`);
     }
     if (this.info) {
-      this.post({ type: "indexDone", info: this.info, error });
+      this.post({ type: "indexDone", info: this.info, error, view: p.view as ViewCounts | undefined });
       void this.applyColoring();
     }
     return true;
@@ -729,6 +785,7 @@ export class PcapEditorSession {
     }
     this.disposed = true;
     this.loadSeq++;
+    this.keyLogWatcher?.dispose();
     this.disposeEmitter.fire();
     this.disposeEmitter.dispose();
     this.activateEmitter.dispose();

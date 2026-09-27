@@ -104,9 +104,14 @@ maybe("statistics and follow panels (Chromium + real backend)", function () {
   test("protocol hierarchy keeps the tree and indents by depth", async () => {
     const { page } = await openStats("phs");
     await waitRows(page, 11);
-    const dns = await page.$eval("table.stats tbody tr:has(td:text-is('dns')) td", (td) => getComputedStyle(td).paddingLeft);
-    assert.equal(dns, "56px"); // 8px + depth 3 × 16px
-    assert.deepEqual((await rows(page)).slice(0, 3).map((r) => r[0]), ["eth", "arp", "ip"]);
+    // tshark 4.6 adds a top-level "frame" row (everything one level deeper than
+    // 4.2), so compare depths instead of expecting absolute ones.
+    const indent = (proto) => page.$eval(`table.stats tbody tr:has(td:text-is('${proto}')) td`, (td) => parseFloat(getComputedStyle(td).paddingLeft));
+    assert.equal((await indent("dns")) - (await indent("udp")), 16, "dns one level below udp");
+    assert.equal((await indent("arp")) - (await indent("eth")), 16, "arp one level below eth");
+    const names = (await rows(page)).map((r) => r[0]);
+    const eth = names.indexOf("eth");
+    assert.deepEqual(names.slice(eth, eth + 3), ["eth", "arp", "ip"]);
   });
 
   test("IO graph: line chart with crosshair tooltip, keyboard and metric switch", async () => {
@@ -118,12 +123,23 @@ maybe("statistics and follow panels (Chromium + real backend)", function () {
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     await page.waitForSelector(".chart .tooltip:not(.hidden)");
     assert.match(await page.textContent(".chart .tooltip strong"), /^\d+ packets$/);
+    // A resize redraws the chart (e.g. when the table below gets a scrollbar):
+    // the hovered point and its tooltip stay.
+    const drawn = await page.$(".chart svg");
+    await page.setViewportSize({ width: 1000, height: 800 });
+    await page.waitForFunction((old) => document.querySelector(".chart svg") !== old, drawn);
+    assert.equal(await page.$eval(".chart .tooltip", (t) => t.classList.contains("hidden")), false, "the tooltip survives a redraw");
+    const shrunk = await page.$(".chart svg");
+    await page.setViewportSize({ width: 1200, height: 800 });
+    await page.waitForFunction((old) => document.querySelector(".chart svg") !== old, shrunk);
+    const resized = await page.locator(".chart svg").boundingBox();
+    await page.mouse.move(resized.x + resized.width / 2, resized.y + resized.height / 2);
     await page.focus(".chart");
     await page.keyboard.press("Home");
     await page.keyboard.press("ArrowRight");
     assert.match(await page.textContent(".chart .tooltip span"), /^0\.00\d+–0\.00\d+ s$/);
     await page.selectOption("select[aria-label='Metric']", "bytes");
-    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.move(resized.x + resized.width / 2 + 5, resized.y + resized.height / 2);
     await page.waitForFunction(() => /bytes$/.test(document.querySelector(".chart .tooltip strong")?.textContent ?? ""));
   });
 

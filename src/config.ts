@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { ColoringRule, ColumnLayout, ColumnSetting, QuickDetail, SavedFilter, TimeFormat, configTargetFor, normalizeColoringRules, normalizeColumnLayout, normalizeColumns, normalizeSavedFilters, normalizeTimeFormat, resolveLuaScripts } from "./settingsModel";
+import { ColoringRule, ColumnLayout, ColumnSetting, QuickDetail, SavedFilter, TimeFormat, configTargetFor, normalizeColoringRules, normalizeColumnLayout, normalizeColumns, normalizeSavedFilters, normalizeTimeFormat, resolveLuaScripts, resolveSettingPath, withTlsKeyLog } from "./settingsModel";
 
 export const SECTION = "pcapViewer";
 
@@ -9,7 +9,10 @@ export interface Settings {
   luaScripts: string[];
   luaWarnings: string[];
   decodeAs: string[];
+  /** Includes tls.keylog_file when `tlsKeyLogFile` is set. */
   prefs: Record<string, string | number | boolean>;
+  /** `pcapViewer.tlsKeyLogFile`, resolved ("" = none). */
+  tlsKeyLogFile: string;
   columns: ColumnSetting[];
   columnLayout: ColumnLayout;
   timeFormat: TimeFormat;
@@ -36,13 +39,15 @@ export function readSettings(scope?: vscode.Uri): Settings {
   const cfg = vscode.workspace.getConfiguration(SECTION, scope);
   const baseDir = workspaceDirFor(scope);
   const lua = resolveLuaScripts(cfg.get<string[]>("luaScripts", []), cfg.get<string>("dissectorsFolder", ""), baseDir);
+  const keyLog = resolveSettingPath(cfg.get<string>("tlsKeyLogFile", ""), baseDir) ?? "";
   return {
     pythonPath: cfg.get<string>("pythonPath", "").trim(),
     tsharkPath: cfg.get<string>("tsharkPath", "").trim(),
     luaScripts: lua.scripts,
     luaWarnings: lua.warnings,
     decodeAs: cfg.get<string[]>("decodeAs", []).filter((r) => typeof r === "string" && r.trim()),
-    prefs: cfg.get<Record<string, string | number | boolean>>("prefs", {}),
+    prefs: withTlsKeyLog(cfg.get<Record<string, string | number | boolean>>("prefs", {}), keyLog),
+    tlsKeyLogFile: keyLog,
     columns: normalizeColumns(cfg.get<unknown>("columns", [])),
     columnLayout: normalizeColumnLayout(cfg.get<unknown>("columnLayout", {})),
     timeFormat: normalizeTimeFormat(cfg.get<unknown>("timeFormat", "relative")),

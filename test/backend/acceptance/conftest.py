@@ -61,6 +61,8 @@ class World:
     time_ref: int | None = None
     time_format: str | None = None
     cache_dir: Path | None = None
+    tls: tuple[Path, Path] | None = None  # a TLS capture and its key log file
+    events: list[dict[str, Any]] = field(default_factory=list)  # backend notifications
     coloring: dict[str, Any] | None = None
     error: Exception | None = None
 
@@ -147,6 +149,44 @@ def open_again_with_pref(world: World, name: str, pref: str, value: str) -> None
     open_capture(world, name, {pref: value})
 
 
+@given("a TLS capture and the key log file that decrypts it")
+def given_tls(world: World, tls_keylog: tuple[Path, Path]) -> None:
+    world.tls = tls_keylog
+
+
+@when(
+    parsers.re(
+        r"I open the TLS capture"
+        r'(?: with (?:(?P<its>its key log file)|the key log file "(?P<other>[^"]+)"))?$'
+    )
+)
+def open_tls(world: World, its: str | None, other: str | None) -> None:
+    assert world.tls is not None
+    capture, keylog = world.tls
+    prefs = None
+    if its or other:
+        prefs = {"tls.keylog_file": str(keylog if its else capture.parent / str(other))}
+    open_capture(world, str(capture), prefs)
+
+
+@given("the TLS capture was opened before with its key log file")
+def tls_opened_before(world: World) -> None:
+    open_tls(world, "its key log file", None)
+    assert world.error is None, world.error
+    assert world.cache_dir is not None
+    for _ in range(100):  # the index is saved in the background
+        if list(world.cache_dir.glob("*/meta.json")):
+            break
+        time.sleep(0.05)
+
+
+@when("the key log file gets more keys")
+def more_keys(world: World) -> None:
+    assert world.tls is not None
+    with world.tls[1].open("a") as fh:
+        fh.write(f"CLIENT_RANDOM {'ab' * 32} {'cd' * 48}\n")
+
+
 @then("it opens from the saved index")
 def from_saved(world: World) -> None:
     assert world.error is None, world.error
@@ -189,6 +229,13 @@ def open_capture(world: World, name: str, prefs: dict[str, Any] | None = None) -
 @when(parsers.parse('I apply the display filter "{expr}"'))
 def apply_filter(world: World, expr: str) -> None:
     world.filter_result = world.call(world.service.set_filter, {"expr": expr})
+
+
+@when(parsers.re(r'I apply the display filter "(?P<expr>[^"]+)" as a stream$'))
+def apply_streaming_filter(world: World, expr: str) -> None:
+    world.events = []
+    world.service.notify = lambda method, p: world.events.append({"method": method, **p})
+    world.filter_result = world.call(world.service.set_filter, {"expr": expr, "stream": True})
 
 
 @when(parsers.parse('I apply the display filter "{expr}" and cancel it'))
@@ -376,6 +423,38 @@ def filter_validity(world: World, result: str) -> None:
 @then(parsers.parse('applying the display filter "{expr}" displays {count:d} packets'))
 def filter_displays(world: World, expr: str, count: int) -> None:
     assert world.service.set_filter({"expr": expr}, world.ctx)["matchCount"] == count
+
+
+@then(parsers.re(r"the filter finishes with (?P<count>\d+) matches$"))
+def filter_finishes(world: World, count: str) -> None:
+    assert world.error is None, world.error
+    result = world.filter_result
+    assert result is not None
+    matches = result["matchCount"]
+    if result.get("filtering"):  # the rest arrives as a "filter" notification
+        for _ in range(200):
+            done = [e for e in world.events if e["method"] == "filter" and e["event"] == "done"]
+            if done:
+                break
+            time.sleep(0.05)
+        assert done and done[-1]["filterId"] == result["filterId"], world.events
+        matches = done[-1]["matchCount"]
+    assert matches == int(count)
+
+
+@then(
+    parsers.re(
+        r'applying the display filter "(?P<expr>[^"]+)" uses the saved result '
+        r"and displays (?P<count>\d+) packets$"
+    )
+)
+def filter_from_saved(world: World, expr: str, count: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    def no_pass(*_args: Any) -> Any:
+        raise AssertionError("the saved filter result should be used")
+
+    monkeypatch.setattr(PcapService, "_run_filter", no_pass)
+    result = world.service.set_filter({"expr": expr, "stream": True}, world.ctx)
+    assert result["matchCount"] == int(count) and "filtering" not in result
 
 
 @then("the request is cancelled")
