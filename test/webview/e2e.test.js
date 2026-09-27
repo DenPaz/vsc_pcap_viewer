@@ -679,8 +679,8 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     assert.equal(lastSelection().frame, 5, "the clicked row is focused (detail pane)");
     assert.ok(await rowEl(5).evaluate((r) => r.classList.contains("focused")));
 
-    await rowEl(8).click({ modifiers: ["Control"] }); // add
-    await rowEl(3).click({ modifiers: ["Control"] }); // take out
+    await rowEl(8).click({ modifiers: ["ControlOrMeta"] }); // add
+    await rowEl(3).click({ modifiers: ["ControlOrMeta"] }); // take out
     await waitSelection([2, 4, 5, 8]);
     await waitSelected(8);
 
@@ -736,7 +736,7 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     // Ctrl+A: Chromium's select-all (the key, or VS Code's Select All command running
     // execCommand("selectAll") in the webview) selects every packet, not the page's text.
     await page.focus("#list-viewport");
-    await page.keyboard.press("Control+a");
+    await page.keyboard.press("ControlOrMeta+a");
     await page.waitForFunction(() => document.querySelectorAll("#list-rows .list-row.selected").length === 11);
     assert.match(await status(), /\(11 packets\)/);
     assert.equal(await page.evaluate(() => String(window.getSelection())), "", "no text selected");
@@ -753,7 +753,7 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     assert.doesNotMatch(await status(), /packets\)/);
     // Ctrl+A in the filter bar selects its text, not packets (also via the palette command).
     await page.focus("#filter-input");
-    await page.keyboard.press("Control+a");
+    await page.keyboard.press("ControlOrMeta+a");
     assert.equal(await page.evaluate(() => { const i = /** @type {HTMLInputElement} */ (document.getElementById("filter-input")); return i.value.slice(i.selectionStart ?? 0, i.selectionEnd ?? 0); }), "http");
     await page.evaluate(() => /** @type {HTMLInputElement} */ (document.getElementById("filter-input")).setSelectionRange(0, 0));
     await command("selectAll");
@@ -773,8 +773,8 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     await waitForHost((m) => m.type === "askAboutPackets");
     assert.deepEqual(hostLog.filter((m) => m.type === "askAboutPackets").at(-1), { type: "askAboutPackets", frames: [4] });
 
-    await rowEl(7).click({ modifiers: ["Control"] });
-    await rowEl(2).click({ modifiers: ["Control"] });
+    await rowEl(7).click({ modifiers: ["ControlOrMeta"] });
+    await rowEl(2).click({ modifiers: ["ControlOrMeta"] });
     await rowEl(7).click({ button: "right" }); // inside the selection: keeps it
     await page.click("#context-menu .item:text-is('Ask Copilot About 3 Selected Packets…')");
     await waitForHost((m) => m.type === "askAboutPackets" && m.frames.length === 3);
