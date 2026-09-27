@@ -60,11 +60,16 @@ export class ObjectsPanel {
   ) {
     const title = `Export Objects · ${path.basename(session.uri.fsPath)}`;
     const root = webviewRoot(context);
-    this.panel = vscode.window.createWebviewPanel("pcapViewer.objects", title, vscode.ViewColumn.Beside, {
-      enableScripts: true,
-      localResourceRoots: [root],
-      retainContextWhenHidden: true,
-    });
+    this.panel = vscode.window.createWebviewPanel(
+      "pcapViewer.objects",
+      title,
+      vscode.ViewColumn.Beside,
+      {
+        enableScripts: true,
+        localResourceRoots: [root],
+        retainContextWhenHidden: true,
+      },
+    );
     this.panel.webview.html = panelHtml(this.panel.webview, root, "objects.js", title);
     this.disposables.push(
       this.panel.webview.onDidReceiveMessage((msg: FromPanel) => void this.onMessage(msg)),
@@ -81,7 +86,10 @@ export class ObjectsPanel {
   private async onMessage(msg: FromPanel): Promise<void> {
     switch (msg.type) {
       case "ready":
-        this.post({ type: "init", title: `Export Objects · ${path.basename(this.session.uri.fsPath)}` });
+        this.post({
+          type: "init",
+          title: `Export Objects · ${path.basename(this.session.uri.fsPath)}`,
+        });
         return this.list();
       case "list":
         return this.list();
@@ -104,16 +112,23 @@ export class ObjectsPanel {
   private async list(): Promise<void> {
     const client = this.session.backend;
     if (!client?.running) {
-      this.post({ type: "error", message: "The capture is not loaded (the PCAP backend is not running)." });
+      this.post({
+        type: "error",
+        message: "The capture is not loaded (the PCAP backend is not running).",
+      });
       return;
     }
     if (this.listing !== undefined) {
       client.cancel(this.listing);
     }
-    const pending = client.send<{ objects: ExportedObject[] }>("export_objects", {}, {
-      timeoutMs: 0,
-      onProgress: (p) => this.post({ type: "progress", fraction: p.fraction ?? null }),
-    });
+    const pending = client.send<{ objects: ExportedObject[] }>(
+      "export_objects",
+      {},
+      {
+        timeoutMs: 0,
+        onProgress: (p) => this.post({ type: "progress", fraction: p.fraction ?? null }),
+      },
+    );
     this.listing = pending.id;
     try {
       const { objects } = await pending.promise;
@@ -131,7 +146,9 @@ export class ObjectsPanel {
 
   private async save(ids: number[], many: boolean): Promise<void> {
     const client = this.session.backend;
-    const chosen = ids.map((id) => this.objects?.find((o) => o.id === id)).filter((o): o is ExportedObject => !!o);
+    const chosen = ids
+      .map((id) => this.objects?.find((o) => o.id === id))
+      .filter((o): o is ExportedObject => !!o);
     if (!client?.running || !chosen.length) {
       return;
     }
@@ -161,13 +178,23 @@ export class ObjectsPanel {
     }
     try {
       const { saved } = await vscode.window.withProgress(
-        { location: vscode.ProgressLocation.Notification, title: "Saving objects", cancellable: true },
-        (_progress, token) => client.request<{ saved: string[] }>("save_objects", params, { timeoutMs: 0, cancellation: token }),
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: "Saving objects",
+          cancellable: true,
+        },
+        (_progress, token) =>
+          client.request<{ saved: string[] }>("save_objects", params, {
+            timeoutMs: 0,
+            cancellation: token,
+          }),
       );
       const where = many ? (params.dir ?? "") : saved[0];
       const reveal = "Reveal in File Explorer";
       const choice = await vscode.window.showInformationMessage(
-        many ? `Saved ${saved.length} ${saved.length === 1 ? "object" : "objects"} to ${where}` : `Saved ${where}`,
+        many
+          ? `Saved ${saved.length} ${saved.length === 1 ? "object" : "objects"} to ${where}`
+          : `Saved ${where}`,
         reveal,
       );
       if (choice === reveal) {
@@ -175,7 +202,9 @@ export class ObjectsPanel {
       }
     } catch (err) {
       if (!(err instanceof RpcError && err.cancelled)) {
-        void vscode.window.showErrorMessage(`Saving objects failed: ${err instanceof Error ? err.message : String(err)}`);
+        void vscode.window.showErrorMessage(
+          `Saving objects failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
     }
   }

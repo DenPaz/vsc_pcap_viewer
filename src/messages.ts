@@ -2,7 +2,13 @@
  * Message protocol between the extension host and the webview
  * (src/webview/main.js). Keep both sides in sync.
  */
-import type { ColumnLayout, ColumnSetting, QuickDetail, SavedFilter, TimeFormat } from "./settingsModel";
+import type {
+  ColumnLayout,
+  ColumnSetting,
+  QuickDetail,
+  SavedFilter,
+  TimeFormat,
+} from "./settingsModel";
 
 export interface ColumnDescriptor {
   id: string;
@@ -108,7 +114,14 @@ export type WebviewToHost =
 export type HostToWebview =
   | { type: "loading"; message: string }
   /** Progress of the capture load, or (with `id`) of the webview's request `id`. */
-  | { type: "progress"; id?: number; phase?: string; fraction?: number | null; frames?: number; matched?: number }
+  | {
+      type: "progress";
+      id?: number;
+      phase?: string;
+      fraction?: number | null;
+      frames?: number;
+      matched?: number;
+    }
   | {
       type: "init";
       info: OpenResult;
@@ -146,13 +159,22 @@ export type HostToWebview =
   | { type: "history"; history: string[] }
   | { type: "savedFilters"; savedFilters: SavedFilter[] }
   /** Row `color` values of list_packets results with this `coloringId` index `rules`. */
-  | { type: "coloring"; coloringId: number; rules: { name: string; foreground: string; background: string }[] }
+  | {
+      type: "coloring";
+      coloringId: number;
+      rules: { name: string; foreground: string; background: string }[];
+    }
   /** A separate coloring pass is running (`fraction` when known), or it ended without new colors (`done`). */
   | { type: "coloringProgress"; fraction: number | null; done?: boolean }
   /** Whether to show the "✨ Ask AI" action (a language model is available and allowed). */
   | { type: "aiAvailable"; available: boolean }
   /** Validated suggestions for an aiSuggest request (empty with a `message` when there are none). */
-  | { type: "aiSuggestions"; id: number; suggestions: { filter: string; explanation: string }[]; message?: string };
+  | {
+      type: "aiSuggestions";
+      id: number;
+      suggestions: { filter: string; explanation: string }[];
+      message?: string;
+    };
 
 /** How many matches the filtered view `filterId` shows. */
 export interface ViewCounts {

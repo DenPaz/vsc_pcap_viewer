@@ -53,7 +53,10 @@ export default tseslint.config(
       ],
       "no-restricted-syntax": [
         "error",
-        { selector: "CallExpression[callee.property.name='insertAdjacentHTML']", message: "No HTML injection." },
+        {
+          selector: "CallExpression[callee.property.name='insertAdjacentHTML']",
+          message: "No HTML injection.",
+        },
       ],
     },
   },

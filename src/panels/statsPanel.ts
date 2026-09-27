@@ -33,7 +33,11 @@ export class StatsPanel {
   private readonly inflight = new Map<number, number>();
   private readonly disposables: vscode.Disposable[] = [];
 
-  static show(context: vscode.ExtensionContext, session: PcapEditorSession, kind: StatsKind): StatsPanel {
+  static show(
+    context: vscode.ExtensionContext,
+    session: PcapEditorSession,
+    kind: StatsKind,
+  ): StatsPanel {
     const key = `${session.id}:${kind}`;
     const existing = StatsPanel.open.get(key);
     if (existing) {
@@ -60,11 +64,16 @@ export class StatsPanel {
   ) {
     const title = `${STATS_TITLES[kind]} · ${path.basename(session.uri.fsPath)}`;
     const root = webviewRoot(context);
-    this.panel = vscode.window.createWebviewPanel("pcapViewer.stats", title, vscode.ViewColumn.Beside, {
-      enableScripts: true,
-      localResourceRoots: [root],
-      retainContextWhenHidden: true,
-    });
+    this.panel = vscode.window.createWebviewPanel(
+      "pcapViewer.stats",
+      title,
+      vscode.ViewColumn.Beside,
+      {
+        enableScripts: true,
+        localResourceRoots: [root],
+        retainContextWhenHidden: true,
+      },
+    );
     this.panel.webview.html = panelHtml(this.panel.webview, root, "stats.js", title);
     this.disposables.push(
       this.panel.webview.onDidReceiveMessage((msg: FromPanel) => void this.onMessage(msg)),
@@ -81,7 +90,12 @@ export class StatsPanel {
   private async onMessage(msg: FromPanel): Promise<void> {
     switch (msg.type) {
       case "ready":
-        this.post({ type: "init", kind: this.kind, title: STATS_TITLES[this.kind], filter: this.session.currentFilter });
+        this.post({
+          type: "init",
+          kind: this.kind,
+          title: STATS_TITLES[this.kind],
+          filter: this.session.currentFilter,
+        });
         return;
       case "query":
         return this.query(msg.id, msg.params);
@@ -111,10 +125,17 @@ export class StatsPanel {
     }
   }
 
-  private async query(id: number, params: { type?: string; interval?: number; limit?: boolean }): Promise<void> {
+  private async query(
+    id: number,
+    params: { type?: string; interval?: number; limit?: boolean },
+  ): Promise<void> {
     const client = this.session.backend;
     if (!client?.running) {
-      this.post({ type: "error", id, message: "The capture is not loaded (the PCAP backend is not running)." });
+      this.post({
+        type: "error",
+        id,
+        message: "The capture is not loaded (the PCAP backend is not running).",
+      });
       return;
     }
     const filter = params.limit ? this.session.currentFilter : "";

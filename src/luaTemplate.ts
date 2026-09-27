@@ -24,7 +24,9 @@ export function validateProtocolName(name: string): string | undefined {
 
 export function validatePort(text: string): string | undefined {
   const n = Number(text);
-  return Number.isInteger(n) && n >= 1 && n <= 65535 ? undefined : "Enter a port between 1 and 65535.";
+  return Number.isInteger(n) && n >= 1 && n <= 65535
+    ? undefined
+    : "Enter a port between 1 and 65535.";
 }
 
 /** Escape text for a Lua double-quoted string literal. */

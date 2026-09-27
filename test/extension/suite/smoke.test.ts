@@ -28,7 +28,8 @@ async function waitFor<T>(fn: () => T | undefined, timeoutMs = 30_000): Promise<
 }
 
 /** The open result once indexing is done (a streaming open first reports the rows published so far). */
-const indexed = (s: { openInfo?: { indexing?: boolean } }): boolean => !!s.openInfo && !s.openInfo.indexing;
+const indexed = (s: { openInfo?: { indexing?: boolean } }): boolean =>
+  !!s.openInfo && !s.openInfo.indexing;
 
 async function waitForAsync<T>(fn: () => Promise<T | undefined>, timeoutMs = 30_000): Promise<T> {
   const start = Date.now();
@@ -53,23 +54,34 @@ suite("PCAP Viewer smoke test", () => {
     const uri = vscode.Uri.file(path.join(FIXTURES, "http.pcap"));
     await vscode.commands.executeCommand("vscode.openWith", uri, "pcapViewer.editor");
 
-    const session = await waitFor(() => api.provider.allSessions.find((s) => s.uri.fsPath === uri.fsPath));
+    const session = await waitFor(() =>
+      api.provider.allSessions.find((s) => s.uri.fsPath === uri.fsPath),
+    );
     const info = await waitFor(() => (indexed(session) ? session.openInfo : undefined));
     assert.equal(info.frames, 11);
 
     const backend = session.backend;
     assert.ok(backend?.running);
-    const page = await backend.request<{ rows: { number: number }[] }>("list_packets", { offset: 0, limit: 5 });
+    const page = await backend.request<{ rows: { number: number }[] }>("list_packets", {
+      offset: 0,
+      limit: 5,
+    });
     assert.equal(page.rows.length, 5);
     const detail = await backend.request<{ tree: unknown[] }>("packet_detail", { number: 4 });
     assert.ok(detail.tree.length > 0);
 
     // The default coloring rules are applied in the background after open.
     const colored = await waitForAsync(async () => {
-      const rows = await backend.request<{ rows: { color?: number }[]; coloringId: number }>("list_packets", { offset: 0, limit: 11 });
+      const rows = await backend.request<{ rows: { color?: number }[]; coloringId: number }>(
+        "list_packets",
+        { offset: 0, limit: 11 },
+      );
       return rows.coloringId > 0 ? rows : undefined;
     });
-    assert.ok(colored.rows.every((r) => typeof r.color === "number"), "every packet of http.pcap matches a default rule");
+    assert.ok(
+      colored.rows.every((r) => typeof r.color === "number"),
+      "every packet of http.pcap matches a default rule",
+    );
 
     const commands = await vscode.commands.getCommands(true);
     for (const id of [
@@ -121,12 +133,16 @@ suite("PCAP Viewer smoke test", () => {
     assert.deepEqual(follow.bytes, [90, 491]);
     session.reveal();
     await vscode.commands.executeCommand("pcapViewer.statistics.conversations");
-    const stats = await waitFor(() => StatsPanel.all.find((p) => p.kind === "conversations" && p.session === session));
+    const stats = await waitFor(() =>
+      StatsPanel.all.find((p) => p.kind === "conversations" && p.session === session),
+    );
 
     // Export Objects lists what the capture carried (tshark's --export-objects).
     session.reveal();
     await vscode.commands.executeCommand("pcapViewer.exportObjects");
-    const objects = await waitFor(() => ObjectsPanel.all.find((p) => p.session === session)?.objects);
+    const objects = await waitFor(
+      () => ObjectsPanel.all.find((p) => p.session === session)?.objects,
+    );
     assert.deepEqual(
       objects.map((o) => [o.name, o.frame]),
       [["index.html", 7]],
@@ -136,7 +152,9 @@ suite("PCAP Viewer smoke test", () => {
     // make the first capture the target of capture commands again.
     const other = vscode.Uri.file(path.join(FIXTURES, "dns.pcap"));
     await vscode.commands.executeCommand("vscode.openWith", other, "pcapViewer.editor");
-    await waitFor(() => (api.provider.activeSession?.uri.fsPath === other.fsPath ? true : undefined));
+    await waitFor(() =>
+      api.provider.activeSession?.uri.fsPath === other.fsPath ? true : undefined,
+    );
     stats.panel.reveal(undefined, false);
     await waitFor(() => (api.provider.activeSession === session ? true : undefined));
 
@@ -150,11 +168,16 @@ suite("PCAP Viewer smoke test", () => {
     const api = (await ext!.activate()) as PcapViewerApi;
     const uri = vscode.Uri.file(path.join(FIXTURES, "http.pcap"));
     await vscode.commands.executeCommand("vscode.openWith", uri, "pcapViewer.editor");
-    const session = await waitFor(() => api.provider.allSessions.find((s) => s.uri.fsPath === uri.fsPath && indexed(s)));
+    const session = await waitFor(() =>
+      api.provider.allSessions.find((s) => s.uri.fsPath === uri.fsPath && indexed(s)),
+    );
     // The Info of frame 2, read from whichever backend the session has (it restarts on reload).
     const info = async (): Promise<string | undefined> => {
       try {
-        const page = await session.backend?.request<{ rows: { cells: string[] }[] }>("list_packets", { offset: 1, limit: 1 });
+        const page = await session.backend?.request<{ rows: { cells: string[] }[] }>(
+          "list_packets",
+          { offset: 1, limit: 1 },
+        );
         return page?.rows[0]?.cells[6];
       } catch {
         return undefined;
@@ -164,7 +187,9 @@ suite("PCAP Viewer smoke test", () => {
     const cfg = vscode.workspace.getConfiguration("pcapViewer");
     await cfg.update("nameResolution.transport", true, vscode.ConfigurationTarget.Global);
     try {
-      await waitForAsync(async () => ((await info())?.startsWith("http(80) → 50000") ? true : undefined));
+      await waitForAsync(async () =>
+        (await info())?.startsWith("http(80) → 50000") ? true : undefined,
+      );
       assert.ok(session.names.transport);
     } finally {
       await cfg.update("nameResolution.transport", undefined, vscode.ConfigurationTarget.Global);
@@ -182,19 +207,39 @@ suite("PCAP Viewer smoke test", () => {
       const uri = vscode.Uri.file(path.join(formats, name));
       await vscode.commands.executeCommand("vscode.open", uri);
       const input = await waitFor(() => {
-        const i = vscode.window.tabGroups.activeTabGroup.activeTab?.input as { uri?: vscode.Uri } | undefined;
+        const i = vscode.window.tabGroups.activeTabGroup.activeTab?.input as
+          { uri?: vscode.Uri } | undefined;
         return i?.uri?.fsPath === uri.fsPath ? i : undefined;
       });
       return input instanceof vscode.TabInputCustom ? input.viewType : "other";
     };
 
-    const defaults = ["http.pcap.gz", "mixed.pcapng.gz", "http.pcap.zst", "mixed.pcapng.zst", "http.pcap.lz4", "mixed.pcapng.lz4",
-      "mixed.ntar", "trace.pcap1", "http.snoop", "http.erf", "hci.pklg", "hci.btsnoop"];
+    const defaults = [
+      "http.pcap.gz",
+      "mixed.pcapng.gz",
+      "http.pcap.zst",
+      "mixed.pcapng.zst",
+      "http.pcap.lz4",
+      "mixed.pcapng.lz4",
+      "mixed.ntar",
+      "trace.pcap1",
+      "http.snoop",
+      "http.erf",
+      "hci.pklg",
+      "hci.btsnoop",
+    ];
     for (const name of defaults) {
       assert.equal(await openedAs(name), "pcapViewer.editor", name);
       await vscode.commands.executeCommand("workbench.action.closeActiveEditor");
     }
-    for (const name of ["capture.1", "capture.log", "capture.dmp", "capture.trc", "capture.ber", "notes.log"]) {
+    for (const name of [
+      "capture.1",
+      "capture.log",
+      "capture.dmp",
+      "capture.trc",
+      "capture.ber",
+      "notes.log",
+    ]) {
       assert.equal(await openedAs(name), "other", `${name} must not open in the viewer by default`);
       await vscode.commands.executeCommand("workbench.action.closeActiveEditor");
     }
@@ -202,13 +247,17 @@ suite("PCAP Viewer smoke test", () => {
     // A compressed capture is indexed like any other.
     const gz = vscode.Uri.file(path.join(formats, "http.pcap.gz"));
     await vscode.commands.executeCommand("vscode.open", gz);
-    const gzSession = await waitFor(() => api.provider.allSessions.find((s) => s.uri.fsPath === gz.fsPath && indexed(s)));
+    const gzSession = await waitFor(() =>
+      api.provider.allSessions.find((s) => s.uri.fsPath === gz.fsPath && indexed(s)),
+    );
     assert.equal(gzSession.openInfo?.frames, 11);
 
     // "Reopen Editor With…" offers the viewer for generic extensions.
     const log = vscode.Uri.file(path.join(formats, "capture.log"));
     await vscode.commands.executeCommand("vscode.openWith", log, "pcapViewer.editorOptional");
-    const logSession = await waitFor(() => api.provider.allSessions.find((s) => s.uri.fsPath === log.fsPath && indexed(s)));
+    const logSession = await waitFor(() =>
+      api.provider.allSessions.find((s) => s.uri.fsPath === log.fsPath && indexed(s)),
+    );
     assert.equal(logSession.openInfo?.frames, 26);
 
     await vscode.commands.executeCommand("workbench.action.closeAllEditors");

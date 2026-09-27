@@ -12,7 +12,11 @@ async function main(): Promise<void> {
     await runTests({
       extensionDevelopmentPath: root,
       extensionTestsPath: path.resolve(__dirname, "suite", "index"),
-      launchArgs: [path.join(root, "test", "fixtures"), "--disable-extensions", "--disable-workspace-trust"],
+      launchArgs: [
+        path.join(root, "test", "fixtures"),
+        "--disable-extensions",
+        "--disable-workspace-trust",
+      ],
     });
   } catch (err) {
     console.error("Extension tests failed:", err);

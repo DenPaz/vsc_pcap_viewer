@@ -5,7 +5,15 @@
  */
 const assert = require("node:assert/strict");
 const path = require("node:path");
-const { FIXTURES, HAVE_TSHARK, loadDeps, serveWebview, renderPanelHtml, startBackend, newPage } = require("./harness");
+const {
+  FIXTURES,
+  HAVE_TSHARK,
+  loadDeps,
+  serveWebview,
+  renderPanelHtml,
+  startBackend,
+  newPage,
+} = require("./harness");
 
 const deps = loadDeps();
 const maybe = deps && HAVE_TSHARK ? suite : suite.skip;
@@ -53,10 +61,21 @@ maybe("statistics and follow panels (Chromium + real backend)", function () {
       if (msg.type === "ready") {
         await post({ type: "init", kind, title: TITLES[kind], filter: captureFilter });
       } else if (msg.type === "query") {
-        const params = { kind, type: msg.params.type, interval: msg.params.interval, filter: msg.params.limit ? captureFilter : "" };
+        const params = {
+          kind,
+          type: msg.params.type,
+          interval: msg.params.interval,
+          filter: msg.params.limit ? captureFilter : "",
+        };
         client.request("stats", params, { timeoutMs: 0 }).then(
           (table) => post({ type: "result", id: msg.id, table }),
-          (err) => post({ type: "error", id: msg.id, message: err.message, cancelled: err.code === -32800 }),
+          (err) =>
+            post({
+              type: "error",
+              id: msg.id,
+              message: err.message,
+              cancelled: err.code === -32800,
+            }),
         );
       }
     });
@@ -65,30 +84,50 @@ maybe("statistics and follow panels (Chromium + real backend)", function () {
     return { page, log };
   }
 
-  const rows = (page) => page.$$eval("table.stats tbody tr", (trs) => trs.map((tr) => [...tr.children].map((td) => td.textContent)));
-  const waitRows = (page, n) => page.waitForFunction((count) => document.querySelectorAll("table.stats tbody tr").length === count, n);
+  const rows = (page) =>
+    page.$$eval("table.stats tbody tr", (trs) =>
+      trs.map((tr) => [...tr.children].map((td) => td.textContent)),
+    );
+  const waitRows = (page, n) =>
+    page.waitForFunction(
+      (count) => document.querySelectorAll("table.stats tbody tr").length === count,
+      n,
+    );
 
   test("conversations: type switch, sorting, row filter and CSV", async () => {
     const { page, log } = await openStats("conversations");
     await waitRows(page, 1);
     assert.equal(await page.textContent(".panel-title"), "TCP Conversations");
-    assert.deepEqual((await rows(page))[0].slice(0, 3), ["192.168.1.10:50000", "93.184.216.34:80", "11"]);
+    assert.deepEqual((await rows(page))[0].slice(0, 3), [
+      "192.168.1.10:50000",
+      "93.184.216.34:80",
+      "11",
+    ]);
 
     await page.selectOption("select[aria-label='Address type']", "udp");
     await waitRows(page, 4);
     await page.click("th:has-text('Packets A → B')"); // numeric columns sort descending first
     const sorted = (await rows(page)).map((r) => r[4]);
-    assert.deepEqual(sorted, [...sorted].sort((a, b) => Number(b) - Number(a)));
+    assert.deepEqual(
+      sorted,
+      [...sorted].sort((a, b) => Number(b) - Number(a)),
+    );
 
     await page.click("table.stats tbody tr >> nth=0");
     await page.click("button:has-text('Apply as Filter')");
     const filter = log.find((m) => m.type === "filter");
     assert.equal(filter.apply, true);
-    assert.match(filter.expr, /^ip\.addr == 10\.0\.0\.1 && udp\.port == 12345 && ip\.addr == 10\.0\.0\.2 && udp\.port == 9999$/);
+    assert.match(
+      filter.expr,
+      /^ip\.addr == 10\.0\.0\.1 && udp\.port == 12345 && ip\.addr == 10\.0\.0\.2 && udp\.port == 9999$/,
+    );
 
     await page.click("button:has-text('Copy as CSV')");
     const csv = log.find((m) => m.type === "copy").text.split("\n");
-    assert.equal(csv[0], "Address A,Address B,Packets,Bytes,Packets A → B,Bytes A → B,Packets B → A,Bytes B → A,Rel Start,Duration");
+    assert.equal(
+      csv[0],
+      "Address A,Address B,Packets,Bytes,Packets A → B,Bytes A → B,Packets B → A,Bytes B → A,Rel Start,Duration",
+    );
     assert.equal(csv.length, 5);
   });
 
@@ -97,7 +136,9 @@ maybe("statistics and follow panels (Chromium + real backend)", function () {
     await waitRows(page, 1);
     assert.equal((await rows(page))[0][2], "11");
     await page.check("input[type=checkbox]");
-    await page.waitForFunction(() => document.querySelector("table.stats tbody tr td:nth-child(3)")?.textContent === "2");
+    await page.waitForFunction(
+      () => document.querySelector("table.stats tbody tr td:nth-child(3)")?.textContent === "2",
+    );
     assert.match(await page.textContent(".status"), /matching http/);
   });
 
@@ -106,7 +147,10 @@ maybe("statistics and follow panels (Chromium + real backend)", function () {
     await waitRows(page, 11);
     // tshark 4.6 adds a top-level "frame" row (everything one level deeper than
     // 4.2), so compare depths instead of expecting absolute ones.
-    const indent = (proto) => page.$eval(`table.stats tbody tr:has(td:text-is('${proto}')) td`, (td) => parseFloat(getComputedStyle(td).paddingLeft));
+    const indent = (proto) =>
+      page.$eval(`table.stats tbody tr:has(td:text-is('${proto}')) td`, (td) =>
+        parseFloat(getComputedStyle(td).paddingLeft),
+      );
     assert.equal((await indent("dns")) - (await indent("udp")), 16, "dns one level below udp");
     assert.equal((await indent("arp")) - (await indent("eth")), 16, "arp one level below eth");
     const names = (await rows(page)).map((r) => r[0]);
@@ -128,7 +172,11 @@ maybe("statistics and follow panels (Chromium + real backend)", function () {
     const drawn = await page.$(".chart svg");
     await page.setViewportSize({ width: 1000, height: 800 });
     await page.waitForFunction((old) => document.querySelector(".chart svg") !== old, drawn);
-    assert.equal(await page.$eval(".chart .tooltip", (t) => t.classList.contains("hidden")), false, "the tooltip survives a redraw");
+    assert.equal(
+      await page.$eval(".chart .tooltip", (t) => t.classList.contains("hidden")),
+      false,
+      "the tooltip survives a redraw",
+    );
     const shrunk = await page.$(".chart svg");
     await page.setViewportSize({ width: 1200, height: 800 });
     await page.waitForFunction((old) => document.querySelector(".chart svg") !== old, shrunk);
@@ -140,7 +188,9 @@ maybe("statistics and follow panels (Chromium + real backend)", function () {
     assert.match(await page.textContent(".chart .tooltip span"), /^0\.00\d+–0\.00\d+ s$/);
     await page.selectOption("select[aria-label='Metric']", "bytes");
     await page.mouse.move(resized.x + resized.width / 2 + 5, resized.y + resized.height / 2);
-    await page.waitForFunction(() => /bytes$/.test(document.querySelector(".chart .tooltip strong")?.textContent ?? ""));
+    await page.waitForFunction(() =>
+      /bytes$/.test(document.querySelector(".chart .tooltip strong")?.textContent ?? ""),
+    );
   });
 
   test("expert information: severity and go to packet", async () => {
@@ -149,9 +199,15 @@ maybe("statistics and follow panels (Chromium + real backend)", function () {
     assert.ok(await page.$(".sev.sev-Chat"));
     await page.click("table.stats tbody tr:has-text('Connection finish (FIN)')");
     await page.click("button:has-text('Go to Packet')");
-    assert.deepEqual(log.find((m) => m.type === "goto"), { type: "goto", frame: 18 });
+    assert.deepEqual(
+      log.find((m) => m.type === "goto"),
+      { type: "goto", frame: 18 },
+    );
     await page.click("button:has-text('Prepare as Filter')");
-    assert.deepEqual(log.find((m) => m.type === "filter"), { type: "filter", expr: '_ws.expert.message == "Connection finish (FIN)"', apply: false });
+    assert.deepEqual(
+      log.find((m) => m.type === "filter"),
+      { type: "filter", expr: '_ws.expert.message == "Connection finish (FIN)"', apply: false },
+    );
   });
 
   test("capture file properties", async () => {
@@ -185,14 +241,27 @@ maybe("statistics and follow panels (Chromium + real backend)", function () {
     await page.setContent(renderPanelHtml(origin, "follow.js"), { waitUntil: "load" });
     await page.waitForSelector("pre.segment");
     assert.equal(await page.textContent(".panel-title"), "TCP stream 0");
-    assert.match(await page.textContent(".follow-legend"), /192\.168\.1\.10:50000 → 93\.184\.216\.34:80/);
-    assert.ok((await page.textContent("pre.segment.dir0")).startsWith("GET /index.html HTTP/1.1\nHost: example.com"));
-    assert.ok((await page.textContent("pre.segment.dir1")).startsWith("HTTP/1.1 200 OK\nContent-Type: text/html"));
+    assert.match(
+      await page.textContent(".follow-legend"),
+      /192\.168\.1\.10:50000 → 93\.184\.216\.34:80/,
+    );
+    assert.ok(
+      (await page.textContent("pre.segment.dir0")).startsWith(
+        "GET /index.html HTTP/1.1\nHost: example.com",
+      ),
+    );
+    assert.ok(
+      (await page.textContent("pre.segment.dir1")).startsWith(
+        "HTTP/1.1 200 OK\nContent-Type: text/html",
+      ),
+    );
 
     await page.selectOption("select[aria-label='Direction']", "1");
     assert.equal(await page.locator("pre.segment.dir0").count(), 0);
     await page.selectOption("select[aria-label='Show data as']", "hex");
-    assert.ok((await page.textContent("pre.segment")).startsWith("00000000  48 54 54 50 2f 31 2e 31"));
+    assert.ok(
+      (await page.textContent("pre.segment")).startsWith("00000000  48 54 54 50 2f 31 2e 31"),
+    );
 
     await page.click("button:has-text('Save as…')");
     const saveText = log.find((m) => m.type === "save");
@@ -201,14 +270,23 @@ maybe("statistics and follow panels (Chromium + real backend)", function () {
     assert.ok(saveText.text.startsWith("00000000  48 54 54 50"));
     await page.selectOption("select[aria-label='Show data as']", "raw");
     await page.click("button:has-text('Save as…')");
-    assert.deepEqual(log.filter((m) => m.type === "save").at(-1), { type: "save", dir: 1, format: "raw" });
+    assert.deepEqual(log.filter((m) => m.type === "save").at(-1), {
+      type: "save",
+      dir: 1,
+      format: "raw",
+    });
 
     await page.click("button:has-text('Filter to Stream')");
-    assert.deepEqual(log.find((m) => m.type === "filter"), { type: "filter", expr: "tcp.stream eq 0", apply: true });
+    assert.deepEqual(
+      log.find((m) => m.type === "filter"),
+      { type: "filter", expr: "tcp.stream eq 0", apply: true },
+    );
 
     // There is only one TCP stream in the capture: the next one is empty.
     await page.click("button[title='Next stream']");
-    await page.waitForFunction(() => document.querySelector(".panel-title").textContent === "TCP stream 1");
+    await page.waitForFunction(
+      () => document.querySelector(".panel-title").textContent === "TCP stream 1",
+    );
     assert.equal(await page.textContent(".status"), "No payload in this stream.");
     assert.equal(await page.locator("pre.segment").count(), 0);
   });
@@ -224,7 +302,12 @@ maybe("statistics and follow panels (Chromium + real backend)", function () {
         await post({ type: "init", rules, defaults, canValidate: true });
       } else if (msg.type === "validate") {
         const res = await client.request("validate_filter", { expr: msg.filter });
-        await post({ type: "validation", id: msg.id, filter: msg.filter, error: res.valid ? null : res.error });
+        await post({
+          type: "validation",
+          id: msg.id,
+          filter: msg.filter,
+          error: res.valid ? null : res.error,
+        });
       }
     });
     await page.setContent(renderPanelHtml(origin, "coloring.js"), { waitUntil: "load" });
@@ -233,9 +316,27 @@ maybe("statistics and follow panels (Chromium + real backend)", function () {
   }
 
   test("coloring rules editor: edit, check filters, reorder, add, remove and save", async () => {
-    const dns = { name: "DNS", filter: "dns", foreground: "#12272e", background: "#c8e2ff", enabled: true };
-    const tcp = { name: "TCP", filter: "tcp", foreground: "#000000", background: "#e7e6ff", enabled: true };
-    const arp = { name: "ARP", filter: "arp", foreground: "#000000", background: "#faf0d7", enabled: false };
+    const dns = {
+      name: "DNS",
+      filter: "dns",
+      foreground: "#12272e",
+      background: "#c8e2ff",
+      enabled: true,
+    };
+    const tcp = {
+      name: "TCP",
+      filter: "tcp",
+      foreground: "#000000",
+      background: "#e7e6ff",
+      enabled: true,
+    };
+    const arp = {
+      name: "ARP",
+      filter: "arp",
+      foreground: "#000000",
+      background: "#faf0d7",
+      enabled: false,
+    };
     const { page, log, post } = await openColoring([dns, tcp, arp], [dns]);
     const rowsOf = () =>
       page.$$eval("table.rules tbody tr[data-id]", (trs) =>
@@ -243,7 +344,8 @@ maybe("statistics and follow panels (Chromium + real backend)", function () {
           on: /** @type {HTMLInputElement} */ (tr.querySelector("input[type=checkbox]")).checked,
           name: /** @type {HTMLInputElement} */ (tr.querySelector(".rule-name")).value,
           filter: /** @type {HTMLInputElement} */ (tr.querySelector(".rule-filter")).value,
-          sample: /** @type {HTMLElement} */ (tr.querySelector(".rule-sample")).style.backgroundColor,
+          sample: /** @type {HTMLElement} */ (tr.querySelector(".rule-sample")).style
+            .backgroundColor,
         })),
       );
     await page.waitForSelector("table.rules tbody tr[data-id]");
@@ -258,7 +360,9 @@ maybe("statistics and follow panels (Chromium + real backend)", function () {
     // A filter tshark rejects is marked (it can still be saved: tshark skips it).
     const second = "table.rules tbody tr[data-id] >> nth=1";
     await page.fill(`${second} >> .rule-filter`, "tcp.port ==");
-    await page.waitForFunction(() => /\S/.test(document.querySelectorAll("table.rules .rule-problem")[1]?.textContent ?? ""));
+    await page.waitForFunction(() =>
+      /\S/.test(document.querySelectorAll("table.rules .rule-problem")[1]?.textContent ?? ""),
+    );
     assert.equal(await page.getAttribute(`${second} >> .rule-filter`, "aria-invalid"), "true");
     assert.equal(await page.isDisabled(save), false);
     // An empty filter can't be saved.
@@ -266,7 +370,9 @@ maybe("statistics and follow panels (Chromium + real backend)", function () {
     assert.match(await page.textContent(`${second} >> .rule-problem`), /Enter a display filter/);
     assert.equal(await page.isDisabled(save), true);
     await page.fill(`${second} >> .rule-filter`, "tcp.port == 80");
-    await page.waitForFunction(() => document.querySelectorAll("table.rules .rule-problem")[1]?.textContent === "");
+    await page.waitForFunction(
+      () => document.querySelectorAll("table.rules .rule-problem")[1]?.textContent === "",
+    );
 
     // Add a rule on top, give it a filter and a color; move it down; remove ARP.
     await page.click("button:has-text('Add Rule')");
@@ -278,7 +384,11 @@ maybe("statistics and follow panels (Chromium + real backend)", function () {
     });
     await page.focus("table.rules tbody tr[data-id] >> nth=0 >> .rule-filter");
     await page.keyboard.press("Alt+ArrowDown");
-    assert.equal(await page.evaluate(() => /** @type {HTMLInputElement} */ (document.activeElement)?.value), "udp", "focus follows the moved rule");
+    assert.equal(
+      await page.evaluate(() => /** @type {HTMLInputElement} */ (document.activeElement)?.value),
+      "udp",
+      "focus follows the moved rule",
+    );
     await page.click("table.rules tbody tr[data-id] >> nth=3 >> button[aria-label='Remove rule']");
     await page.uncheck("table.rules tbody tr[data-id] >> nth=0 >> input[type=checkbox]");
     assert.deepEqual(await rowsOf(), [
@@ -299,16 +409,24 @@ maybe("statistics and follow panels (Chromium + real backend)", function () {
     const stored = [saved.rules[0], { ...saved.rules[1], name: "udp" }, saved.rules[2]];
     await post({ type: "rules", rules: stored }); // the settings change can come first
     await post({ type: "saved", rules: stored });
-    await page.waitForFunction(() => !/unsaved|changed in settings/.test(document.querySelector(".status")?.textContent ?? ""));
+    await page.waitForFunction(
+      () =>
+        !/unsaved|changed in settings/.test(document.querySelector(".status")?.textContent ?? ""),
+    );
     assert.equal(await page.isDisabled(save), true);
     assert.equal((await rowsOf())[1].name, "udp");
 
     // Edited elsewhere while there are unsaved edits: say so; Revert loads them.
     await page.fill("table.rules tbody tr[data-id] >> nth=2 >> .rule-name", "Web");
     await post({ type: "rules", rules: [dns] });
-    await page.waitForFunction(() => /changed in settings/.test(document.querySelector(".status")?.textContent ?? ""));
+    await page.waitForFunction(() =>
+      /changed in settings/.test(document.querySelector(".status")?.textContent ?? ""),
+    );
     await page.click("button:has-text('Restore Defaults')");
-    assert.deepEqual((await rowsOf()).map((r) => r.name), ["DNS"]);
+    assert.deepEqual(
+      (await rowsOf()).map((r) => r.name),
+      ["DNS"],
+    );
     await page.click("button:has-text('Open settings.json')");
     assert.equal(log.at(-1).type, "openSettings");
   });
@@ -316,7 +434,11 @@ maybe("statistics and follow panels (Chromium + real backend)", function () {
   test("export objects: list, filter, sort, go to packet and save", async () => {
     const objects = await startBackend(deps);
     try {
-      await objects.request("open", { path: path.join(FIXTURES, "objects.pcap") }, { timeoutMs: 0 });
+      await objects.request(
+        "open",
+        { path: path.join(FIXTURES, "objects.pcap") },
+        { timeoutMs: 0 },
+      );
       const { page, problems, post } = await newPage(browser);
       const log = [];
       // A stand-in for ObjectsPanel (src/panels/objectsPanel.ts).
@@ -339,9 +461,15 @@ maybe("statistics and follow panels (Chromium + real backend)", function () {
       await waitRows(page, 7);
       const all = await rows(page);
       assert.deepEqual(all[0], ["6", "HTTP", "example.com", "image/png", "776 B", "logo.png"]);
-      assert.deepEqual(all.map((r) => r[5]), ["logo.png", "report", "upload", "dup.txt", "dup(1).txt", "config.bin", "Test report.eml"]);
+      assert.deepEqual(
+        all.map((r) => r[5]),
+        ["logo.png", "report", "upload", "dup.txt", "dup(1).txt", "config.bin", "Test report.eml"],
+      );
       assert.match(await page.textContent(".status"), /^7 objects, /);
-      assert.deepEqual(await page.$$eval("#objects-protocol option", (os) => os.map((o) => o.textContent)), ["All (7)", "HTTP (5)", "TFTP (1)", "IMF (1)"]);
+      assert.deepEqual(
+        await page.$$eval("#objects-protocol option", (os) => os.map((o) => o.textContent)),
+        ["All (7)", "HTTP (5)", "TFTP (1)", "IMF (1)"],
+      );
       assert.ok(await page.isDisabled("#objects-save"), "nothing selected yet");
 
       await page.selectOption("#objects-protocol", "tftp");
@@ -354,7 +482,11 @@ maybe("statistics and follow panels (Chromium + real backend)", function () {
       await waitRows(page, 7);
 
       await page.click("th:has-text('Size')"); // numeric: largest first
-      assert.deepEqual((await rows(page)).map((r) => r[5]).slice(0, 3), ["report", "logo.png", "config.bin"]);
+      assert.deepEqual((await rows(page)).map((r) => r[5]).slice(0, 3), [
+        "report",
+        "logo.png",
+        "config.bin",
+      ]);
       await page.click("th:has-text('Size')");
       assert.equal((await rows(page))[6][5], "report");
 
@@ -375,7 +507,9 @@ maybe("statistics and follow panels (Chromium + real backend)", function () {
       assert.deepEqual([...log.at(-1).ids].sort(), [0, 1, 2, 3, 4, 5, 6]);
 
       await page.click("button:has-text('Refresh')");
-      await page.waitForFunction(() => /^7 objects/.test(document.querySelector(".status")?.textContent ?? ""));
+      await page.waitForFunction(() =>
+        /^7 objects/.test(document.querySelector(".status")?.textContent ?? ""),
+      );
     } finally {
       await objects.dispose();
     }

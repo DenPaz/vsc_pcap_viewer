@@ -15,7 +15,11 @@ export async function pickTimeFormat(provider: PcapEditorProvider): Promise<void
   const scope = provider.activeSession?.uri;
   const current = getSetting<string>("timeFormat", "relative", scope);
   const pick = await vscode.window.showQuickPick(
-    TIME_FORMATS.map((f) => ({ label: f.label, description: f.id === current ? "current" : undefined, id: f.id })),
+    TIME_FORMATS.map((f) => ({
+      label: f.label,
+      description: f.id === current ? "current" : undefined,
+      id: f.id,
+    })),
     { title: "Time Display Format", placeHolder: "How the packet list shows the Time column" },
   );
   if (pick) {
@@ -31,8 +35,17 @@ export async function pickNameResolution(provider: PcapEditorProvider): Promise<
   const scope = provider.activeSession?.uri;
   const current = readSettings(scope).nameResolution;
   const picks = await vscode.window.showQuickPick(
-    NAME_RESOLUTION_OPTIONS.map((o) => ({ label: o.label, detail: o.detail, picked: current[o.key], key: o.key })),
-    { title: "Name Resolution", placeHolder: "Names to show instead of addresses and port numbers", canPickMany: true },
+    NAME_RESOLUTION_OPTIONS.map((o) => ({
+      label: o.label,
+      detail: o.detail,
+      picked: current[o.key],
+      key: o.key,
+    })),
+    {
+      title: "Name Resolution",
+      placeHolder: "Names to show instead of addresses and port numbers",
+      canPickMany: true,
+    },
   );
   if (!picks) {
     return;
@@ -49,7 +62,10 @@ export async function pickNameResolution(provider: PcapEditorProvider): Promise<
  * Viewer actions (Find, navigation, marks, time reference) for the command
  * palette and keybindings: each asks the active capture's webview to act.
  */
-export function registerNavigationCommands(context: vscode.ExtensionContext, provider: PcapEditorProvider): void {
+export function registerNavigationCommands(
+  context: vscode.ExtensionContext,
+  provider: PcapEditorProvider,
+): void {
   context.subscriptions.push(
     ...VIEWER_COMMANDS.map((command) =>
       vscode.commands.registerCommand(viewerCommandId(command), () => {
@@ -61,6 +77,8 @@ export function registerNavigationCommands(context: vscode.ExtensionContext, pro
       }),
     ),
     vscode.commands.registerCommand("pcapViewer.timeFormat", () => pickTimeFormat(provider)),
-    vscode.commands.registerCommand("pcapViewer.nameResolution", () => pickNameResolution(provider)),
+    vscode.commands.registerCommand("pcapViewer.nameResolution", () =>
+      pickNameResolution(provider),
+    ),
   );
 }

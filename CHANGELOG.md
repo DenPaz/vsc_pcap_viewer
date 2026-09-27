@@ -2,10 +2,10 @@
 
 ## Unreleased
 
-- *PCAP: Export Objects…*: the files a capture carried over HTTP, SMB, TFTP,
+- _PCAP: Export Objects…_: the files a capture carried over HTTP, SMB, TFTP,
   IMF, DICOM and FTP-DATA, with the packet, host, content type and size of
   each; filter, sort, go to the packet, and save one or all of them.
-- Name resolution (*PCAP: Name Resolution…*, the status bar's *Names* link,
+- Name resolution (_PCAP: Name Resolution…_, the status bar's _Names_ link,
   `pcapViewer.nameResolution.*`): names for MAC addresses, IP addresses (from
   the capture's DNS answers and hosts files; network lookups only if allowed)
   and ports. Resolved names show their address as a tooltip and cell filters
@@ -13,13 +13,13 @@
 - Fixed: statistics showed MAC names such as "Broadcast" from Wireshark's
   preferences, and their rows then built filters that matched nothing; reports
   now always show addresses.
-- *PCAP: Export Packet Dissections…*: the full packet details of the
+- _PCAP: Export Packet Dissections…_: the full packet details of the
   displayed, all, selected or marked packets as plain text, PDML or JSON,
   optionally with the packet bytes.
 - Merging captures: opening a piece of a rotated capture (`tcpdump -C`, or a
   dumpcap/Wireshark ring buffer) offers to merge all its pieces into one
-  capture; *PCAP: Merge Captures…* merges them, or any captures by timestamp.
-- *PCAP: Edit Coloring Rules* (was *Manage Coloring Rules*, which opened the
+  capture; _PCAP: Merge Captures…_ merges them, or any captures by timestamp.
+- _PCAP: Edit Coloring Rules_ (was _Manage Coloring Rules_, which opened the
   settings) is an editor: reorder, enable, rename, recolor with a preview, add
   and remove rules, with filters checked by tshark as you type.
 - CI uses the Node 24 versions of its GitHub Actions.
@@ -37,26 +37,26 @@
   A filter applied while a capture is still being indexed starts at once.
   Finished filter results are saved with the index, so reapplying one after
   reopening the capture is instant.
-- TLS decryption: *PCAP: Set TLS Key Log File…* (`pcapViewer.tlsKeyLogFile`)
+- TLS decryption: _PCAP: Set TLS Key Log File…_ (`pcapViewer.tlsKeyLogFile`)
   decrypts TLS and QUIC with an `SSLKEYLOGFILE` key log. The capture reloads
   when the setting changes, the viewer offers a reload when the file gets new
   keys, and saved indexes follow the file's contents. `generate.py
-  --tls-keylog` makes a sample capture and key log to try it.
+--tls-keylog` makes a sample capture and key log to try it.
 - Big captures open faster: the first packets show within about half a second
   while the rest is indexed, and the
   finished index is saved, so reopening an unchanged capture is instant
   (`pcapViewer.indexCache.enabled`, `pcapViewer.indexCache.maxSizeMB`,
-  *PCAP: Clear Index Cache*).
+  _PCAP: Clear Index Cache_).
 - The large-capture generator (`make large-fixture`) works on Pythons built
   without zstd.
 - Quick view of late packets: from packet 20,000 on (`pcapViewer.quickDetail.after`),
   the details show in about 0.3 s instead of up to ~20 s per million packets:
   only the 300 packets before it (`pcapViewer.quickDetail.window`) are
-  dissected (cut out with editcap), marked *Quick view*, until the exact view
+  dissected (cut out with editcap), marked _Quick view_, until the exact view
   replaces it. Ask Copilot uses it for late packets too.
-- *Ask Copilot About This Packet…* (and *…About N Selected Packets…*) in the
+- _Ask Copilot About This Packet…_ (and _…About N Selected Packets…_) in the
   packet list, and `@pcap /explain <frames> [question]` in chat: the language
-  model explains the packets, with *Go to packet* and *Apply filter* buttons.
+  model explains the packets, with _Go to packet_ and _Apply filter_ buttons.
   It sends the packets' rows and dissection trees (capped; no raw bytes unless
   `pcapViewer.ai.allowPacketBytes`), only after a one-time consent that sets
   `pcapViewer.ai.allowPacketData`.
@@ -74,7 +74,7 @@
   select the page's text).
 - Multi-select in the packet list: Shift+click / Shift+arrows ranges,
   Ctrl/Cmd+click, Ctrl+A, Esc. Mark, copy (rows or frame numbers) and export
-  the selection (*Export Selected Packets…*; the CSV/JSON packet list can
+  the selection (_Export Selected Packets…_; the CSV/JSON packet list can
   export the selected rows).
 - Source/Destination (and custom IPv4/IPv6/MAC columns) sort numerically:
   IPv4, then IPv6, then MAC addresses, then names.
@@ -95,13 +95,13 @@
   C array, escaped string, Base64, printable text).
 
 - Optional AI help for display filters (VS Code Language Model API / Copilot):
-  ✨ in the filter bar, *PCAP: Suggest Display Filter…* and `@pcap` in chat.
+  ✨ in the filter bar, _PCAP: Suggest Display Filter…_ and `@pcap` in chat.
   Suggestions are validated with tshark; no packet data is sent.
 
 - Opens more capture file types by default: gzip/zstd/lz4-compressed pcap and
   pcapng, `.ntar`, `tcpdump -C` rotated files (`*.pcap1`…), snoop, ERF,
   PacketLogger and btsnoop. Generic extensions (`*.1`, `.log`, `.dmp`, `.trc`,
-  `.ber`) are offered in *Reopen Editor With…*.
+  `.ber`) are offered in _Reopen Editor With…_.
 - Files tshark can't read show a clear message; open progress no longer
   stalls at 99% for compressed files and other formats.
 - Export file names drop compression suffixes (`trace.pcap.gz` →
@@ -124,7 +124,7 @@ First release: every item of the project brief.
   expert information, capture file properties.
 - Lua dissectors (new from template, reload with error check, dissectors
   folder), Decode As rules and preference overrides.
-- Coloring rules (default Wireshark-like set, *Colorize with Filter…*,
+- Coloring rules (default Wireshark-like set, _Colorize with Filter…_,
   toggle), evaluated by tshark in one background pass.
 - Export: displayed / all / selected packets to pcapng or pcap, the packet
   list as CSV or JSON, packet bytes, and stream data.

@@ -56,14 +56,20 @@ export async function setTlsKeyLogFile(provider: PcapEditorProvider): Promise<vo
   try {
     text = await readStart(file);
   } catch (err) {
-    void vscode.window.showErrorMessage(`PCAP Viewer: cannot read ${file}: ${(err as Error).message}`);
+    void vscode.window.showErrorMessage(
+      `PCAP Viewer: cannot read ${file}: ${(err as Error).message}`,
+    );
     return;
   }
   if (!looksLikeKeyLog(text)) {
     const useIt = "Use It Anyway";
     const choice = await vscode.window.showWarningMessage(
       `${path.basename(file)} doesn't look like a TLS key log.`,
-      { modal: true, detail: "Key logs have lines such as \"CLIENT_RANDOM <hex> <hex>\" or \"CLIENT_TRAFFIC_SECRET_0 <hex> <hex>\" (set SSLKEYLOGFILE for your browser or curl to get one)." },
+      {
+        modal: true,
+        detail:
+          'Key logs have lines such as "CLIENT_RANDOM <hex> <hex>" or "CLIENT_TRAFFIC_SECRET_0 <hex> <hex>" (set SSLKEYLOGFILE for your browser or curl to get one).',
+      },
       useIt,
     );
     if (choice !== useIt) {
@@ -73,6 +79,13 @@ export async function setTlsKeyLogFile(provider: PcapEditorProvider): Promise<vo
   await updateSetting("tlsKeyLogFile", file, scope);
 }
 
-export function registerTlsCommands(context: vscode.ExtensionContext, provider: PcapEditorProvider): void {
-  context.subscriptions.push(vscode.commands.registerCommand("pcapViewer.setTlsKeyLogFile", () => setTlsKeyLogFile(provider)));
+export function registerTlsCommands(
+  context: vscode.ExtensionContext,
+  provider: PcapEditorProvider,
+): void {
+  context.subscriptions.push(
+    vscode.commands.registerCommand("pcapViewer.setTlsKeyLogFile", () =>
+      setTlsKeyLogFile(provider),
+    ),
+  );
 }

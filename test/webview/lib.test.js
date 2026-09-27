@@ -42,7 +42,10 @@ suite("webview lib: virtualization", () => {
       for (const index of [0, 1, 500, 999, total - 1]) {
         const scrollTop = lib.scrollTopForIndex({ ...p, index, scrollTop: 0 });
         const w = lib.computeWindow({ ...p, scrollTop });
-        assert.ok(index >= w.first && index < w.first + w.count, `index ${index} of ${total} visible`);
+        assert.ok(
+          index >= w.first && index < w.first + w.count,
+          `index ${index} of ${total} visible`,
+        );
       }
       const centered = lib.scrollTopForIndex({ ...p, index: 500, scrollTop: 0, center: true });
       const w = lib.computeWindow({ ...p, scrollTop: centered });
@@ -83,16 +86,31 @@ suite("webview lib: filters", () => {
     assert.equal(lib.buildFieldFilter({ name: "ip.src", show: "10.0.0.1" }), "ip.src == 10.0.0.1");
     assert.equal(lib.buildFieldFilter({ name: "tcp.port", show: "443" }), "tcp.port == 443");
     assert.equal(lib.buildFieldFilter({ name: "ip.flags", show: "0x02" }), "ip.flags == 0x02");
-    assert.equal(lib.buildFieldFilter({ name: "eth.src", show: "02:00:00:00:00:01" }), "eth.src == 02:00:00:00:00:01");
-    assert.equal(lib.buildFieldFilter({ name: "ipv6.src", show: "fe80::1" }), "ipv6.src == fe80::1");
-    assert.equal(lib.buildFieldFilter({ name: "tcp.flags.syn", show: "True" }), "tcp.flags.syn == 1");
+    assert.equal(
+      lib.buildFieldFilter({ name: "eth.src", show: "02:00:00:00:00:01" }),
+      "eth.src == 02:00:00:00:00:01",
+    );
+    assert.equal(
+      lib.buildFieldFilter({ name: "ipv6.src", show: "fe80::1" }),
+      "ipv6.src == fe80::1",
+    );
+    assert.equal(
+      lib.buildFieldFilter({ name: "tcp.flags.syn", show: "True" }),
+      "tcp.flags.syn == 1",
+    );
     assert.equal(lib.buildFieldFilter({ name: "http", proto: true, show: "x" }), "http");
     assert.equal(lib.buildFieldFilter({ name: "tcp.segments", show: "" }), "tcp.segments");
   });
 
   test("buildFieldFilter quotes and escapes strings", () => {
-    assert.equal(lib.buildFieldFilter({ name: "http.host", show: "example.com" }), 'http.host == "example.com"');
-    assert.equal(lib.buildFieldFilter({ name: "http.user_agent", show: 'a "b" \\c' }), 'http.user_agent == "a \\"b\\" \\\\c"');
+    assert.equal(
+      lib.buildFieldFilter({ name: "http.host", show: "example.com" }),
+      'http.host == "example.com"',
+    );
+    assert.equal(
+      lib.buildFieldFilter({ name: "http.user_agent", show: 'a "b" \\c' }),
+      'http.user_agent == "a \\"b\\" \\\\c"',
+    );
   });
 
   test("buildFieldFilter rejects unfilterable nodes", () => {
@@ -114,23 +132,61 @@ suite("webview lib: filters", () => {
 suite("webview lib: bytes", () => {
   const tree = [
     {
-      id: 1, label: "Ethernet", name: "eth", pos: 0, size: 14, src: 0,
-      children: [{ id: 2, label: "Dst", name: "eth.dst", pos: 0, size: 6, src: 0, children: [{ id: 3, label: "OUI", name: "eth.dst.oui", pos: 0, size: 3, src: 0 }] }],
+      id: 1,
+      label: "Ethernet",
+      name: "eth",
+      pos: 0,
+      size: 14,
+      src: 0,
+      children: [
+        {
+          id: 2,
+          label: "Dst",
+          name: "eth.dst",
+          pos: 0,
+          size: 6,
+          src: 0,
+          children: [{ id: 3, label: "OUI", name: "eth.dst.oui", pos: 0, size: 3, src: 0 }],
+        },
+      ],
     },
-    { id: 4, label: "IP", name: "ip", pos: 14, size: 20, src: 0, children: [{ id: 5, label: "Src", name: "ip.src", pos: 26, size: 4, src: 0 }] },
+    {
+      id: 4,
+      label: "IP",
+      name: "ip",
+      pos: 14,
+      size: 20,
+      src: 0,
+      children: [{ id: 5, label: "Src", name: "ip.src", pos: 26, size: 4, src: 0 }],
+    },
     { id: 6, label: "HTTP", name: "http", pos: 0, size: 40, src: 1 },
   ];
 
   test("findNodeForByte returns the smallest enclosing field", () => {
-    assert.deepEqual(lib.findNodeForByte(tree, 0, 1).map((n) => n.id), [1, 2, 3]);
-    assert.deepEqual(lib.findNodeForByte(tree, 0, 4).map((n) => n.id), [1, 2]);
-    assert.deepEqual(lib.findNodeForByte(tree, 0, 27).map((n) => n.id), [4, 5]);
-    assert.deepEqual(lib.findNodeForByte(tree, 1, 1).map((n) => n.id), [6]);
+    assert.deepEqual(
+      lib.findNodeForByte(tree, 0, 1).map((n) => n.id),
+      [1, 2, 3],
+    );
+    assert.deepEqual(
+      lib.findNodeForByte(tree, 0, 4).map((n) => n.id),
+      [1, 2],
+    );
+    assert.deepEqual(
+      lib.findNodeForByte(tree, 0, 27).map((n) => n.id),
+      [4, 5],
+    );
+    assert.deepEqual(
+      lib.findNodeForByte(tree, 1, 1).map((n) => n.id),
+      [6],
+    );
     assert.equal(lib.findNodeForByte(tree, 0, 100), null);
   });
 
   test("nodeKey is stable across packets", () => {
-    assert.equal(lib.nodeKey([{ name: "ip", label: "IPv4" }, { label: "Flags: 0x2" }]), "ip/Flags: #x#");
+    assert.equal(
+      lib.nodeKey([{ name: "ip", label: "IPv4" }, { label: "Flags: 0x2" }]),
+      "ip/Flags: #x#",
+    );
   });
 
   test("hex and formatting helpers", () => {
@@ -152,7 +208,12 @@ suite("webview lib: autocomplete", () => {
   test("field context at the start and after logical operators", () => {
     assert.deepEqual(ctx("ip.sr"), { kind: "field", prefix: "ip.sr", start: 0, end: 5 });
     assert.equal(ctx("").kind, "field");
-    assert.deepEqual(ctx("tcp.port == 80 && ht"), { kind: "field", prefix: "ht", start: 18, end: 20 });
+    assert.deepEqual(ctx("tcp.port == 80 && ht"), {
+      kind: "field",
+      prefix: "ht",
+      start: 18,
+      end: 20,
+    });
     assert.equal(ctx("!ht").kind, "field");
     assert.equal(ctx("frame.len > 100 || ").kind, "field");
     assert.equal(ctx("(ht").kind, "field");
@@ -192,19 +253,37 @@ suite("webview lib: autocomplete", () => {
   });
 
   test("operator suggestions filter by prefix", () => {
-    assert.deepEqual(lib.operatorSuggestions("operator", "co").map((o) => o.label), ["contains"]);
-    assert.deepEqual(lib.operatorSuggestions("logical", "").map((o) => o.label), ["&&", "||", "and", "or", "^^"]);
-    assert.deepEqual(lib.operatorSuggestions("operator", "!").map((o) => o.label), ["!="]);
+    assert.deepEqual(
+      lib.operatorSuggestions("operator", "co").map((o) => o.label),
+      ["contains"],
+    );
+    assert.deepEqual(
+      lib.operatorSuggestions("logical", "").map((o) => o.label),
+      ["&&", "||", "and", "or", "^^"],
+    );
+    assert.deepEqual(
+      lib.operatorSuggestions("operator", "!").map((o) => o.label),
+      ["!="],
+    );
   });
 
   test("applyCompletion inserts fields as-is and pads operators", () => {
-    assert.deepEqual(lib.applyCompletion("ip.sr", { start: 0, end: 5 }, "ip.src", false), { text: "ip.src", cursor: 6 });
-    assert.deepEqual(lib.applyCompletion("ip.src ", { start: 7, end: 7 }, "==", true), { text: "ip.src == ", cursor: 10 });
+    assert.deepEqual(lib.applyCompletion("ip.sr", { start: 0, end: 5 }, "ip.src", false), {
+      text: "ip.src",
+      cursor: 6,
+    });
+    assert.deepEqual(lib.applyCompletion("ip.src ", { start: 7, end: 7 }, "==", true), {
+      text: "ip.src == ",
+      cursor: 10,
+    });
     assert.deepEqual(lib.applyCompletion("ip.src co 1", { start: 7, end: 9 }, "contains", true), {
       text: "ip.src contains 1",
       cursor: 16,
     });
-    assert.deepEqual(lib.applyCompletion("ip.s == 1", { start: 0, end: 4 }, "ip.src", false), { text: "ip.src == 1", cursor: 6 });
+    assert.deepEqual(lib.applyCompletion("ip.s == 1", { start: 0, end: 4 }, "ip.src", false), {
+      text: "ip.src == 1",
+      cursor: 6,
+    });
   });
 
   test("friendlyType", () => {
@@ -234,7 +313,10 @@ suite("webview lib: columns", () => {
 
 suite("webview lib: follow stream and statistics helpers", () => {
   test("bytesToAscii keeps text, newlines and tabs; drops CR before LF", () => {
-    assert.equal(lib.bytesToAscii(new Uint8Array([0x47, 0x0d, 0x0a, 0x00, 0x09, 0xc8, 0x0d])), "G\n.\t..");
+    assert.equal(
+      lib.bytesToAscii(new Uint8Array([0x47, 0x0d, 0x0a, 0x00, 0x09, 0xc8, 0x0d])),
+      "G\n.\t..",
+    );
   });
 
   test("hexDump lays out 16 bytes per line with offsets and ASCII", () => {
@@ -260,14 +342,38 @@ suite("webview lib: follow stream and statistics helpers", () => {
   });
 
   test("sortRows is stable, numeric for numbers, natural for text", () => {
-    const rows = [{ cells: ["b", 2] }, { cells: ["A", 10] }, { cells: ["a", 1] }, { cells: ["x10", 3] }, { cells: ["x9", 3] }];
-    assert.deepEqual(lib.sortRows(rows, 0, false).map((r) => r.cells[0]), ["A", "a", "b", "x9", "x10"]);
-    assert.deepEqual(lib.sortRows(rows, 1, true).map((r) => r.cells[1]), [10, 3, 3, 2, 1]);
-    assert.deepEqual(lib.sortRows(rows, 1, true).map((r) => r.cells[0]).slice(1, 3), ["x10", "x9"]); // ties keep order
+    const rows = [
+      { cells: ["b", 2] },
+      { cells: ["A", 10] },
+      { cells: ["a", 1] },
+      { cells: ["x10", 3] },
+      { cells: ["x9", 3] },
+    ];
+    assert.deepEqual(
+      lib.sortRows(rows, 0, false).map((r) => r.cells[0]),
+      ["A", "a", "b", "x9", "x10"],
+    );
+    assert.deepEqual(
+      lib.sortRows(rows, 1, true).map((r) => r.cells[1]),
+      [10, 3, 3, 2, 1],
+    );
+    assert.deepEqual(
+      lib
+        .sortRows(rows, 1, true)
+        .map((r) => r.cells[0])
+        .slice(1, 3),
+      ["x10", "x9"],
+    ); // ties keep order
   });
 
   test("tableToCsv quotes where needed", () => {
-    assert.equal(lib.tableToCsv([{ label: "a" }, { label: "b,c" }], [{ cells: [1, 'x"y'] }, { cells: ["line\nbreak", null] }]), 'a,"b,c"\n1,"x""y"\n"line\nbreak",');
+    assert.equal(
+      lib.tableToCsv(
+        [{ label: "a" }, { label: "b,c" }],
+        [{ cells: [1, 'x"y'] }, { cells: ["line\nbreak", null] }],
+      ),
+      'a,"b,c"\n1,"x""y"\n"line\nbreak",',
+    );
   });
 
   test("rowsToText: tab-separated rows, optional header, one line per row", () => {
@@ -275,7 +381,10 @@ suite("webview lib: follow stream and statistics helpers", () => {
       ["1", "GET /\tx", "a\r\nb"],
       ["2", "", "c"],
     ];
-    assert.equal(lib.rowsToText(["No.", "Info", "More"], rows, true), "No.\tInfo\tMore\n1\tGET / x\ta b\n2\t\tc");
+    assert.equal(
+      lib.rowsToText(["No.", "Info", "More"], rows, true),
+      "No.\tInfo\tMore\n1\tGET / x\ta b\n2\t\tc",
+    );
     assert.equal(lib.rowsToText(["No."], [["7"]], false), "7");
   });
 
@@ -289,7 +398,13 @@ suite("webview lib: follow stream and statistics helpers", () => {
 });
 
 suite("webview lib: coloring", () => {
-  const coloring = { id: 3, rules: [{ foreground: "#000000", background: "#e4ffc7" }, { foreground: "red", background: "#ffffff" }] };
+  const coloring = {
+    id: 3,
+    rules: [
+      { foreground: "#000000", background: "#e4ffc7" },
+      { foreground: "red", background: "#ffffff" },
+    ],
+  };
 
   test("rowColors uses the rule of the current coloring only", () => {
     assert.deepEqual(lib.rowColors({ color: 0, cid: 3 }, coloring), coloring.rules[0]);
@@ -308,8 +423,20 @@ suite("webview lib: navigation and customisation", () => {
   test("filterObjects filters Export Objects rows by protocol and text", () => {
     const objs = [
       { id: 0, protocol: "http", name: "logo.png", host: "example.com", contentType: "image/png" },
-      { id: 1, protocol: "tftp", name: "config.bin", host: "", contentType: "application/octet-stream" },
-      { id: 2, protocol: "http", name: "report", host: "cdn.example.org", contentType: "text/plain" },
+      {
+        id: 1,
+        protocol: "tftp",
+        name: "config.bin",
+        host: "",
+        contentType: "application/octet-stream",
+      },
+      {
+        id: 2,
+        protocol: "http",
+        name: "report",
+        host: "cdn.example.org",
+        contentType: "text/plain",
+      },
     ];
     const ids = (/** @type {{id: number}[]} */ list) => list.map((o) => o.id);
     assert.deepEqual(ids(lib.filterObjects(objs, "", "")), [0, 1, 2]);
@@ -320,12 +447,21 @@ suite("webview lib: navigation and customisation", () => {
   });
 
   test("cellAddress finds the address behind a resolved name", () => {
-    const row = { cells: ["1", "0", "example.com", "Broadcast", "ARP"], addresses: ["93.184.216.34", "ff:ff:ff:ff:ff:ff"] };
+    const row = {
+      cells: ["1", "0", "example.com", "Broadcast", "ARP"],
+      addresses: ["93.184.216.34", "ff:ff:ff:ff:ff:ff"],
+    };
     assert.equal(lib.cellAddress(col("source"), row), "93.184.216.34");
     assert.equal(lib.cellAddress(col("destination"), row), "ff:ff:ff:ff:ff:ff");
-    assert.equal(lib.cellFilter(col("destination"), lib.cellAddress(col("destination"), row)), "eth.dst == ff:ff:ff:ff:ff:ff");
+    assert.equal(
+      lib.cellFilter(col("destination"), lib.cellAddress(col("destination"), row)),
+      "eth.dst == ff:ff:ff:ff:ff:ff",
+    );
     assert.equal(lib.cellAddress(col("protocol"), row), null);
-    const same = { cells: ["1", "0", "10.0.0.1", "example.com"], addresses: ["10.0.0.1", "93.184.216.34"] };
+    const same = {
+      cells: ["1", "0", "10.0.0.1", "example.com"],
+      addresses: ["10.0.0.1", "93.184.216.34"],
+    };
     assert.equal(lib.cellAddress(col("source"), same), null, "the cell already shows the address");
     assert.equal(lib.cellAddress(col("source"), { cells: ["1", "0", "10.0.0.1"] }), null);
     assert.equal(lib.cellAddress(col("source"), undefined), null);
@@ -336,7 +472,10 @@ suite("webview lib: navigation and customisation", () => {
     assert.equal(lib.cellFilter(col("destination"), "93.184.216.34"), "ip.dst == 93.184.216.34");
     assert.equal(lib.cellFilter(col("source"), "fe80::1"), "ipv6.src == fe80::1");
     assert.equal(lib.cellFilter(col("destination"), "2001:db8::2"), "ipv6.dst == 2001:db8::2");
-    assert.equal(lib.cellFilter(col("source"), "02:00:00:00:00:01"), "eth.src == 02:00:00:00:00:01");
+    assert.equal(
+      lib.cellFilter(col("source"), "02:00:00:00:00:01"),
+      "eth.src == 02:00:00:00:00:01",
+    );
     assert.equal(lib.cellFilter(col("destination"), "Broadcast"), null); // a resolved name: no field to match
     assert.equal(lib.cellFilter(col("protocol"), "DNS"), "dns");
     assert.equal(lib.cellFilter(col("protocol"), "TLSv1.3"), "tls");
@@ -346,10 +485,22 @@ suite("webview lib: navigation and customisation", () => {
     assert.equal(lib.cellFilter(col("number"), "4"), "frame.number == 4");
     assert.equal(lib.cellFilter(col("time"), "0.001000"), null);
     assert.equal(lib.cellFilter(col("info"), "GET /"), null);
-    assert.equal(lib.cellFilter(col("custom:http.host", { field: "http.host", custom: true }), "example.com"), 'http.host == "example.com"');
-    assert.equal(lib.cellFilter(col("custom:tcp.stream", { field: "tcp.stream", custom: true }), "3"), "tcp.stream == 3");
-    assert.equal(lib.cellFilter(col("custom:ip.ttl", { field: "ip.ttl", custom: true }), "64,63"), "ip.ttl == 64"); // first occurrence
-    assert.equal(lib.cellFilter(col("custom:x.y", { field: "x.y", custom: true }), 'say "hi"'), 'x.y == "say \\"hi\\""');
+    assert.equal(
+      lib.cellFilter(col("custom:http.host", { field: "http.host", custom: true }), "example.com"),
+      'http.host == "example.com"',
+    );
+    assert.equal(
+      lib.cellFilter(col("custom:tcp.stream", { field: "tcp.stream", custom: true }), "3"),
+      "tcp.stream == 3",
+    );
+    assert.equal(
+      lib.cellFilter(col("custom:ip.ttl", { field: "ip.ttl", custom: true }), "64,63"),
+      "ip.ttl == 64",
+    ); // first occurrence
+    assert.equal(
+      lib.cellFilter(col("custom:x.y", { field: "x.y", custom: true }), 'say "hi"'),
+      'x.y == "say \\"hi\\""',
+    );
     assert.equal(lib.cellFilter(col("source"), ""), null);
   });
 
@@ -374,7 +525,10 @@ suite("webview lib: navigation and customisation", () => {
       lib.formatBytesAs(b, "c"),
       "static const unsigned char packet_bytes[9] = {\n  0x47, 0x45, 0x54, 0x20, 0x2f, 0x0d, 0x0a, 0x00,\n  0x41\n};",
     );
-    assert.equal(lib.formatBytesAs(b, "hexdump", 0x10), "00000010  47 45 54 20 2f 0d 0a 00  41                       GET /...A");
+    assert.equal(
+      lib.formatBytesAs(b, "hexdump", 0x10),
+      "00000010  47 45 54 20 2f 0d 0a 00  41                       GET /...A",
+    );
     for (const n of [0, 1, 2, 3, 4, 5]) {
       const bytes = Uint8Array.from({ length: n }, (_, i) => i * 37);
       assert.equal(lib.toBase64(bytes), Buffer.from(bytes).toString("base64"));
@@ -384,9 +538,26 @@ suite("webview lib: navigation and customisation", () => {
   test("layoutColumns and moveColumn", () => {
     const all = ["number", "time", "source", "info", "custom:tcp.stream"].map((id) => ({ id }));
     const ids = (layout) => lib.layoutColumns(all, layout).map((c) => `${c.column.id}@${c.index}`);
-    assert.deepEqual(ids(undefined), ["number@0", "time@1", "source@2", "info@3", "custom:tcp.stream@4"]);
-    assert.deepEqual(ids({ hidden: ["time"] }), ["number@0", "source@2", "info@3", "custom:tcp.stream@4"]);
-    assert.deepEqual(ids({ order: ["info", "number"] }), ["info@3", "number@0", "time@1", "source@2", "custom:tcp.stream@4"]);
+    assert.deepEqual(ids(undefined), [
+      "number@0",
+      "time@1",
+      "source@2",
+      "info@3",
+      "custom:tcp.stream@4",
+    ]);
+    assert.deepEqual(ids({ hidden: ["time"] }), [
+      "number@0",
+      "source@2",
+      "info@3",
+      "custom:tcp.stream@4",
+    ]);
+    assert.deepEqual(ids({ order: ["info", "number"] }), [
+      "info@3",
+      "number@0",
+      "time@1",
+      "source@2",
+      "custom:tcp.stream@4",
+    ]);
     assert.deepEqual(ids({ hidden: all.map((c) => c.id) }), ["number@0"]); // never zero columns
     assert.deepEqual(lib.moveColumn(["a", "b", "c", "d"], "d", "b"), ["a", "d", "b", "c"]);
     assert.deepEqual(lib.moveColumn(["a", "b", "c"], "a", null), ["b", "c", "a"]);

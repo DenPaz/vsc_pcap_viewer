@@ -24,7 +24,12 @@ function backendOf(session: PcapEditorSession) {
   return backend;
 }
 
-async function chooseDestination(session: PcapEditorSession, suffix: string, ext: string, filters: Record<string, string[]>): Promise<string | undefined> {
+async function chooseDestination(
+  session: PcapEditorSession,
+  suffix: string,
+  ext: string,
+  filters: Record<string, string[]>,
+): Promise<string | undefined> {
   const uri = await vscode.window.showSaveDialog({
     defaultUri: vscode.Uri.file(exportFileName(session.uri.fsPath, suffix, ext)),
     filters,
@@ -41,27 +46,34 @@ async function chooseDestination(session: PcapEditorSession, suffix: string, ext
 }
 
 /** Run the backend's `export` with a cancellable progress notification. */
-async function runExport(session: PcapEditorSession, title: string, params: Record<string, unknown>): Promise<ExportResult | undefined> {
+async function runExport(
+  session: PcapEditorSession,
+  title: string,
+  params: Record<string, unknown>,
+): Promise<ExportResult | undefined> {
   const backend = backendOf(session);
   if (!backend) {
     return undefined;
   }
   try {
-    return await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title, cancellable: true }, async (progress, token) => {
-      let reported = 0;
-      const pending = backend.send<ExportResult>("export", params, {
-        timeoutMs: 0,
-        onProgress: (p) => {
-          if (typeof p.fraction === "number") {
-            const pct = Math.round(p.fraction * 100);
-            progress.report({ increment: pct - reported, message: `${pct}%` });
-            reported = pct;
-          }
-        },
-      });
-      token.onCancellationRequested(() => backend.cancel(pending.id));
-      return pending.promise;
-    });
+    return await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title, cancellable: true },
+      async (progress, token) => {
+        let reported = 0;
+        const pending = backend.send<ExportResult>("export", params, {
+          timeoutMs: 0,
+          onProgress: (p) => {
+            if (typeof p.fraction === "number") {
+              const pct = Math.round(p.fraction * 100);
+              progress.report({ increment: pct - reported, message: `${pct}%` });
+              reported = pct;
+            }
+          },
+        });
+        token.onCancellationRequested(() => backend.cancel(pending.id));
+        return pending.promise;
+      },
+    );
   } catch (err) {
     if (!(err instanceof RpcError && err.cancelled)) {
       void vscode.window.showErrorMessage(`PCAP Viewer: export failed: ${describeError(err)}`);
@@ -74,7 +86,10 @@ async function reportExport(result: ExportResult, what: string, canOpen: boolean
   const name = path.basename(result.path);
   const actions = canOpen ? ["Open", "Reveal"] : ["Reveal"];
   const warning = result.warnings?.length ? ` (${result.warnings[0]})` : "";
-  const choice = await vscode.window.showInformationMessage(`Exported ${what} to ${name}${warning}`, ...actions);
+  const choice = await vscode.window.showInformationMessage(
+    `Exported ${what} to ${name}${warning}`,
+    ...actions,
+  );
   const uri = vscode.Uri.file(result.path);
   if (choice === "Open") {
     await vscode.commands.executeCommand("vscode.openWith", uri, PcapEditorProvider.viewType);
@@ -96,7 +111,9 @@ function pickCaptureFormat(title: string, placeHolder = "File format") {
 const plural = (n: number, word: string) => `${n.toLocaleString()} ${word}${n === 1 ? "" : "s"}`;
 
 /** "PCAP: Export Specified Packets…": displayed / all / selected packets to pcapng or pcap. */
-export async function exportFiltered(provider: PcapEditorProvider): Promise<ExportResult | undefined> {
+export async function exportFiltered(
+  provider: PcapEditorProvider,
+): Promise<ExportResult | undefined> {
   const session = requireSession(provider);
   if (!session || !backendOf(session)) {
     return undefined;
@@ -105,16 +122,40 @@ export async function exportFiltered(provider: PcapEditorProvider): Promise<Expo
   const frames = session.openInfo?.frames ?? 0;
   type ScopeItem = vscode.QuickPickItem & { filter?: string; frames?: number[]; suffix: string };
   const scopes: ScopeItem[] = [
-    { label: "Displayed packets", description: filter ? `filter: ${filter}` : `no display filter: all ${frames.toLocaleString()} packets`, suffix: filter ? "filtered" : "export" },
-    { label: "All packets", description: `${frames.toLocaleString()} packets`, filter: "", suffix: "export" },
+    {
+      label: "Displayed packets",
+      description: filter
+        ? `filter: ${filter}`
+        : `no display filter: all ${frames.toLocaleString()} packets`,
+      suffix: filter ? "filtered" : "export",
+    },
+    {
+      label: "All packets",
+      description: `${frames.toLocaleString()} packets`,
+      filter: "",
+      suffix: "export",
+    },
   ];
   const selected = session.selectedFrames;
   if (selected.length > 1) {
-    scopes.push({ label: "Selected packets", description: plural(selected.length, "packet"), frames: selected, suffix: "selected" });
+    scopes.push({
+      label: "Selected packets",
+      description: plural(selected.length, "packet"),
+      frames: selected,
+      suffix: "selected",
+    });
   } else if (session.selectedFrame !== null) {
-    scopes.push({ label: "Selected packet only", description: `packet ${session.selectedFrame}`, filter: `frame.number == ${session.selectedFrame}`, suffix: `frame${session.selectedFrame}` });
+    scopes.push({
+      label: "Selected packet only",
+      description: `packet ${session.selectedFrame}`,
+      filter: `frame.number == ${session.selectedFrame}`,
+      suffix: `frame${session.selectedFrame}`,
+    });
   }
-  const scope = await vscode.window.showQuickPick(scopes, { title: "Export Specified Packets (1/2)", placeHolder: "Which packets?" });
+  const scope = await vscode.window.showQuickPick(scopes, {
+    title: "Export Specified Packets (1/2)",
+    placeHolder: "Which packets?",
+  });
   if (!scope) {
     return undefined;
   }
@@ -122,7 +163,9 @@ export async function exportFiltered(provider: PcapEditorProvider): Promise<Expo
   if (!format) {
     return undefined;
   }
-  const dest = await chooseDestination(session, scope.suffix, format.ext, { [format.label]: [format.ext] });
+  const dest = await chooseDestination(session, scope.suffix, format.ext, {
+    [format.label]: [format.ext],
+  });
   if (!dest) {
     return undefined;
   }
@@ -134,56 +177,91 @@ export async function exportFiltered(provider: PcapEditorProvider): Promise<Expo
   }
   const result = await runExport(session, `Exporting packets to ${path.basename(dest)}`, params);
   if (result) {
-    void reportExport(result, `${(result.packets ?? 0).toLocaleString()} packet${result.packets === 1 ? "" : "s"}`, true);
+    void reportExport(
+      result,
+      `${(result.packets ?? 0).toLocaleString()} packet${result.packets === 1 ? "" : "s"}`,
+      true,
+    );
   }
   return result;
 }
 
 /** "PCAP: Export Marked Packets…": the packets marked with Ctrl+M to pcapng or pcap. */
-export async function exportMarked(provider: PcapEditorProvider): Promise<ExportResult | undefined> {
+export async function exportMarked(
+  provider: PcapEditorProvider,
+): Promise<ExportResult | undefined> {
   const session = requireSession(provider);
   if (!session || !backendOf(session)) {
     return undefined;
   }
   if (!session.markedCount) {
-    void vscode.window.showInformationMessage("No packets are marked. Mark packets with Ctrl+M (Cmd+M) first.");
+    void vscode.window.showInformationMessage(
+      "No packets are marked. Mark packets with Ctrl+M (Cmd+M) first.",
+    );
     return undefined;
   }
   const format = await pickCaptureFormat(`Export ${plural(session.markedCount, "Marked Packet")}`);
   if (!format) {
     return undefined;
   }
-  const dest = await chooseDestination(session, "marked", format.ext, { [format.label]: [format.ext] });
+  const dest = await chooseDestination(session, "marked", format.ext, {
+    [format.label]: [format.ext],
+  });
   if (!dest) {
     return undefined;
   }
-  const result = await runExport(session, `Exporting marked packets to ${path.basename(dest)}`, { kind: format.ext, dest, marked: true });
+  const result = await runExport(session, `Exporting marked packets to ${path.basename(dest)}`, {
+    kind: format.ext,
+    dest,
+    marked: true,
+  });
   if (result) {
-    void reportExport(result, `${(result.packets ?? 0).toLocaleString()} marked packet${result.packets === 1 ? "" : "s"}`, true);
+    void reportExport(
+      result,
+      `${(result.packets ?? 0).toLocaleString()} marked packet${result.packets === 1 ? "" : "s"}`,
+      true,
+    );
   }
   return result;
 }
 
 /** "PCAP: Export Selected Packets…": the packets selected in the list (Shift/Ctrl+click) to pcapng or pcap. */
-export async function exportSelected(provider: PcapEditorProvider): Promise<ExportResult | undefined> {
+export async function exportSelected(
+  provider: PcapEditorProvider,
+): Promise<ExportResult | undefined> {
   const session = requireSession(provider);
   if (!session || !backendOf(session)) {
     return undefined;
   }
-  const frames = session.selectedFrames.length ? session.selectedFrames : session.selectedFrame !== null ? [session.selectedFrame] : [];
+  const frames = session.selectedFrames.length
+    ? session.selectedFrames
+    : session.selectedFrame !== null
+      ? [session.selectedFrame]
+      : [];
   if (!frames.length) {
-    void vscode.window.showInformationMessage("Select packets first (Shift+click or Ctrl+click selects several).");
+    void vscode.window.showInformationMessage(
+      "Select packets first (Shift+click or Ctrl+click selects several).",
+    );
     return undefined;
   }
   const format = await pickCaptureFormat(`Export ${plural(frames.length, "Selected Packet")}`);
   if (!format) {
     return undefined;
   }
-  const dest = await chooseDestination(session, frames.length === 1 ? `frame${frames[0]}` : "selected", format.ext, { [format.label]: [format.ext] });
+  const dest = await chooseDestination(
+    session,
+    frames.length === 1 ? `frame${frames[0]}` : "selected",
+    format.ext,
+    { [format.label]: [format.ext] },
+  );
   if (!dest) {
     return undefined;
   }
-  const result = await runExport(session, `Exporting selected packets to ${path.basename(dest)}`, { kind: format.ext, dest, frames });
+  const result = await runExport(session, `Exporting selected packets to ${path.basename(dest)}`, {
+    kind: format.ext,
+    dest,
+    frames,
+  });
   if (result) {
     void reportExport(result, `${plural(result.packets ?? 0, "selected packet")}`, true);
   }
@@ -191,7 +269,9 @@ export async function exportSelected(provider: PcapEditorProvider): Promise<Expo
 }
 
 /** "PCAP: Export Packet List as CSV/JSON…": the displayed (or selected) rows, in the current sort order, with their columns. */
-export async function exportPacketList(provider: PcapEditorProvider): Promise<ExportResult | undefined> {
+export async function exportPacketList(
+  provider: PcapEditorProvider,
+): Promise<ExportResult | undefined> {
   const session = requireSession(provider);
   if (!session || !backendOf(session)) {
     return undefined;
@@ -201,7 +281,10 @@ export async function exportPacketList(provider: PcapEditorProvider): Promise<Ex
   if (selected.length > 1) {
     const scope = await vscode.window.showQuickPick(
       [
-        { label: "Displayed rows", description: session.currentFilter ? `filter: ${session.currentFilter}` : "all packets" },
+        {
+          label: "Displayed rows",
+          description: session.currentFilter ? `filter: ${session.currentFilter}` : "all packets",
+        },
         { label: "Selected rows", description: plural(selected.length, "row"), frames: selected },
       ],
       { title: "Export Packet List", placeHolder: "Which rows?" },
@@ -216,12 +299,22 @@ export async function exportPacketList(provider: PcapEditorProvider): Promise<Ex
       { label: "CSV", description: "one quoted row per packet, like Wireshark", ext: "csv" },
       { label: "JSON", description: "an array of objects keyed by column", ext: "json" },
     ],
-    { title: "Export Packet List", placeHolder: session.currentFilter ? `Displayed packets (filter: ${session.currentFilter})` : "All packets" },
+    {
+      title: "Export Packet List",
+      placeHolder: session.currentFilter
+        ? `Displayed packets (filter: ${session.currentFilter})`
+        : "All packets",
+    },
   );
   if (!format) {
     return undefined;
   }
-  const dest = await chooseDestination(session, frames ? "selected-packets" : "packets", format.ext, { [format.label]: [format.ext] });
+  const dest = await chooseDestination(
+    session,
+    frames ? "selected-packets" : "packets",
+    format.ext,
+    { [format.label]: [format.ext] },
+  );
   if (!dest) {
     return undefined;
   }
@@ -240,7 +333,9 @@ export async function exportPacketList(provider: PcapEditorProvider): Promise<Ex
 }
 
 /** "PCAP: Export Packet Dissections…": tshark's full packet details as plain text, PDML or JSON. */
-export async function exportDissections(provider: PcapEditorProvider): Promise<ExportResult | undefined> {
+export async function exportDissections(
+  provider: PcapEditorProvider,
+): Promise<ExportResult | undefined> {
   const session = requireSession(provider);
   if (!session || !backendOf(session)) {
     return undefined;
@@ -250,26 +345,73 @@ export async function exportDissections(provider: PcapEditorProvider): Promise<E
   const frames = session.openInfo?.frames ?? 0;
   type ScopeItem = vscode.QuickPickItem & { params: Record<string, unknown>; suffix: string };
   const scopes: ScopeItem[] = [
-    { label: "Displayed packets", description: filter ? `filter: ${filter}` : `no display filter: all ${frames.toLocaleString()} packets`, params: {}, suffix: filter ? "filtered" : "dissections" },
-    { label: "All packets", description: `${frames.toLocaleString()} packets`, params: { filter: "" }, suffix: "dissections" },
+    {
+      label: "Displayed packets",
+      description: filter
+        ? `filter: ${filter}`
+        : `no display filter: all ${frames.toLocaleString()} packets`,
+      params: {},
+      suffix: filter ? "filtered" : "dissections",
+    },
+    {
+      label: "All packets",
+      description: `${frames.toLocaleString()} packets`,
+      params: { filter: "" },
+      suffix: "dissections",
+    },
   ];
-  const selected = session.selectedFrames.length ? session.selectedFrames : session.selectedFrame !== null ? [session.selectedFrame] : [];
+  const selected = session.selectedFrames.length
+    ? session.selectedFrames
+    : session.selectedFrame !== null
+      ? [session.selectedFrame]
+      : [];
   if (selected.length) {
     const one = selected.length === 1;
-    scopes.push({ label: one ? "Selected packet" : "Selected packets", description: one ? `packet ${selected[0]}` : plural(selected.length, "packet"), params: { frames: selected }, suffix: one ? `frame${selected[0]}` : "selected" });
+    scopes.push({
+      label: one ? "Selected packet" : "Selected packets",
+      description: one ? `packet ${selected[0]}` : plural(selected.length, "packet"),
+      params: { frames: selected },
+      suffix: one ? `frame${selected[0]}` : "selected",
+    });
   }
   if (session.markedCount) {
-    scopes.push({ label: "Marked packets", description: plural(session.markedCount, "packet"), params: { marked: true }, suffix: "marked" });
+    scopes.push({
+      label: "Marked packets",
+      description: plural(session.markedCount, "packet"),
+      params: { marked: true },
+      suffix: "marked",
+    });
   }
-  const scope = await vscode.window.showQuickPick(scopes, { title: `${title} (1/3)`, placeHolder: "Which packets?" });
+  const scope = await vscode.window.showQuickPick(scopes, {
+    title: `${title} (1/3)`,
+    placeHolder: "Which packets?",
+  });
   if (!scope) {
     return undefined;
   }
   const format = await vscode.window.showQuickPick(
     [
-      { label: "Plain text", description: "the packet details as in the tree (tshark -V)", format: "text", ext: "txt", name: "Text" },
-      { label: "PDML", description: "XML with every field (tshark -T pdml)", format: "pdml", ext: "pdml", name: "PDML" },
-      { label: "JSON", description: "an array of packets with every field (tshark -T json)", format: "json", ext: "json", name: "JSON" },
+      {
+        label: "Plain text",
+        description: "the packet details as in the tree (tshark -V)",
+        format: "text",
+        ext: "txt",
+        name: "Text",
+      },
+      {
+        label: "PDML",
+        description: "XML with every field (tshark -T pdml)",
+        format: "pdml",
+        ext: "pdml",
+        name: "PDML",
+      },
+      {
+        label: "JSON",
+        description: "an array of packets with every field (tshark -T json)",
+        format: "json",
+        ext: "json",
+        name: "JSON",
+      },
     ],
     { title: `${title} (2/3)`, placeHolder: "Format" },
   );
@@ -279,24 +421,35 @@ export async function exportDissections(provider: PcapEditorProvider): Promise<E
   const contents = await vscode.window.showQuickPick(
     [
       { label: "Packet details", bytes: false },
-      { label: "Packet details and bytes", description: "adds each packet's hex dump", bytes: true },
+      {
+        label: "Packet details and bytes",
+        description: "adds each packet's hex dump",
+        bytes: true,
+      },
     ],
     { title: `${title} (3/3)`, placeHolder: "Contents" },
   );
   if (!contents) {
     return undefined;
   }
-  const dest = await chooseDestination(session, scope.suffix, format.ext, { [format.name]: [format.ext], "All files": ["*"] });
+  const dest = await chooseDestination(session, scope.suffix, format.ext, {
+    [format.name]: [format.ext],
+    "All files": ["*"],
+  });
   if (!dest) {
     return undefined;
   }
-  const result = await runExport(session, `Exporting packet dissections to ${path.basename(dest)}`, {
-    kind: "dissections",
-    format: format.format,
-    bytes: contents.bytes,
-    dest,
-    ...scope.params,
-  });
+  const result = await runExport(
+    session,
+    `Exporting packet dissections to ${path.basename(dest)}`,
+    {
+      kind: "dissections",
+      format: format.format,
+      bytes: contents.bytes,
+      dest,
+      ...scope.params,
+    },
+  );
   if (result) {
     void reportExport(result, `${plural(result.packets ?? 0, "packet")} (${format.label})`, false);
   }
@@ -304,7 +457,10 @@ export async function exportDissections(provider: PcapEditorProvider): Promise<E
 }
 
 /** "PCAP: Export Packet Bytes…": raw bytes of the selected packet (or one of its reassembled sources). */
-export async function exportPacketBytes(provider: PcapEditorProvider, frame?: number): Promise<ExportResult | undefined> {
+export async function exportPacketBytes(
+  provider: PcapEditorProvider,
+  frame?: number,
+): Promise<ExportResult | undefined> {
   const session = requireSession(provider);
   const backend = session && backendOf(session);
   if (!session || !backend) {
@@ -317,10 +473,18 @@ export async function exportPacketBytes(provider: PcapEditorProvider, frame?: nu
   }
   let source = 0;
   try {
-    const detail = await backend.request<{ sources: { name: string; hex: string }[] }>("packet_detail", { number }, { timeoutMs: 0 });
+    const detail = await backend.request<{ sources: { name: string; hex: string }[] }>(
+      "packet_detail",
+      { number },
+      { timeoutMs: 0 },
+    );
     if (detail.sources.length > 1) {
       const pick = await vscode.window.showQuickPick(
-        detail.sources.map((s, i) => ({ label: s.name, description: `${s.hex.length / 2} bytes`, index: i })),
+        detail.sources.map((s, i) => ({
+          label: s.name,
+          description: `${s.hex.length / 2} bytes`,
+          index: i,
+        })),
         { title: `Export Bytes of Packet ${number}`, placeHolder: "Which data?" },
       );
       if (!pick) {
@@ -332,24 +496,45 @@ export async function exportPacketBytes(provider: PcapEditorProvider, frame?: nu
     void vscode.window.showErrorMessage(`PCAP Viewer: ${describeError(err)}`);
     return undefined;
   }
-  const dest = await chooseDestination(session, `frame${number}`, "bin", { "Raw bytes": ["bin"], "All files": ["*"] });
+  const dest = await chooseDestination(session, `frame${number}`, "bin", {
+    "Raw bytes": ["bin"],
+    "All files": ["*"],
+  });
   if (!dest) {
     return undefined;
   }
-  const result = await runExport(session, `Exporting bytes of packet ${number}`, { kind: "bytes", dest, number, source });
+  const result = await runExport(session, `Exporting bytes of packet ${number}`, {
+    kind: "bytes",
+    dest,
+    number,
+    source,
+  });
   if (result) {
-    void reportExport(result, `${(result.bytes ?? 0).toLocaleString()} bytes of packet ${number}`, false);
+    void reportExport(
+      result,
+      `${(result.bytes ?? 0).toLocaleString()} bytes of packet ${number}`,
+      false,
+    );
   }
   return result;
 }
 
-export function registerExportCommands(context: vscode.ExtensionContext, provider: PcapEditorProvider): void {
+export function registerExportCommands(
+  context: vscode.ExtensionContext,
+  provider: PcapEditorProvider,
+): void {
   context.subscriptions.push(
     vscode.commands.registerCommand("pcapViewer.exportFiltered", () => exportFiltered(provider)),
-    vscode.commands.registerCommand("pcapViewer.exportPacketList", () => exportPacketList(provider)),
-    vscode.commands.registerCommand("pcapViewer.exportDissections", () => exportDissections(provider)),
+    vscode.commands.registerCommand("pcapViewer.exportPacketList", () =>
+      exportPacketList(provider),
+    ),
+    vscode.commands.registerCommand("pcapViewer.exportDissections", () =>
+      exportDissections(provider),
+    ),
     vscode.commands.registerCommand("pcapViewer.exportMarked", () => exportMarked(provider)),
     vscode.commands.registerCommand("pcapViewer.exportSelected", () => exportSelected(provider)),
-    vscode.commands.registerCommand("pcapViewer.exportPacketBytes", (frame?: number) => exportPacketBytes(provider, frame)),
+    vscode.commands.registerCommand("pcapViewer.exportPacketBytes", (frame?: number) =>
+      exportPacketBytes(provider, frame),
+    ),
   );
 }

@@ -6,19 +6,19 @@ user-facing description.
 
 ## Commands
 
-| Task | Command |
-|---|---|
-| Install dev deps | `uv sync` and `pnpm install` |
-| Build extension | `pnpm run compile` (tsc → `out/`) |
-| Lint everything | `pnpm run lint && uv run ruff check && uv run ruff format --check && uv run mypy` |
-| Backend tests | `uv run pytest` (tshark tests skip if tshark is missing) |
-| Acceptance scenarios only | `uv run pytest test/backend/acceptance` (pytest-bdd, Gherkin in `features/`) |
-| TS unit + webview tests | `pnpm run test:unit` (mocha; includes the Chromium e2e test of the webview) |
-| VS Code smoke test | `pnpm run test:extension` (downloads VS Code; use `xvfb-run -a` on headless Linux) |
-| Regenerate fixtures | `uv run python test/fixtures/generate.py` |
-| Perf check | `uv run python test/fixtures/generate.py --large 1000000 test/fixtures/large-1m.pcap && uv run python -u test/perf/bench.py test/fixtures/large-1m.pcap` |
-| Package | `pnpm run package` (vsce, `--no-dependencies`) |
-| Update dev deps | `make update` (`ncu -u` within `.ncurc.cjs`, `pnpm install`, `uv lock --upgrade`, `uv sync`) |
+| Task                      | Command                                                                                                                                                  |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Install dev deps          | `uv sync` and `pnpm install`                                                                                                                             |
+| Build extension           | `pnpm run compile` (tsc → `out/`)                                                                                                                        |
+| Lint everything           | `pnpm run lint && uv run ruff check && uv run ruff format --check && uv run mypy`                                                                        |
+| Backend tests             | `uv run pytest` (tshark tests skip if tshark is missing)                                                                                                 |
+| Acceptance scenarios only | `uv run pytest test/backend/acceptance` (pytest-bdd, Gherkin in `features/`)                                                                             |
+| TS unit + webview tests   | `pnpm run test:unit` (mocha; includes the Chromium e2e test of the webview)                                                                              |
+| VS Code smoke test        | `pnpm run test:extension` (downloads VS Code; use `xvfb-run -a` on headless Linux)                                                                       |
+| Regenerate fixtures       | `uv run python test/fixtures/generate.py`                                                                                                                |
+| Perf check                | `uv run python test/fixtures/generate.py --large 1000000 test/fixtures/large-1m.pcap && uv run python -u test/perf/bench.py test/fixtures/large-1m.pcap` |
+| Package                   | `pnpm run package` (vsce, `--no-dependencies`)                                                                                                           |
+| Update dev deps           | `make update` (`ncu -u` within `.ncurc.cjs`, `pnpm install`, `uv lock --upgrade`, `uv sync`)                                                             |
 
 The `Makefile` wraps all of these (`make` lists the targets; `make check` = lint + tests).
 
@@ -49,7 +49,7 @@ The `Makefile` wraps all of these (`make` lists the targets; `make check` = lint
 - pytest turns `ResourceWarning` into errors: leaked tshark pipes are bugs.
 - **CI** (`.github/workflows/ci.yml`) runs everything on Linux (apt tshark),
   macOS (`brew install --formula wireshark`) and Windows (`choco install
-  wireshark`, `C:\Program Files\Wireshark` added to PATH): lint, backend and
+wireshark`, `C:\Program Files\Wireshark` added to PATH): lint, backend and
   acceptance tests with tshark, unit + Chromium e2e tests, and the VS Code
   smoke test (Linux under xvfb). It runs on pull requests, pushes to main and
   by hand (`workflow_dispatch`).
@@ -103,7 +103,7 @@ The `Makefile` wraps all of these (`make` lists the targets; `make check` = lint
   (tree kill with `taskkill /T` on Windows) as fallbacks.
 - Never call `proc.kill()`/`terminate()` directly: use `procs.kill_process`
   (never raises) and `procs.stop_process` (reaps, closes pipes). A sandbox can
-  refuse the signal (see *Sandboxed tshark*).
+  refuse the signal (see _Sandboxed tshark_).
 
 ## Writing acceptance scenarios
 
@@ -131,7 +131,7 @@ UI behaviour stays in the Chromium test (`test/webview/e2e.test.js`).
 - **Streaming open** (`open {stream: true}`, what the host sends): the index
   pass runs in the pool (`_run_index`); `open` returns once FIRST_BATCH (1000)
   rows are published or after FIRST_BATCH_S (0.5 s) with some (`indexing:
-  true`), else when done. The pass then reports through backend notifications
+true`), else when done. The pass then reports through backend notifications
   `index {event: progress|done|failed}` (`service.notify` = `server.notify`;
   `BackendClient.onNotification`). An `_Indexing` object is "attached" under
   `_lock` when `open` publishes the partial capture, so a pass ending at the
@@ -142,7 +142,7 @@ UI behaviour stays in the Chromium test (`test/webview/e2e.test.js`).
   everything that needs all rows raises `IndexingError` (-32012): sorting,
   find, conversation stepping, extra column passes (follow stream), CSV/JSON
   export, coloring (the host starts coloring after "done"), and non-streaming
-  filters. A streaming filter works (see *Streaming filters*). Non-relative
+  filters. A streaming filter works (see _Streaming filters_). Non-relative
   time formats show relative times until done. Index notifications carry
   `view {filterId, matchCount}` when a filter is applied. The webview refuses
   sorting with a notice, grows `total` on `indexProgress` (`growList`, which
@@ -165,8 +165,8 @@ UI behaviour stays in the Chromium test (`test/webview/e2e.test.js`).
   results are saved as `filter-<sha256(expr)[:24]>.bin` (array('I') bytes, the
   8 most recent per entry) and loaded by `set_filter` before running tshark.
   A preference whose value is an absolute file path (the TLS key log) adds the
-  file's size and mtime to the key, so new keys mean a new index. *PCAP: Clear
-  Index Cache* deletes the folder from the host. Custom columns added later are extra
+  file's size and mtime to the key, so new keys mean a new index. _PCAP: Clear
+  Index Cache_ deletes the folder from the host. Custom columns added later are extra
   passes and not saved (the next open with them is a new key).
 - **Streaming filters** (`set_filter {stream: true}`, what the webview sends):
   after validation, `_start_filter` installs a view with a `_Filtering`
@@ -174,8 +174,8 @@ UI behaviour stays in the Chromium test (`test/webview/e2e.test.js`).
   FIRST_BATCH matches or FIRST_BATCH_S with `filtering: true`. The pass appends
   to `live.frames`; every progress tick copies it into `live.snapshot` (readers
   never see the array grow) and sends `filter {event: progress, filterId,
-  matchCount, fraction}`; the end sends `done`, `stopped` (`stop_filter
-  {filterId}`) or `failed` (with `message`). Stopped/failed views keep their
+matchCount, fraction}`; the end sends `done`, `stopped` (`stop_filter
+{filterId}`) or `failed` (with `message`). Stopped/failed views keep their
   matches (`view.partial`, not cached; applying the same filter reruns it).
   `_require_view` shows the snapshot, and while a streaming open still indexes
   only the matches among the published rows (bisect), even after the pass is
@@ -202,8 +202,8 @@ UI behaviour stays in the Chromium test (`test/webview/e2e.test.js`).
   (`check_scripts`). Changing the setting reloads the sessions whose
   `keyLogFile` differs, without asking (extension.ts). Each load watches the
   file (`watchKeyLog`, RelativePattern on its folder, debounced 1 s) and offers
-  a reload when it changes, one question at a time. *PCAP: Set TLS Key Log
-  File…* (`commands/tls.ts`) checks the file with `looksLikeKeyLog` (empty is
+  a reload when it changes, one question at a time. _PCAP: Set TLS Key Log
+  File…_ (`commands/tls.ts`) checks the file with `looksLikeKeyLog` (empty is
   fine: a fresh SSLKEYLOGFILE) and can stop using the current one. Tests use
   `generate.tls_keylog_capture`: a TLS 1.2 PSK session (no certificate) run in
   memory with `ssl.MemoryBIO` and `keylog_filename`, generated per run (the
@@ -220,7 +220,7 @@ UI behaviour stays in the Chromium test (`test/webview/e2e.test.js`).
   `pcapViewer.editor` (priority `default`) for unambiguous capture files
   (pcap/pcapng/cap/ntar, `.gz`/`.zst`/`.lz4` compressed pcap(ng), `*.pcap[0-9]*`
   tcpdump rotation, snoop, ERF, PacketLogger, btsnoop) and
-  `pcapViewer.editorOptional` (priority `option`: *Reopen Editor With…* only)
+  `pcapViewer.editorOptional` (priority `option`: _Reopen Editor With…_ only)
   for generic extensions (`*.[0-9]`, `.log`, `.dmp`, `.trc`, `.ber`). VS Code
   matches selectors against the basename, ignoring case
   (`globMatchesResource`); the patterns were checked with VS Code's own
@@ -236,10 +236,10 @@ UI behaviour stays in the Chromium test (`test/webview/e2e.test.js`).
   magic number (`sniff_format`); otherwise it's indeterminate (null fraction)
   instead of stalling at 99%. "isn't a capture file in a format TShark
   understands" becomes `UnsupportedFormatError` (-32011), shown in the viewer
-  with a *Reopen Editor With…* button. `exportFileName` strips compression and
+  with a _Reopen Editor With…_ button. `exportFileName` strips compression and
   format suffixes (`trace.pcap.gz` → `trace-filtered.pcapng`).
 - **Detail**: `tshark -r f -c N -Y frame.number==N -T pdml` plus `-x` in
-  parallel. `-c N` stops reading after frame N (it counts packets *read*), so
+  parallel. `-c N` stops reading after frame N (it counts packets _read_), so
   cost is proportional to N, and earlier packets are still dissected (TCP
   reassembly etc. stay correct). Detail of frame ~1M therefore costs about one
   pass over the file (20 s on the benchmark capture).
@@ -271,7 +271,7 @@ UI behaviour stays in the Chromium test (`test/webview/e2e.test.js`).
   limitation for exotic multi-source packets (e.g. decrypted TLS + decompression).
   The first source is always named "Frame" (`pdml.FRAME_SOURCE`): tshark 4.6
   prints "Packet (N bytes):" where 4.2/4.4 print "Frame", and single-source
-  packets print no header at all, so the byte tabs and *Export Packet Bytes*
+  packets print no header at all, so the byte tabs and _Export Packet Bytes_
   read the same across versions.
 - **Filter validation**: compile against a shared 24-byte empty pcap
   (`tshark -Y expr -r empty.pcap`), with the same `-X/-d/-o` options so Lua
@@ -306,7 +306,7 @@ UI behaviour stays in the Chromium test (`test/webview/e2e.test.js`).
   config) live in `/tmp`, which the profile allows.
   The profile also only lets tshark receive signals from itself, so killing a
   cancelled tshark raises `PermissionError` (kernel log: `operation="signal"
-  … peer="vscode"`, VS Code's own profile, or `peer="unconfined"` in the
+… peer="vscode"`, VS Code's own profile, or `peer="unconfined"` in the
   tests). Hints and detection live in `sandbox.py`: `APPARMOR_HINT` suggests
   `owner @{HOME}/** rw,`, `signal (receive) peer=unconfined,` and
   `signal (receive) peer=vscode,` plus `apparmor_parser -r`, both for tshark
@@ -323,7 +323,7 @@ UI behaviour stays in the Chromium test (`test/webview/e2e.test.js`).
 - **Lua as root**: tshark refuses Lua when run as root; the backend warns. The
   Lua integration test skips as root (CI runs as a normal user).
 - **Field catalogue** (`fields.py`): `tshark -G fields` must be tshark's
-  *first* option (anything after it is a name filter), so it can't take
+  _first_ option (anything after it is a name filter), so it can't take
   `-X lua_script:`. Lua fields are picked up by a second `-G fields` run with
   `WIRESHARK_PLUGIN_DIR` pointing at a temp folder holding numbered copies of
   the configured scripts; that run replaces the global plugin folder, so both
@@ -383,14 +383,14 @@ UI behaviour stays in the Chromium test (`test/webview/e2e.test.js`).
   `colorfilters` in the personal config folder. Each `set_coloring` pass sets
   `WIRESHARK_CONFIG_DIR` to a temp folder holding the generated file plus
   copies of the user's other personal config files (found via `tshark -G
-  folders`), so dissection matches the other passes. Rules are named by index
+folders`), so dissection matches the other passes. Rules are named by index
   (the file format can't quote names; filters with `@` are rejected), tshark's
   "Could not compile" stderr is mapped back to rule indexes. The result is one
   byte per frame (`array('B')`, max 255 rules); `list_packets` rows carry
   `color` plus the page's `coloringId`, and the webview only uses colors whose
   `coloringId` matches its palette (it's part of the page cache key).
-  *At open* the rules are evaluated by the index pass itself (`open {coloring:
-  {rules}}`, `_InlineColoring`): `--color` in the same `WIRESHARK_CONFIG_DIR`
+  _At open_ the rules are evaluated by the index pass itself (`open {coloring:
+{rules}}`, `_InlineColoring`): `--color` in the same `WIRESHARK_CONFIG_DIR`
   setup (`work_dir/colorfilters`) and `frame.coloring_rule.name` as the last
   `-e` field, split off each line before the row is stored (`_read_rows`,
   `_add_color`), so the row store is unchanged and every published row
@@ -401,7 +401,7 @@ UI behaviour stays in the Chromium test (`test/webview/e2e.test.js`).
   tshark rejects the field, the pass is retried without colors. The colors
   are saved with the index (`save_colors` after `save`, same rules digest as
   set_coloring), and a saved-index open loads them (else no `coloring` and
-  the host runs set_coloring). *Rule changes* still use `set_coloring`, a
+  the host runs set_coloring). _Rule changes_ still use `set_coloring`, a
   separate pass (never re-indexes): the host defers it while indexing
   (`coloringStale`, run on "done") and reports its progress to the webview
   (`coloringProgress`: "Coloring… 40%" in the status bar). The selected row
@@ -409,14 +409,14 @@ UI behaviour stays in the Chromium test (`test/webview/e2e.test.js`).
   are checked against tshark by `test_default_coloring_rules_compile`; note
   tshark 4.2 rejects space-separated sets (`{3 4}`), so they avoid sets.
 - **Export**: captures via `tshark [-Y f] -F pcapng|pcap -w tmp` (`-P -T
-  fields -e frame.number` gives progress when filtering; without a filter
+fields -e frame.number` gives progress when filtering; without a filter
   nothing is dissected). Default filter = the current view's; `""` = all.
   CSV/JSON come from the row store in the view's current order (no tshark).
   Every export writes `.<name>.<pid>.part` and `replace()`s it at the end, and
   a destination that is the open capture is refused (tshark would truncate
   its input). CSV cells that look like formulas get a `'` prefix (packet text
   is untrusted); JSON is keyed by column id with numbers for numeric columns.
-  *Dissections* (`kind: "dissections"`, `format` text/pdml/json =
+  _Dissections_ (`kind: "dissections"`, `format` text/pdml/json =
   `-V`/`-T pdml`/`-T json`, `-x` with `bytes`) stream tshark's stdout into the
   file. The scope is chosen like a capture export (`_export_scope`); a big
   frame set means several `-Y frame.number in {…}` passes, which
@@ -430,10 +430,10 @@ UI behaviour stays in the Chromium test (`test/webview/e2e.test.js`).
   (`trace.pcap`, `trace.pcap1`…, `-W` numbers the first too) and dumpcap ring
   buffers / `editcap -c` splits (`name_00001_<14-digit time>.pcapng`, which the
   tests make with editcap). Opening a piece offers the merge once per editor
-  (`offerMerge`; "Don't Ask Again" is a globalState flag). *PCAP: Merge
-  Captures…* uses the active capture's backend, else a short-lived one.
+  (`offerMerge`; "Don't Ask Again" is a globalState flag). _PCAP: Merge
+  Captures…_ uses the active capture's backend, else a short-lived one.
 - **Coloring rules editor** (`ColoringPanel`, `coloring.js`; the
-  `pcapViewer.manageColoringRules` command, titled *Edit Coloring Rules*): one
+  `pcapViewer.manageColoringRules` command, titled _Edit Coloring Rules_): one
   panel per window, reading and writing `pcapViewer.coloringRules` for the
   capture that was active (`editableColoringRules` keeps disabled rules;
   `coloringRulesSetting` writes `enabled` only when false and fills empty
@@ -443,7 +443,7 @@ UI behaviour stays in the Chromium test (`test/webview/e2e.test.js`).
   carries the stored rules and the editor reloads them; a settings change
   while the editor has unsaved edits only says so (Revert loads it).
 - **Name resolution** (`pcapViewer.nameResolution.{mac,network,capturedDns,
-  transport,external}`, `open {names}`): `DissectionOptions.names` holds the
+transport,external}`, `open {names}`): `DissectionOptions.names` holds the
   `-N` letters (`name_flags`: m, n, d, N, t; d and N only with n; none = `-n`;
   `names` absent = tshark's own preferences, as before) and goes into every
   dissecting pass, so the list, details, filters (`ip.src_host`) and coloring
@@ -463,7 +463,7 @@ UI behaviour stays in the Chromium test (`test/webview/e2e.test.js`).
   the cell's tooltip. tshark leaves port names off the first packet of a pass
   (the services table loads lazily); Wireshark shows it after re-dissecting.
   The host sends the switches, reloads sessions whose `names` differ when the
-  settings change (debounced: *PCAP: Name Resolution…* writes several keys),
+  settings change (debounced: _PCAP: Name Resolution…_ writes several keys),
   and posts the status-bar label (`nameResolutionLabel`) in `init`.
   `external` is application-scoped (a workspace can't make you send lookups).
 - **Export Objects** (`export_objects`, `save_objects`, `objects.py`,
@@ -512,15 +512,15 @@ UI behaviour stays in the Chromium test (`test/webview/e2e.test.js`).
   data**, so it is gated by `pcapViewer.ai.allowPacketData` (default false,
   `scope: application` so a workspace can't enable it) with a one-time modal
   consent (`PACKET_DATA_CONSENT`, which states the limits and is unit-tested
-  against them) that saves the setting. The row menu's *Ask Copilot About This
-  Packet…* / *…About N Selected Packets…* (shown only when `aiAvailable`) posts
+  against them) that saves the setting. The row menu's _Ask Copilot About This
+  Packet…_ / _…About N Selected Packets…_ (shown only when `aiAvailable`) posts
   `askAboutPackets`; the host runs `workbench.action.chat.open` with
   `{query: "@pcap /explain 1-3 7"}` (`explainQuery`), falling back to a direct
   `vscode.lm` request streamed into an untitled Markdown editor when the chat
   API or command is missing or refuses. `/explain` (a `chatParticipants`
   command) parses leading frames/ranges then a question (`parseExplainArgs`);
   no frames = the selection. The backend supplies rows (`list_packets
-  {frames, inView: false}`: displayed or not) and `packet_detail` trees. The
+{frames, inView: false}`: displayed or not) and `packet_detail` trees. The
   prompt (`buildExplainPrompt`) holds the question, current filter, the row
   (column titles) and each tree as indented labels, capped by `EXPLAIN_LIMITS`
   (8 packets, 250 lines, depth 10, 160 chars/line, 48k chars overall: the tree
@@ -529,37 +529,37 @@ UI behaviour stays in the Chromium test (`test/webview/e2e.test.js`).
   bytes/packet), and byte dumps in labels (`isByteDump`: hex strings of ≥ 8
   bytes, payload fields) become "[N bytes not sent]". The prompt says the
   data is untrusted. The answer streams as Markdown; ```filter blocks
-  (`extractFilters`) are validated with tshark and become *Apply filter*
-  buttons, plus *Go to packet N* for each packet explained.
-- **Navigation and customisation** (Wireshark-like; all over the *current view*,
+  (`extractFilters`) are validated with tshark and become _Apply filter_
+  buttons, plus _Go to packet N_ for each packet explained.
+- **Navigation and customisation** (Wireshark-like; all over the _current view_,
   i.e. the filter and sort order, which only the backend knows in full):
-  - *Find Packet* is backend `find_packet`. It turns the search into a display
+  - _Find Packet_ is backend `find_packet`. It turns the search into a display
     filter (`navigation.find_expression`: string → `frame contains "…"`, or
     case-insensitive `frame matches "(?i)<re-escaped>"`; hex →
     `frame contains aa:bb:cc`, a single byte as `"\xaa"`). The filter is
     validated, run once and cached in the filter LRU. Matches go into a
     one-byte-per-frame bitmap, then view order is walked from the selection,
     wrapping around. The `marked` mode walks the marks instead.
-  - *Conversation stepping* is backend `neighbor_frame`: `tcp.stream`/
+  - _Conversation stepping_ is backend `neighbor_frame`: `tcp.stream`/
     `udp.stream` columns, extracted once into the row store, else the unordered
     Source/Destination pair. It reads cells in chunks along the view and
     doesn't wrap.
-  - *Marks* live in the backend (`mark_packets`/`unmark_all`, per session,
+  - _Marks_ live in the backend (`mark_packets`/`unmark_all`, per session,
     not persisted). Rows carry `marked`; the webview patches its cached pages
-    instead of refetching. *Export marked* uses `export` with `marked: true`:
+    instead of refetching. _Export marked_ uses `export` with `marked: true`:
     `frame.number in {…}` with ranges compressed, split into chunks when the
     filter would exceed `MAX_FILTER_ARG` (16k characters, under Windows'
     32767-character command line), and the chunks joined with `mergecap -a`.
-  - *Times* are formatted by the backend when `list_packets` gets `timeFormat`
+  - _Times_ are formatted by the backend when `list_packets` gets `timeFormat`
     (and `timeRef`). Plain relative time uses the index pass's column; every
     other format uses `frame.time_epoch`, extracted once, parsed to integer ns.
-    "Since previous displayed" is since the previous packet *of the filter* in
+    "Since previous displayed" is since the previous packet _of the filter_ in
     capture order (bisect in `view.matched`), like Wireshark's
     `frame.time_delta_displayed` but for our filter (tshark's field only knows
     the unfiltered pass). It is a property of the packet, whatever the sort,
     which is what lets the Time column sort by it. There is one time reference; its row shows `*REF*` in every format. The format
     and reference are part of the webview's page cache key.
-  - *Multi-selection* lives in the webview as a `Set` of frame numbers
+  - _Multi-selection_ lives in the webview as a `Set` of frame numbers
     (`state.selection`, empty when one row is selected) plus the focused row
     (`selectedIndex`/`selectedFrame`, the detail pane). Click selects one row;
     Ctrl/Cmd+click toggles; Shift+click and Shift+arrows select from the
@@ -570,32 +570,32 @@ UI behaviour stays in the Chromium test (`test/webview/e2e.test.js`).
     in real VS Code; a package.json binding didn't win). Both fire a cancelable
     `selectstart` on `<body>` (in an input the target is the input): the
     webview cancels it and selects the view via `view_frames` (deduplicated,
-    since both can arrive). *PCAP: Select All Packets* has no key. Limits:
+    since both can arrive). _PCAP: Select All Packets_ has no key. Limits:
     `MAX_SELECTION` (1M frames) and 100k rows per copy. A new filter drops the
     selection; a new sort keeps it (same frames). Right-click inside the
     selection keeps it and the menu acts on all of it: mark (Ctrl+M: mark all
     unless all are marked), copy rows (TSV of the visible columns in view
     order: cached pages, else `view_frames {frames}` for the order then
-    `list_packets {frames}` in chunks), copy frame numbers, *Export Selected
-    Packets…* (`export` with `frames`, the same chunked `frame.number in {…}`
+    `list_packets {frames}` in chunks), copy frame numbers, _Export Selected
+    Packets…_ (`export` with `frames`, the same chunked `frame.number in {…}`
     path as marked packets; CSV/JSON can export the selected rows). Ctrl+C
     arrives as a `copy` event (VS Code runs `execCommand("copy")` in the
     webview). The host learns the selection from `selection {frame, frames}`.
-  - *Frame links*: after a detail loads, the webview asks `field_types` (exact
+  - _Frame links_: after a detail loads, the webview asks `field_types` (exact
     catalogue lookups) for the tree's field names once, and `FT_FRAMENUM`
     fields become links. The back/forward history covers jumps (links, go to,
     find, marks, conversation, first/last), not arrow keys.
-  - *Keys*: the webview handles keys VS Code leaves to a focused webview
+  - _Keys_: the webview handles keys VS Code leaves to a focused webview
     (Ctrl+F, F3, Ctrl+Home/End, Esc). Keys VS Code binds globally even then
     (Ctrl+M, Ctrl+T, Ctrl+,, Ctrl+Shift+N/B, and Alt+Left, which is Back on
     Windows) are package.json keybindings scoped to the viewer
     (`… && !sideBarFocus && !panelFocus && !inputFocus`). They send a
     `command` message and the webview ignores the raw key, so nothing runs
     twice.
-  - *Columns*: `pcapViewer.columnLayout` holds `{order, hidden}` by column id
+  - _Columns_: `pcapViewer.columnLayout` holds `{order, hidden}` by column id
     (`number`…`info`, `custom:<field>`), and `lib.layoutColumns` maps visible
     columns to cell indexes. `pcapViewer.columns` is now resource-scoped, so
-    *Apply as Column*, rename and remove write for the capture's folder.
+    _Apply as Column_, rename and remove write for the capture's folder.
     `lib.cellFilter` builds cell filters (ip/ipv6/eth by address form; none for
     Time or Info). `lib.formatBytesAs` has the bytes-pane copy formats.
 - **Protocol**: JSON-RPC 2.0 framing (`"jsonrpc": "2.0"`), LSP-style

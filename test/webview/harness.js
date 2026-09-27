@@ -19,7 +19,9 @@ const HAVE_TSHARK = spawnSync("tshark", ["--version"]).status === 0;
 function loadDeps() {
   try {
     const { chromium } = require("playwright-core");
-    const { BackendClient, findPython } = require(path.join(ROOT, "out", "src", "backendClient.js"));
+    const { BackendClient, findPython } = require(
+      path.join(ROOT, "out", "src", "backendClient.js"),
+    );
     return { chromium, BackendClient, findPython };
   } catch {
     return null;
@@ -54,7 +56,13 @@ function stubScript(nonce) {
 /** The capture editor page (src/webview/index.html), as pcapEditor.ts renders it. */
 function renderEditorHtml(origin) {
   const nonce = crypto.randomBytes(16).toString("base64");
-  const values = { cspSource: origin, nonce, stylesUri: `${origin}/styles.css`, libUri: `${origin}/lib.js`, mainUri: `${origin}/main.js` };
+  const values = {
+    cspSource: origin,
+    nonce,
+    stylesUri: `${origin}/styles.css`,
+    libUri: `${origin}/lib.js`,
+    mainUri: `${origin}/main.js`,
+  };
   return fs
     .readFileSync(path.join(WEBVIEW, "index.html"), "utf8")
     .replace(/\{\{(\w+)\}\}/g, (_m, k) => values[k])
@@ -77,8 +85,14 @@ function renderPanelHtml(origin, script) {
 
 /** Start the backend with PCAP_VIEWER_PYTHON, else the uv .venv interpreter. */
 async function startBackend(deps) {
-  const venv = path.join(ROOT, ".venv", process.platform === "win32" ? "Scripts/python.exe" : "bin/python");
-  const py = deps.findPython(process.env.PCAP_VIEWER_PYTHON ?? (fs.existsSync(venv) ? venv : undefined));
+  const venv = path.join(
+    ROOT,
+    ".venv",
+    process.platform === "win32" ? "Scripts/python.exe" : "bin/python",
+  );
+  const py = deps.findPython(
+    process.env.PCAP_VIEWER_PYTHON ?? (fs.existsSync(venv) ? venv : undefined),
+  );
   if ("error" in py) {
     throw new Error(py.error);
   }
@@ -106,4 +120,15 @@ async function newPage(browser) {
   return { page, problems, post };
 }
 
-module.exports = { ROOT, WEBVIEW, FIXTURES, HAVE_TSHARK, loadDeps, serveWebview, renderEditorHtml, renderPanelHtml, startBackend, newPage };
+module.exports = {
+  ROOT,
+  WEBVIEW,
+  FIXTURES,
+  HAVE_TSHARK,
+  loadDeps,
+  serveWebview,
+  renderEditorHtml,
+  renderPanelHtml,
+  startBackend,
+  newPage,
+};

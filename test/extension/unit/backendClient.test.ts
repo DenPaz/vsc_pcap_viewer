@@ -6,18 +6,32 @@ import * as assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { BackendClient, ErrorCodes, Progress, RpcError, findPython } from "../../../src/backendClient";
+import {
+  BackendClient,
+  ErrorCodes,
+  Progress,
+  RpcError,
+  findPython,
+} from "../../../src/backendClient";
 
 const ROOT = path.resolve(__dirname, "../../../..");
 const FIXTURES = path.join(ROOT, "test", "fixtures");
 const HAVE_TSHARK = spawnSync("tshark", ["--version"]).status === 0;
 
 const logs: string[] = [];
-const logger = { info: (m: string) => logs.push(m), warn: (m: string) => logs.push(m), error: (m: string) => logs.push(m) };
+const logger = {
+  info: (m: string) => logs.push(m),
+  warn: (m: string) => logs.push(m),
+  error: (m: string) => logs.push(m),
+};
 
 /** PCAP_VIEWER_PYTHON, else the uv-managed .venv interpreter (Python 3.14 after `uv sync`). */
 function testPython(): string | undefined {
-  const venv = path.join(ROOT, ".venv", process.platform === "win32" ? "Scripts/python.exe" : "bin/python");
+  const venv = path.join(
+    ROOT,
+    ".venv",
+    process.platform === "win32" ? "Scripts/python.exe" : "bin/python",
+  );
   return process.env.PCAP_VIEWER_PYTHON ?? (fs.existsSync(venv) ? venv : undefined);
 }
 
@@ -26,7 +40,12 @@ function makeClient(): BackendClient {
   if ("error" in py) {
     throw new Error(py.error);
   }
-  return new BackendClient({ python: py.python, backendDir: path.join(ROOT, "backend"), logger, defaultTimeoutMs: 30_000 });
+  return new BackendClient({
+    python: py.python,
+    backendDir: path.join(ROOT, "backend"),
+    logger,
+    defaultTimeoutMs: 30_000,
+  });
 }
 
 function isAlive(pid: number): boolean {
@@ -57,12 +76,18 @@ suite("BackendClient", function () {
   });
 
   test("unknown methods reject with MethodNotFound", async () => {
-    await assert.rejects(client.request("nope"), (err: RpcError) => err.code === ErrorCodes.MethodNotFound);
+    await assert.rejects(
+      client.request("nope"),
+      (err: RpcError) => err.code === ErrorCodes.MethodNotFound,
+    );
   });
 
   test("requests before start / after stop reject", async () => {
     await client.stop();
-    await assert.rejects(client.request("ping"), (err: RpcError) => err.code === ErrorCodes.BackendExited);
+    await assert.rejects(
+      client.request("ping"),
+      (err: RpcError) => err.code === ErrorCodes.BackendExited,
+    );
   });
 
   test("stop terminates the process", async () => {
@@ -95,15 +120,24 @@ suite("BackendClient", function () {
     assert.ok(progress.some((p) => p.phase === "index"));
     const filtered = await client.request<{ matchCount: number }>("set_filter", { expr: "http" });
     assert.equal(filtered.matchCount, 2);
-    const page = await client.request<{ rows: { number: number }[] }>("list_packets", { offset: 0, limit: 10 });
+    const page = await client.request<{ rows: { number: number }[] }>("list_packets", {
+      offset: 0,
+      limit: 10,
+    });
     assert.deepEqual(
       page.rows.map((r) => r.number),
       [4, 7],
     );
-    const detail = await client.request<{ tree: { name?: string }[]; sources: unknown[] }>("packet_detail", { number: 7 });
+    const detail = await client.request<{ tree: { name?: string }[]; sources: unknown[] }>(
+      "packet_detail",
+      { number: 7 },
+    );
     assert.ok(detail.tree.some((n) => n.name === "http"));
     assert.equal(detail.sources.length, 2);
-    await assert.rejects(client.request("set_filter", { expr: "http.host ==" }), (err: RpcError) => err.code === ErrorCodes.InvalidFilter);
+    await assert.rejects(
+      client.request("set_filter", { expr: "http.host ==" }),
+      (err: RpcError) => err.code === ErrorCodes.InvalidFilter,
+    );
   });
 
   (HAVE_TSHARK ? test : test.skip)("cancellation via token", async () => {
@@ -119,7 +153,11 @@ suite("BackendClient", function () {
         return { dispose() {} };
       },
     };
-    const p = client.request("open", { path: path.join(FIXTURES, "mixed.pcapng") }, { timeoutMs: 0, cancellation: token });
+    const p = client.request(
+      "open",
+      { path: path.join(FIXTURES, "mixed.pcapng") },
+      { timeoutMs: 0, cancellation: token },
+    );
     cancel();
     // Either the open finished before the cancel landed, or it was cancelled.
     await p.then(

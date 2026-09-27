@@ -1,7 +1,11 @@
 import * as vscode from "vscode";
 import { SECTION, getSetting, updateSetting } from "../config";
 import type { PcapEditorProvider } from "../pcapEditor";
-import { EditableColoringRule, coloringRulesSetting, editableColoringRules } from "../settingsModel";
+import {
+  EditableColoringRule,
+  coloringRulesSetting,
+  editableColoringRules,
+} from "../settingsModel";
 import { panelHtml, webviewRoot } from "./panelHtml";
 
 type FromPanel =
@@ -44,11 +48,16 @@ export class ColoringPanel {
   ) {
     this.scope = provider.activeSession?.uri;
     const root = webviewRoot(context);
-    this.panel = vscode.window.createWebviewPanel("pcapViewer.coloring", "Coloring Rules", vscode.ViewColumn.Active, {
-      enableScripts: true,
-      localResourceRoots: [root],
-      retainContextWhenHidden: true,
-    });
+    this.panel = vscode.window.createWebviewPanel(
+      "pcapViewer.coloring",
+      "Coloring Rules",
+      vscode.ViewColumn.Active,
+      {
+        enableScripts: true,
+        localResourceRoots: [root],
+        retainContextWhenHidden: true,
+      },
+    );
     this.panel.webview.html = panelHtml(this.panel.webview, root, "coloring.js", "Coloring Rules");
     this.disposables.push(
       this.panel.webview.onDidReceiveMessage((msg: FromPanel) => void this.onMessage(msg)),
@@ -72,8 +81,15 @@ export class ColoringPanel {
   private async onMessage(msg: FromPanel): Promise<void> {
     switch (msg.type) {
       case "ready": {
-        const defaults = vscode.workspace.getConfiguration(SECTION, this.scope).inspect<unknown>("coloringRules")?.defaultValue;
-        this.post({ type: "init", rules: this.rules(), defaults: editableColoringRules(defaults), canValidate: this.validator() !== undefined });
+        const defaults = vscode.workspace
+          .getConfiguration(SECTION, this.scope)
+          .inspect<unknown>("coloringRules")?.defaultValue;
+        this.post({
+          type: "init",
+          rules: this.rules(),
+          defaults: editableColoringRules(defaults),
+          canValidate: this.validator() !== undefined,
+        });
         break;
       }
       case "validate": {
@@ -84,11 +100,18 @@ export class ColoringPanel {
         break;
       }
       case "save":
-        await updateSetting("coloringRules", coloringRulesSetting(editableColoringRules(msg.rules)), this.scope);
+        await updateSetting(
+          "coloringRules",
+          coloringRulesSetting(editableColoringRules(msg.rules)),
+          this.scope,
+        );
         this.post({ type: "saved", rules: this.rules() });
         break;
       case "openSettings":
-        await vscode.commands.executeCommand("workbench.action.openSettings", `${SECTION}.coloringRules`);
+        await vscode.commands.executeCommand(
+          "workbench.action.openSettings",
+          `${SECTION}.coloringRules`,
+        );
         break;
     }
   }

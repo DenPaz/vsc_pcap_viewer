@@ -6,7 +6,12 @@ import { panelHtml, webviewRoot } from "./panelHtml";
 
 export type FollowProto = "tcp" | "udp" | "tls" | "http";
 
-export const FOLLOW_LABELS: Record<FollowProto, string> = { tcp: "TCP", udp: "UDP", tls: "TLS", http: "HTTP" };
+export const FOLLOW_LABELS: Record<FollowProto, string> = {
+  tcp: "TCP",
+  udp: "UDP",
+  tls: "TLS",
+  http: "HTTP",
+};
 
 export interface FollowResult {
   proto: FollowProto;
@@ -37,7 +42,12 @@ export class FollowPanel {
   private requestId?: number;
   private readonly disposables: vscode.Disposable[] = [];
 
-  static show(context: vscode.ExtensionContext, session: PcapEditorSession, proto: FollowProto, frame: number): FollowPanel {
+  static show(
+    context: vscode.ExtensionContext,
+    session: PcapEditorSession,
+    proto: FollowProto,
+    frame: number,
+  ): FollowPanel {
     const panel = new FollowPanel(context, session, proto, { frame });
     FollowPanel.panels.add(panel);
     return panel;
@@ -51,11 +61,16 @@ export class FollowPanel {
   ) {
     const title = `Follow ${FOLLOW_LABELS[proto]} Stream · ${path.basename(session.uri.fsPath)}`;
     const root = webviewRoot(context);
-    this.panel = vscode.window.createWebviewPanel("pcapViewer.follow", title, vscode.ViewColumn.Beside, {
-      enableScripts: true,
-      localResourceRoots: [root],
-      retainContextWhenHidden: true,
-    });
+    this.panel = vscode.window.createWebviewPanel(
+      "pcapViewer.follow",
+      title,
+      vscode.ViewColumn.Beside,
+      {
+        enableScripts: true,
+        localResourceRoots: [root],
+        retainContextWhenHidden: true,
+      },
+    );
     this.panel.webview.html = panelHtml(this.panel.webview, root, "follow.js", title);
     this.disposables.push(
       this.panel.webview.onDidReceiveMessage((msg: FromPanel) => void this.onMessage(msg)),
@@ -97,14 +112,21 @@ export class FollowPanel {
   private async load(): Promise<void> {
     const client = this.session.backend;
     if (!client?.running) {
-      this.post({ type: "error", message: "The capture is not loaded (the PCAP backend is not running)." });
+      this.post({
+        type: "error",
+        message: "The capture is not loaded (the PCAP backend is not running).",
+      });
       return;
     }
     if (this.requestId !== undefined) {
       client.cancel(this.requestId);
     }
     this.post({ type: "loading" });
-    const pending = client.send<FollowResult>("follow_stream", { proto: this.proto, ...this.target }, { timeoutMs: 0 });
+    const pending = client.send<FollowResult>(
+      "follow_stream",
+      { proto: this.proto, ...this.target },
+      { timeoutMs: 0 },
+    );
     this.requestId = pending.id;
     try {
       this.result = await pending.promise;
@@ -132,17 +154,27 @@ export class FollowPanel {
     const target = await vscode.window.showSaveDialog({
       defaultUri: vscode.Uri.joinPath(folder, `${base}.${format === "raw" ? "bin" : "txt"}`),
       title: `Save ${FOLLOW_LABELS[result.proto]} stream ${result.stream}`,
-      filters: format === "raw" ? { "Raw data": ["bin", "raw"], "All files": ["*"] } : { Text: ["txt"], "All files": ["*"] },
+      filters:
+        format === "raw"
+          ? { "Raw data": ["bin", "raw"], "All files": ["*"] }
+          : { Text: ["txt"], "All files": ["*"] },
     });
     if (!target) {
       return;
     }
     const data =
       format === "raw"
-        ? Buffer.concat(result.segments.filter((s) => dir === "both" || s.dir === dir).map((s) => Buffer.from(s.hex, "hex")))
+        ? Buffer.concat(
+            result.segments
+              .filter((s) => dir === "both" || s.dir === dir)
+              .map((s) => Buffer.from(s.hex, "hex")),
+          )
         : Buffer.from(text ?? "", "utf8");
     await vscode.workspace.fs.writeFile(target, data);
-    vscode.window.setStatusBarMessage(`Saved ${data.length.toLocaleString()} bytes to ${path.basename(target.fsPath)}`, 4000);
+    vscode.window.setStatusBarMessage(
+      `Saved ${data.length.toLocaleString()} bytes to ${path.basename(target.fsPath)}`,
+      4000,
+    );
   }
 
   private dispose(): void {

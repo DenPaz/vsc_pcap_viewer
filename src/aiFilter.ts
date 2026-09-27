@@ -72,7 +72,10 @@ const oneLine = (s: string, max: number) => s.replace(/\s+/g, " ").trim().slice(
 
 /** The prompt for the first request (VS Code's LM API has no system role in 1.90: all goes in one user turn). */
 export function buildFilterPrompt(input: PromptInput): string {
-  const protocols = [...new Set(input.protocols.map((p) => oneLine(p, 60)).filter(Boolean))].slice(0, MAX_PROTOCOLS);
+  const protocols = [...new Set(input.protocols.map((p) => oneLine(p, 60)).filter(Boolean))].slice(
+    0,
+    MAX_PROTOCOLS,
+  );
   const fields = input.fields.slice(0, MAX_FIELDS).map((f) => {
     const type = f.type ? ` (${oneLine(f.type, 40)})` : "";
     const desc = f.desc ? `: ${oneLine(f.desc, 120)}` : "";
@@ -151,12 +154,20 @@ export function parseSuggestions(text: string, max = MAX_SUGGESTIONS): FilterSug
   for (const item of data) {
     const filter = (item as { filter?: unknown } | null)?.filter;
     const explanation = (item as { explanation?: unknown } | null)?.explanation;
-    if (typeof filter !== "string" || /[\r\n]/.test(filter.trim()) || !filter.trim() || filter.length > MAX_FILTER) {
+    if (
+      typeof filter !== "string" ||
+      /[\r\n]/.test(filter.trim()) ||
+      !filter.trim() ||
+      filter.length > MAX_FILTER
+    ) {
       continue;
     }
     const f = filter.trim();
     if (!out.some((s) => s.filter === f)) {
-      out.push({ filter: f, explanation: typeof explanation === "string" ? oneLine(explanation, MAX_EXPLANATION) : "" });
+      out.push({
+        filter: f,
+        explanation: typeof explanation === "string" ? oneLine(explanation, MAX_EXPLANATION) : "",
+      });
     }
     if (out.length >= max) {
       break;
@@ -173,7 +184,9 @@ export async function validateSuggestions(
   const errors = await Promise.all(suggestions.map((s) => validate(s.filter)));
   return {
     valid: suggestions.filter((_s, i) => errors[i] === undefined),
-    rejected: suggestions.flatMap((s, i) => (errors[i] === undefined ? [] : [{ filter: s.filter, error: errors[i] as string }])),
+    rejected: suggestions.flatMap((s, i) =>
+      errors[i] === undefined ? [] : [{ filter: s.filter, error: errors[i] as string }],
+    ),
   };
 }
 
@@ -195,7 +208,10 @@ export async function suggestFilters(
   if (first.valid.length || options.retry === false) {
     return { suggestions: first.valid, rejected: first.rejected };
   }
-  turns.push({ role: "assistant", content: answer }, { role: "user", content: buildRetryPrompt(first.rejected) });
+  turns.push(
+    { role: "assistant", content: answer },
+    { role: "user", content: buildRetryPrompt(first.rejected) },
+  );
   const second = await validateSuggestions(parseSuggestions(await deps.ask(turns)), deps.validate);
   return { suggestions: second.valid, rejected: [...first.rejected, ...second.rejected] };
 }

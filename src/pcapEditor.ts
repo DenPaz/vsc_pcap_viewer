@@ -5,11 +5,33 @@ import * as vscode from "vscode";
 import { BackendClient, ErrorCodes, RpcError, findPython } from "./backendClient";
 import { Settings, getSetting, readQuickDetail, readSettings, updateSetting } from "./config";
 import type { ExplainOutcome, ExplainSink, FilterAssistant, SuggestOutcome } from "./ai";
-import { ColoringResult, FilterEvent, HostToWebview, OpenResult, ViewCounts, ViewerCommand, WEBVIEW_RPC_METHODS, WebviewToHost } from "./messages";
+import {
+  ColoringResult,
+  FilterEvent,
+  HostToWebview,
+  OpenResult,
+  ViewCounts,
+  ViewerCommand,
+  WEBVIEW_RPC_METHODS,
+  WebviewToHost,
+} from "./messages";
 import { saveFilterInteractive, showSavedFilters } from "./commands/savedFilters";
 import { FollowPanel } from "./panels/followPanel";
 import { rotatedSiblings } from "./rotation";
-import { ColoringRule, ColumnLayout, ColumnSetting, DEFAULT_NAME_RESOLUTION, NameResolution, QuickDetail, SavedFilter, TimeFormat, addColumn, nameResolutionLabel, normalizeColumns, pushHistory } from "./settingsModel";
+import {
+  ColoringRule,
+  ColumnLayout,
+  ColumnSetting,
+  DEFAULT_NAME_RESOLUTION,
+  NameResolution,
+  QuickDetail,
+  SavedFilter,
+  TimeFormat,
+  addColumn,
+  nameResolutionLabel,
+  normalizeColumns,
+  pushHistory,
+} from "./settingsModel";
 
 const HISTORY_KEY = "pcapViewer.filterHistory";
 /** Coloring problems already shown in a notification (each is reported once per window). */
@@ -21,8 +43,14 @@ function coloringRules(settings: Settings): ColoringRule[] {
 }
 
 /** Rules as the backend takes them (open's `coloring` and set_coloring: the same list, so saved colors match). */
-function coloringPayload(rules: ColoringRule[]): { filter: string; foreground: string; background: string }[] {
-  return rules.map((r) => ({ filter: r.filter, foreground: r.foreground, background: r.background }));
+function coloringPayload(
+  rules: ColoringRule[],
+): { filter: string; foreground: string; background: string }[] {
+  return rules.map((r) => ({
+    filter: r.filter,
+    foreground: r.foreground,
+    background: r.background,
+  }));
 }
 
 class PcapDocument implements vscode.CustomDocument {
@@ -49,12 +77,23 @@ export class PcapEditorProvider implements vscode.CustomReadonlyEditorProvider<P
     private readonly assistant: FilterAssistant,
   ) {}
 
-  static register(context: vscode.ExtensionContext, log: vscode.LogOutputChannel, assistant: FilterAssistant): PcapEditorProvider {
+  static register(
+    context: vscode.ExtensionContext,
+    log: vscode.LogOutputChannel,
+    assistant: FilterAssistant,
+  ): PcapEditorProvider {
     const provider = new PcapEditorProvider(context, log, assistant);
-    const options = { webviewOptions: { retainContextWhenHidden: true }, supportsMultipleEditorsPerDocument: true };
+    const options = {
+      webviewOptions: { retainContextWhenHidden: true },
+      supportsMultipleEditorsPerDocument: true,
+    };
     context.subscriptions.push(
       vscode.window.registerCustomEditorProvider(PcapEditorProvider.viewType, provider, options),
-      vscode.window.registerCustomEditorProvider(PcapEditorProvider.optionalViewType, provider, options),
+      vscode.window.registerCustomEditorProvider(
+        PcapEditorProvider.optionalViewType,
+        provider,
+        options,
+      ),
     );
     return provider;
   }
@@ -64,7 +103,13 @@ export class PcapEditorProvider implements vscode.CustomReadonlyEditorProvider<P
   }
 
   resolveCustomEditor(document: PcapDocument, panel: vscode.WebviewPanel): void {
-    const session = new PcapEditorSession(this.context, document.uri, panel, this.log, this.assistant);
+    const session = new PcapEditorSession(
+      this.context,
+      document.uri,
+      panel,
+      this.log,
+      this.assistant,
+    );
     this.sessions.add(session);
     this.active = session;
     panel.onDidChangeViewState(() => {
@@ -213,14 +258,22 @@ export class PcapEditorSession {
     client.onExit(({ expected }) => {
       if (!expected && this.client === client && !this.disposed) {
         this.client = undefined;
-        this.post({ type: "error", message: "The PCAP backend stopped unexpectedly. See the PCAP Viewer log for details.", canReload: true });
+        this.post({
+          type: "error",
+          message: "The PCAP backend stopped unexpectedly. See the PCAP Viewer log for details.",
+          canReload: true,
+        });
       }
     });
 
     const started = Date.now();
     try {
       client.start();
-      const init = await client.request<{ version: string; tsharkPath: string }>("initialize", { tsharkPath: settings.tsharkPath || undefined }, { timeoutMs: 30_000 });
+      const init = await client.request<{ version: string; tsharkPath: string }>(
+        "initialize",
+        { tsharkPath: settings.tsharkPath || undefined },
+        { timeoutMs: 30_000 },
+      );
       this.log.info(`using ${init.version} at ${init.tsharkPath} (python ${py.version})`);
       this.post({ type: "loading", message: "Indexing packets…" });
       // A streaming open's "index" events can arrive before the open response:
@@ -292,7 +345,10 @@ export class PcapEditorSession {
         this.unsupportedFormat(err);
         return;
       }
-      const setting = err instanceof RpcError && err.code === ErrorCodes.TsharkNotFound ? "tsharkPath" : undefined;
+      const setting =
+        err instanceof RpcError && err.code === ErrorCodes.TsharkNotFound
+          ? "tsharkPath"
+          : undefined;
       this.fail(describeError(err), setting);
     }
   }
@@ -308,7 +364,9 @@ export class PcapEditorSession {
     if (!file) {
       return;
     }
-    const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.Uri.file(path.dirname(file)), path.basename(file)));
+    const watcher = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(vscode.Uri.file(path.dirname(file)), path.basename(file)),
+    );
     let timer: NodeJS.Timeout | undefined;
     let asking = false;
     const changed = () => {
@@ -373,15 +431,23 @@ export class PcapEditorSession {
     if (luaErrors.length) {
       const first = luaErrors[0].split("\n")[0].replace(/^Lua: /, "");
       void vscode.window
-        .showErrorMessage(`PCAP Viewer: Lua dissector error: ${first}${luaErrors.length > 1 ? ` (+${luaErrors.length - 1} more)` : ""}`, "Show Log")
+        .showErrorMessage(
+          `PCAP Viewer: Lua dissector error: ${first}${luaErrors.length > 1 ? ` (+${luaErrors.length - 1} more)` : ""}`,
+          "Show Log",
+        )
         .then((choice) => choice && this.log.show());
     }
     if (others.length) {
-      void vscode.window.showWarningMessage(`PCAP Viewer: ${others[0]}${others.length > 1 ? ` (+${others.length - 1} more)` : ""}`, "Show Log").then((choice) => {
-        if (choice) {
-          this.log.show();
-        }
-      });
+      void vscode.window
+        .showWarningMessage(
+          `PCAP Viewer: ${others[0]}${others.length > 1 ? ` (+${others.length - 1} more)` : ""}`,
+          "Show Log",
+        )
+        .then((choice) => {
+          if (choice) {
+            this.log.show();
+          }
+        });
     }
   }
 
@@ -389,7 +455,11 @@ export class PcapEditorSession {
    * An "index" notification of a streaming open: progress goes to the viewer;
    * the end brings the final info, then coloring starts. Returns true at the end.
    */
-  private onIndexEvent(client: BackendClient, p: Record<string, unknown>, knownWarnings: number): boolean {
+  private onIndexEvent(
+    client: BackendClient,
+    p: Record<string, unknown>,
+    knownWarnings: number,
+  ): boolean {
     if (this.client !== client || this.disposed) {
       return true;
     }
@@ -413,7 +483,12 @@ export class PcapEditorSession {
     }
     this.indexing = false;
     if (this.info) {
-      this.post({ type: "indexDone", info: this.info, error, view: p.view as ViewCounts | undefined });
+      this.post({
+        type: "indexDone",
+        info: this.info,
+        error,
+        view: p.view as ViewCounts | undefined,
+      });
       const coloring = p.coloring as ColoringResult | undefined;
       if (coloring && !this.coloringStale) {
         this.showColoring(coloring, coloringRules(readSettings(this.uri))); // compile errors are known now
@@ -427,7 +502,10 @@ export class PcapEditorSession {
 
   private async openFile(client: BackendClient, settings: Settings): Promise<OpenResult> {
     return vscode.window.withProgress(
-      { location: vscode.ProgressLocation.Window, title: `Indexing ${vscode.workspace.asRelativePath(this.uri)}` },
+      {
+        location: vscode.ProgressLocation.Window,
+        title: `Indexing ${vscode.workspace.asRelativePath(this.uri)}`,
+      },
       async (progress) => {
         const pending = client.send<OpenResult>(
           "open",
@@ -441,13 +519,23 @@ export class PcapEditorSession {
             // Show the first rows while the rest is indexed, and reuse saved indexes.
             stream: true,
             // Colors come with the rows: the index pass evaluates the coloring rules.
-            coloring: coloringRules(settings).length ? { rules: coloringPayload(coloringRules(settings)) } : undefined,
-            cache: settings.indexCacheBytes > 0 ? { dir: indexCacheDir(this.context), maxBytes: settings.indexCacheBytes } : undefined,
+            coloring: coloringRules(settings).length
+              ? { rules: coloringPayload(coloringRules(settings)) }
+              : undefined,
+            cache:
+              settings.indexCacheBytes > 0
+                ? { dir: indexCacheDir(this.context), maxBytes: settings.indexCacheBytes }
+                : undefined,
           },
           {
             timeoutMs: 0,
             onProgress: (p) => {
-              this.post({ type: "progress", phase: p.phase, fraction: p.fraction, frames: p.frames });
+              this.post({
+                type: "progress",
+                phase: p.phase,
+                fraction: p.fraction,
+                frames: p.frames,
+              });
               if (typeof p.frames === "number") {
                 progress.report({ message: `${p.frames.toLocaleString()} packets` });
               }
@@ -474,25 +562,35 @@ export class PcapEditorSession {
       message:
         `${name} is not a capture file that tshark can read.\n\n` +
         "PCAP Viewer opens pcap and pcapng (also gzip, zstd or lz4 compressed) and the other capture formats Wireshark supports, " +
-        "such as snoop, ERF, btsnoop and PacketLogger. Use \"Reopen Editor With…\" to open this file with another editor.",
+        'such as snoop, ERF, btsnoop and PacketLogger. Use "Reopen Editor With…" to open this file with another editor.',
       canReload: true,
     });
-    void vscode.window.showWarningMessage(`PCAP Viewer: ${name} is not a capture file that tshark can read.`, "Reopen Editor With…").then((choice) => {
-      if (choice) {
-        // The command reopens the active editor: make it this one first.
-        this.panel.reveal(undefined, false);
-        void vscode.commands.executeCommand("workbench.action.reopenWithEditor");
-      }
-    });
+    void vscode.window
+      .showWarningMessage(
+        `PCAP Viewer: ${name} is not a capture file that tshark can read.`,
+        "Reopen Editor With…",
+      )
+      .then((choice) => {
+        if (choice) {
+          // The command reopens the active editor: make it this one first.
+          this.panel.reveal(undefined, false);
+          void vscode.commands.executeCommand("workbench.action.reopenWithEditor");
+        }
+      });
   }
 
   private fail(message: string, setting?: "tsharkPath" | "pythonPath"): void {
     this.log.error(`${this.uri.fsPath}: ${message}`);
     this.post({ type: "error", message, canReload: true });
-    const actions = setting ? ["Open Settings", ...(setting === "tsharkPath" ? ["Download Wireshark"] : [])] : ["Show Log"];
+    const actions = setting
+      ? ["Open Settings", ...(setting === "tsharkPath" ? ["Download Wireshark"] : [])]
+      : ["Show Log"];
     void vscode.window.showErrorMessage(`PCAP Viewer: ${message}`, ...actions).then((choice) => {
       if (choice === "Open Settings") {
-        void vscode.commands.executeCommand("workbench.action.openSettings", `pcapViewer.${setting}`);
+        void vscode.commands.executeCommand(
+          "workbench.action.openSettings",
+          `pcapViewer.${setting}`,
+        );
       } else if (choice === "Download Wireshark") {
         void vscode.env.openExternal(vscode.Uri.parse("https://www.wireshark.org/download.html"));
       } else if (choice === "Show Log") {
@@ -537,7 +635,9 @@ export class PcapEditorSession {
         return;
       case "selection":
         this.selectedFrame = typeof msg.frame === "number" ? msg.frame : null;
-        this.selectedFrames = Array.isArray(msg.frames) ? msg.frames.filter((n) => Number.isInteger(n)) : [];
+        this.selectedFrames = Array.isArray(msg.frames)
+          ? msg.frames.filter((n) => Number.isInteger(n))
+          : [];
         return;
       case "follow":
         FollowPanel.show(this.context, this, msg.proto, msg.frame);
@@ -565,9 +665,14 @@ export class PcapEditorSession {
         return;
       case "renameColumn": {
         const current = readSettings(this.uri).columns.find((c) => c.field === msg.field);
-        const title = await vscode.window.showInputBox({ title: `Rename column ${msg.field}`, value: current?.title ?? msg.field });
+        const title = await vscode.window.showInputBox({
+          title: `Rename column ${msg.field}`,
+          value: current?.title ?? msg.field,
+        });
         if (title !== undefined) {
-          await this.updateColumns((cols) => cols.map((c) => (c.field === msg.field ? { ...c, title: title.trim() || c.field } : c)));
+          await this.updateColumns((cols) =>
+            cols.map((c) => (c.field === msg.field ? { ...c, title: title.trim() || c.field } : c)),
+          );
         }
         return;
       }
@@ -587,7 +692,10 @@ export class PcapEditorSession {
         await vscode.commands.executeCommand("pcapViewer.exportSelected");
         return;
       case "askAboutPackets":
-        await vscode.commands.executeCommand("pcapViewer.askAboutPackets", msg.frames.filter((n) => Number.isInteger(n)));
+        await vscode.commands.executeCommand(
+          "pcapViewer.askAboutPackets",
+          msg.frames.filter((n) => Number.isInteger(n)),
+        );
         return;
       case "marks":
         this.markedCount = msg.count;
@@ -602,21 +710,42 @@ export class PcapEditorSession {
     }
   }
 
-  private async forwardRpc(id: number, method: string, params: Record<string, unknown>): Promise<void> {
+  private async forwardRpc(
+    id: number,
+    method: string,
+    params: Record<string, unknown>,
+  ): Promise<void> {
     if (!WEBVIEW_RPC_METHODS.has(method)) {
-      this.post({ type: "rpcError", id, error: { code: ErrorCodes.MethodNotFound, message: `method not allowed: ${method}` } });
+      this.post({
+        type: "rpcError",
+        id,
+        error: { code: ErrorCodes.MethodNotFound, message: `method not allowed: ${method}` },
+      });
       return;
     }
     const client = this.client;
     if (!client?.running) {
-      this.post({ type: "rpcError", id, error: { code: ErrorCodes.BackendExited, message: "The PCAP backend is not running" } });
+      this.post({
+        type: "rpcError",
+        id,
+        error: { code: ErrorCodes.BackendExited, message: "The PCAP backend is not running" },
+      });
       return;
     }
     // Long-running methods are cancellable instead of timed out.
-    const longRunning = method === "set_filter" || method === "list_packets" || method === "packet_detail";
+    const longRunning =
+      method === "set_filter" || method === "list_packets" || method === "packet_detail";
     const pending = client.send(method, params ?? {}, {
       timeoutMs: longRunning ? 0 : undefined,
-      onProgress: (p) => this.post({ type: "progress", id, phase: p.phase, fraction: p.fraction, frames: p.frames, matched: p.matched }),
+      onProgress: (p) =>
+        this.post({
+          type: "progress",
+          id,
+          phase: p.phase,
+          fraction: p.fraction,
+          frames: p.frames,
+          matched: p.matched,
+        }),
     });
     this.inflight.set(id, pending.id);
     try {
@@ -627,7 +756,11 @@ export class PcapEditorSession {
       if (!e.cancelled && e.code !== ErrorCodes.InvalidFilter) {
         this.log.warn(`${method} failed: ${e.message}`);
       }
-      this.post({ type: "rpcError", id, error: { code: e.code, message: e.message, data: e.data } });
+      this.post({
+        type: "rpcError",
+        id,
+        error: { code: e.code, message: e.message, data: e.data },
+      });
     } finally {
       this.inflight.delete(id);
     }
@@ -661,7 +794,11 @@ export class PcapEditorSession {
       { rules: coloringPayload(rules) },
       {
         timeoutMs: 0,
-        onProgress: (p) => this.post({ type: "coloringProgress", fraction: typeof p.fraction === "number" ? p.fraction : null }),
+        onProgress: (p) =>
+          this.post({
+            type: "coloringProgress",
+            fraction: typeof p.fraction === "number" ? p.fraction : null,
+          }),
       },
     );
     const coloring = { id: pending.id, client };
@@ -669,7 +806,10 @@ export class PcapEditorSession {
     let result: ColoringResult;
     try {
       result = await (rules.length
-        ? vscode.window.withProgress({ location: vscode.ProgressLocation.Window, title: "Colorizing packets" }, () => pending.promise)
+        ? vscode.window.withProgress(
+            { location: vscode.ProgressLocation.Window, title: "Colorizing packets" },
+            () => pending.promise,
+          )
         : pending.promise);
     } catch (err) {
       if (!(err instanceof RpcError && err.cancelled) && this.client === client) {
@@ -692,32 +832,47 @@ export class PcapEditorSession {
 
   /** Report rules that were skipped, and give the viewer the palette of `result`'s colors. */
   private showColoring(result: ColoringResult, rules: ColoringRule[]): void {
-    const problems = Object.entries(result.errors).map(([i, message]) => `Coloring rule "${rules[Number(i)]?.name ?? i}" skipped: ${message}`);
+    const problems = Object.entries(result.errors).map(
+      ([i, message]) => `Coloring rule "${rules[Number(i)]?.name ?? i}" skipped: ${message}`,
+    );
     for (const p of problems) {
       this.log.warn(p);
     }
     const fresh = problems.filter((p) => !reportedColoringErrors.has(p));
     if (fresh.length) {
       fresh.forEach((p) => reportedColoringErrors.add(p));
-      void vscode.window.showWarningMessage(`PCAP Viewer: ${fresh[0]}${fresh.length > 1 ? ` (+${fresh.length - 1} more)` : ""}`, "Edit Rules", "Show Log").then((choice) => {
-        if (choice === "Edit Rules") {
-          void vscode.commands.executeCommand("pcapViewer.manageColoringRules");
-        } else if (choice === "Show Log") {
-          this.log.show();
-        }
-      });
+      void vscode.window
+        .showWarningMessage(
+          `PCAP Viewer: ${fresh[0]}${fresh.length > 1 ? ` (+${fresh.length - 1} more)` : ""}`,
+          "Edit Rules",
+          "Show Log",
+        )
+        .then((choice) => {
+          if (choice === "Edit Rules") {
+            void vscode.commands.executeCommand("pcapViewer.manageColoringRules");
+          } else if (choice === "Show Log") {
+            this.log.show();
+          }
+        });
     }
     this.post({
       type: "coloring",
       coloringId: result.coloringId,
-      rules: rules.map((r) => ({ name: r.name, foreground: r.foreground, background: r.background })),
+      rules: rules.map((r) => ({
+        name: r.name,
+        foreground: r.foreground,
+        background: r.background,
+      })),
     });
   }
 
   // ------------------------------------------------------------------ AI filter help
 
   private async postAiAvailability(): Promise<void> {
-    this.post({ type: "aiAvailable", available: !!this.info && (await this.assistant.isAvailable()) });
+    this.post({
+      type: "aiAvailable",
+      available: !!this.info && (await this.assistant.isAvailable()),
+    });
   }
 
   /** Validated display filters for a natural-language request (see ai.ts; no packet data is sent). */
@@ -737,7 +892,13 @@ export class PcapEditorSession {
    * Explain packets with the language model (ai.ts). Sends their rows and
    * dissection trees: callers must have the user's consent (commands/ai.ts).
    */
-  async explainPackets(frames: number[], question: string, includeBytes: boolean, sink: ExplainSink, token: vscode.CancellationToken): Promise<ExplainOutcome> {
+  async explainPackets(
+    frames: number[],
+    question: string,
+    includeBytes: boolean,
+    sink: ExplainSink,
+    token: vscode.CancellationToken,
+  ): Promise<ExplainOutcome> {
     const client = this.client;
     if (!client?.running || !this.info) {
       return { frames: [], filters: [], message: "Wait for the capture to finish loading." };
@@ -752,7 +913,15 @@ export class PcapEditorSession {
     }
     return this.assistant.explain(
       client,
-      { frames, question, currentFilter: this.filter, titleOf, customFields: custom.map((c) => c.field), includeBytes, quickDetail: readQuickDetail(this.uri) },
+      {
+        frames,
+        question,
+        currentFilter: this.filter,
+        titleOf,
+        customFields: custom.map((c) => c.field),
+        includeBytes,
+        quickDetail: readQuickDetail(this.uri),
+      },
       sink,
       token,
     );
@@ -763,7 +932,12 @@ export class PcapEditorSession {
     this.aiRequests.set(id, cts);
     try {
       const outcome = await this.suggestFilters(request, cts.token);
-      this.post({ type: "aiSuggestions", id, suggestions: outcome.suggestions, message: outcome.message });
+      this.post({
+        type: "aiSuggestions",
+        id,
+        suggestions: outcome.suggestions,
+        message: outcome.message,
+      });
     } finally {
       this.aiRequests.delete(id);
       cts.dispose();
@@ -817,7 +991,9 @@ export class PcapEditorSession {
   }
 
   /** Change pcapViewer.columns for this capture's folder (raw entries are normalised first). */
-  private async updateColumns(change: (columns: ColumnSetting[]) => ColumnSetting[]): Promise<void> {
+  private async updateColumns(
+    change: (columns: ColumnSetting[]) => ColumnSetting[],
+  ): Promise<void> {
     const current = normalizeColumns(getSetting<unknown>("columns", [], this.uri));
     await updateSetting("columns", change(current), this.uri);
   }
@@ -831,7 +1007,9 @@ export class PcapEditorSession {
       return undefined;
     }
     try {
-      const res = await this.client.request<{ valid: boolean; error?: string }>("validate_filter", { expr });
+      const res = await this.client.request<{ valid: boolean; error?: string }>("validate_filter", {
+        expr,
+      });
       return res.valid ? undefined : res.error;
     } catch {
       return undefined;

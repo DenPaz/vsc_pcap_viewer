@@ -146,8 +146,14 @@ button.icon:hover {
 
 .suggest-item.active,
 .suggest-item:hover {
-  color: var(--vscode-editorSuggestWidget-selectedForeground, var(--vscode-list-activeSelectionForeground));
-  background: var(--vscode-editorSuggestWidget-selectedBackground, var(--vscode-list-activeSelectionBackground));
+  color: var(
+    --vscode-editorSuggestWidget-selectedForeground,
+    var(--vscode-list-activeSelectionForeground)
+  );
+  background: var(
+    --vscode-editorSuggestWidget-selectedBackground,
+    var(--vscode-list-activeSelectionBackground)
+  );
 }
 
 .suggest-label {
@@ -209,12 +215,20 @@ button.icon:hover {
 /* Wireshark-style validity colouring, using theme-aware tints. */
 #filter-input.valid {
   border-color: var(--vscode-testing-iconPassed, #3fb950);
-  background: color-mix(in srgb, var(--vscode-testing-iconPassed, #3fb950) 12%, var(--vscode-input-background));
+  background: color-mix(
+    in srgb,
+    var(--vscode-testing-iconPassed, #3fb950) 12%,
+    var(--vscode-input-background)
+  );
 }
 
 #filter-input.invalid {
   border-color: var(--vscode-inputValidation-errorBorder, #f14c4c);
-  background: color-mix(in srgb, var(--vscode-inputValidation-errorBorder, #f14c4c) 14%, var(--vscode-input-background));
+  background: color-mix(
+    in srgb,
+    var(--vscode-inputValidation-errorBorder, #f14c4c) 14%,
+    var(--vscode-input-background)
+  );
 }
 
 #filter-error {

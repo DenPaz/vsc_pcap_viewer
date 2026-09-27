@@ -13,7 +13,14 @@
   /** @type {any} */
   const lib = /** @type {any} */ (window).PcapLib;
 
-  const PROTOCOL_LABELS = { http: "HTTP", smb: "SMB", tftp: "TFTP", imf: "IMF", dicom: "DICOM", "ftp-data": "FTP-DATA" };
+  const PROTOCOL_LABELS = {
+    http: "HTTP",
+    smb: "SMB",
+    tftp: "TFTP",
+    imf: "IMF",
+    dicom: "DICOM",
+    "ftp-data": "FTP-DATA",
+  };
   const COLUMNS = [
     { id: "frame", label: "Packet", numeric: true },
     { id: "protocol", label: "Protocol", numeric: false },
@@ -58,9 +65,16 @@
   // ------------------------------------------------------------------ skeleton
 
   const title = h("h1", { class: "panel-title" }, ["Export Objects"]);
-  const protocolSelect = /** @type {HTMLSelectElement} */ (h("select", { id: "objects-protocol", "aria-label": "Protocol" }));
+  const protocolSelect = /** @type {HTMLSelectElement} */ (
+    h("select", { id: "objects-protocol", "aria-label": "Protocol" })
+  );
   const textInput = /** @type {HTMLInputElement} */ (
-    h("input", { id: "objects-text", type: "search", placeholder: "Filter by name, host or type", "aria-label": "Text filter" })
+    h("input", {
+      id: "objects-text",
+      type: "search",
+      placeholder: "Filter by name, host or type",
+      "aria-label": "Text filter",
+    })
   );
   const refreshBtn = h("button", { type: "button", class: "secondary" }, ["Refresh"]);
   const toolbar = h("div", { class: "toolbar", role: "toolbar" }, [
@@ -69,9 +83,31 @@
     h("span", { class: "spacer" }),
     refreshBtn,
   ]);
-  const saveBtn = h("button", { type: "button", id: "objects-save", title: "Save the selected object" }, ["Save…"]);
-  const saveAllBtn = h("button", { type: "button", id: "objects-save-all", class: "secondary", title: "Save every object shown into a folder" }, ["Save All…"]);
-  const gotoBtn = h("button", { type: "button", id: "objects-goto", class: "secondary", title: "Select the packet that carried the object" }, ["Go to Packet"]);
+  const saveBtn = h(
+    "button",
+    { type: "button", id: "objects-save", title: "Save the selected object" },
+    ["Save…"],
+  );
+  const saveAllBtn = h(
+    "button",
+    {
+      type: "button",
+      id: "objects-save-all",
+      class: "secondary",
+      title: "Save every object shown into a folder",
+    },
+    ["Save All…"],
+  );
+  const gotoBtn = h(
+    "button",
+    {
+      type: "button",
+      id: "objects-goto",
+      class: "secondary",
+      title: "Select the packet that carried the object",
+    },
+    ["Go to Packet"],
+  );
   const actions = h("div", { class: "toolbar" }, [saveBtn, saveAllBtn, gotoBtn]);
   const statusText = h("span");
   const cancelBtn = h("button", { type: "button", class: "secondary hidden" }, ["Cancel"]);
@@ -111,7 +147,10 @@
   /** @param {number | null} fraction */
   function loading(fraction) {
     state.loading = true;
-    statusText.textContent = fraction === null ? "Extracting objects…" : `Extracting objects… ${Math.round(fraction * 100)}%`;
+    statusText.textContent =
+      fraction === null
+        ? "Extracting objects…"
+        : `Extracting objects… ${Math.round(fraction * 100)}%`;
     cancelBtn.classList.remove("hidden");
     notice.classList.add("hidden");
     updateActions();
@@ -153,7 +192,9 @@
     if (state.protocol && !counts.has(state.protocol)) {
       state.protocol = "";
     }
-    protocolSelect.replaceChildren(h("option", { value: "" }, [`All (${state.objects?.length ?? 0})`]));
+    protocolSelect.replaceChildren(
+      h("option", { value: "" }, [`All (${state.objects?.length ?? 0})`]),
+    );
     for (const [protocol, label] of Object.entries(PROTOCOL_LABELS)) {
       if (counts.has(protocol)) {
         const opt = h("option", { value: protocol }, [`${label} (${counts.get(protocol)})`]);
@@ -170,7 +211,14 @@
 
   /** @param {Obj} o */
   function cells(o) {
-    return [o.frame ?? "", PROTOCOL_LABELS[/** @type {keyof typeof PROTOCOL_LABELS} */ (o.protocol)] ?? o.protocol, o.host, o.contentType, o.size, o.name];
+    return [
+      o.frame ?? "",
+      PROTOCOL_LABELS[/** @type {keyof typeof PROTOCOL_LABELS} */ (o.protocol)] ?? o.protocol,
+      o.host,
+      o.contentType,
+      o.size,
+      o.name,
+    ];
   }
 
   // ------------------------------------------------------------------ table
@@ -189,11 +237,20 @@
     const headRow = h("tr");
     COLUMNS.forEach((col, i) => {
       const on = state.sort && state.sort.col === i;
-      const th = h("th", { class: col.numeric ? "num" : "", scope: "col", "aria-sort": on ? (state.sort?.desc ? "descending" : "ascending") : "none" }, [
-        col.label + (on ? (state.sort?.desc ? " ▼" : " ▲") : ""),
-      ]);
+      const th = h(
+        "th",
+        {
+          class: col.numeric ? "num" : "",
+          scope: "col",
+          "aria-sort": on ? (state.sort?.desc ? "descending" : "ascending") : "none",
+        },
+        [col.label + (on ? (state.sort?.desc ? " ▼" : " ▲") : "")],
+      );
       th.addEventListener("click", () => {
-        state.sort = !state.sort || state.sort.col !== i ? { col: i, desc: col.numeric } : { col: i, desc: !state.sort.desc };
+        state.sort =
+          !state.sort || state.sort.col !== i
+            ? { col: i, desc: col.numeric }
+            : { col: i, desc: !state.sort.desc };
         render();
       });
       headRow.append(th);
@@ -217,8 +274,16 @@
       });
       body.append(tr);
     }
-    const table = h("table", { class: "stats", tabindex: "0", "aria-label": "Objects" }, [h("thead", {}, [headRow]), body]);
-    table.addEventListener("keydown", (e) => onKey(/** @type {KeyboardEvent} */ (e), sorted.map((r) => r.o.id)));
+    const table = h("table", { class: "stats", tabindex: "0", "aria-label": "Objects" }, [
+      h("thead", {}, [headRow]),
+      body,
+    ]);
+    table.addEventListener("keydown", (e) =>
+      onKey(
+        /** @type {KeyboardEvent} */ (e),
+        sorted.map((r) => r.o.id),
+      ),
+    );
     tableBox.replaceChildren(all.length ? table : "");
     updateActions();
   }
@@ -241,7 +306,8 @@
     const at = state.selected === null ? -1 : order.indexOf(state.selected);
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
-      const next = at < 0 ? 0 : Math.max(0, Math.min(order.length - 1, at + (e.key === "ArrowDown" ? 1 : -1)));
+      const next =
+        at < 0 ? 0 : Math.max(0, Math.min(order.length - 1, at + (e.key === "ArrowDown" ? 1 : -1)));
       select(order[next]);
     } else if (e.key === "Enter" && at >= 0) {
       e.preventDefault();
@@ -266,7 +332,8 @@
     gotoBtn.toggleAttribute("disabled", !o || !o.frame);
     const n = state.loading ? 0 : shown().length;
     saveAllBtn.toggleAttribute("disabled", !n);
-    saveAllBtn.textContent = n && n !== (state.objects?.length ?? 0) ? `Save ${n} Shown…` : "Save All…";
+    saveAllBtn.textContent =
+      n && n !== (state.objects?.length ?? 0) ? `Save ${n} Shown…` : "Save All…";
     refreshBtn.toggleAttribute("disabled", state.loading);
   }
 
