@@ -858,6 +858,23 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     const status = () => page.textContent("#status-left");
     const notice = () => page.textContent("#filter-error");
     const stopButton = () => page.$eval("#filter-cancel", (b) => !b.classList.contains("hidden"));
+    /** The first number after `label` in the status bar. */
+    const count = async (label) => Number(new RegExp(`${label}([\\d,]+)`).exec(await status())?.[1].replace(/,/g, "") ?? NaN);
+    /** Scroll to the end, so the last (short) page is cached, then wait for the list to grow past it. */
+    const growsAtTheEnd = async (label) => {
+      const before = await count(label);
+      await page.evaluate(() => {
+        const v = /** @type {HTMLElement} */ (document.getElementById("list-viewport"));
+        v.scrollTop = v.scrollHeight;
+      });
+      await page.waitForFunction(
+        ([label, before]) => {
+          const m = new RegExp(`${label}([\\d,]+)`).exec(document.querySelector("#status-left")?.textContent ?? "");
+          return !!m && Number(m[1].replace(/,/g, "")) > before;
+        },
+        [label, before],
+      );
+    };
     /** Text of column `id` in the first loaded rows (columns may have been moved by earlier tests). */
     const column = (id, n = 5) =>
       page.evaluate(
@@ -881,6 +898,10 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
       await post({ type: "init", info, columns: customCols, layout, timeFormat: "relative", quickDetail: { after: 20000, window: 300 }, filter: "", history: [], savedFilters, elapsedMs: 1 });
       await page.waitForFunction(() => /^Indexing… [\d,]+ packets so far/.test(document.querySelector("#status-left")?.textContent ?? ""));
       await page.waitForFunction(() => document.querySelector("#list-rows .list-row:not(.loading)")?.children[0]?.textContent === "1");
+      await growsAtTheEnd("Indexing… ");
+      await page.evaluate(() => {
+        /** @type {HTMLElement} */ (document.getElementById("list-viewport")).scrollTop = 0;
+      });
 
       // A filter starts at once, over the packets indexed so far.
       await page.fill("#filter-input", "dns");
@@ -899,6 +920,7 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
       await page.fill("#filter-input", "tcp");
       await page.press("#filter-input", "Enter");
       await page.waitForFunction(() => /Filtering… [\d,]+ matches so far/.test(document.querySelector("#status-left")?.textContent ?? ""));
+      await growsAtTheEnd("Filtering… ");
       assert.equal(await stopButton(), true);
       await page.click("#filter-cancel");
       await page.waitForFunction(() => /^Filter stopped: showing the [\d,]+ matches found so far\.$/.test(document.getElementById("filter-error")?.textContent ?? ""));

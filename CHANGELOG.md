@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed: after scrolling to the end of the list while a big capture was still
+  being indexed (or a filter was still running), the list stopped growing.
 - Streaming filters: on big captures the matches show as tshark finds them,
   with a count and progress in the status bar. ■ stops the filter and keeps
   the matches found so far; a sort chosen meanwhile applies when it's done.
