@@ -131,7 +131,9 @@ export function registerSetupCommands(
     vscode.commands.registerCommand("pcapViewer.openSample", async () => {
       // A copy in the extension's storage: comments saved into it must not
       // touch the installed extension (which updates replace anyway).
-      const dir = vscode.Uri.joinPath(context.globalStorageUri, "samples");
+      // A file: URI (tshark reads files): globalStorageUri itself can be
+      // vscode-userdata:, which the viewer would offer to copy instead.
+      const dir = vscode.Uri.joinPath(vscode.Uri.file(context.globalStorageUri.fsPath), "samples");
       const sample = vscode.Uri.joinPath(dir, "sample.pcapng");
       await vscode.workspace.fs.createDirectory(dir);
       try {

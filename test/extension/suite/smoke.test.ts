@@ -341,6 +341,7 @@ suite("PCAP Viewer smoke test", () => {
     // A copy in the extension's storage (which the test run keeps under .vscode-test/).
     assert.notEqual(sample.fsPath, path.join(ext!.extensionPath, "media", "sample.pcapng"));
     assert.equal(path.basename(path.dirname(sample.fsPath)), "samples");
+    assert.equal(sample.scheme, "file", "tshark reads files");
     const session = await waitFor(() =>
       api.provider.allSessions.find((s) => s.uri.fsPath === sample.fsPath),
     );
