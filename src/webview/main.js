@@ -70,6 +70,12 @@
     treePlaceholder: $("detail-placeholder"),
     detailPane: $("detail"),
     detailNote: $("detail-note"),
+    commentBar: $("comment-bar"),
+    commentView: $("comment-view"),
+    commentText: $("comment-text"),
+    commentEdited: $("comment-edited"),
+    commentEditor: $("comment-editor"),
+    commentInput: /** @type {HTMLTextAreaElement} */ ($("comment-input")),
     bytesTabs: $("bytes-tabs"),
     bytesView: $("bytes-view"),
     statusLeft: $("status-left"),
@@ -102,7 +108,7 @@
 
   /**
    * @typedef {{id: string, title: string, field: string, numeric?: boolean, custom?: boolean}} Column
-   * @typedef {{number: number, cells: string[], color?: number, cid?: number, marked?: boolean, addresses?: string[]}} Row
+   * @typedef {{number: number, cells: string[], color?: number, cid?: number, marked?: boolean, addresses?: string[], comment?: string, commentEdited?: boolean}} Row
    * @typedef {{name: string, foreground: string, background: string}} ColorRule
    */
   const state = {
@@ -277,6 +283,10 @@
         break;
       case "command":
         runCommand(msg.command);
+        break;
+      case "commentsChanged":
+        refreshRows();
+        void showComment(state.selectedFrame);
         break;
       case "history":
         setHistory(msg.history);
@@ -807,6 +817,8 @@
       // Coloring rule colors, except on selected rows (they keep the theme's selection
       // colors) and marked rows (the mark style wins).
       rowEl.classList.toggle("marked", !!row?.marked);
+      rowEl.classList.toggle("has-comment", !!row?.comment);
+      rowEl.classList.toggle("comment-edited", !!row?.commentEdited);
       const rule = !selected && !row?.marked ? lib.rowColors(row, state.coloring) : null;
       rowEl.classList.toggle("colored", !!rule);
       rowEl.style.backgroundColor = rule ? rule.background : "";
@@ -818,10 +830,13 @@
         if (cell.textContent !== text) {
           cell.textContent = text;
         }
-        // A resolved name: the address as tooltip.
-        const address = (row && lib.cellAddress(cols[c].column, row)) ?? "";
-        if (cell.title !== address) {
-          cell.title = address;
+        // A resolved name: the address as tooltip; the No. cell: the packet's comment.
+        const tip =
+          (row && cols[c].column.id === "number"
+            ? row.comment
+            : lib.cellAddress(cols[c].column, row)) ?? "";
+        if (cell.title !== tip) {
+          cell.title = tip;
         }
       }
     }
@@ -1244,8 +1259,116 @@
     updateStatus();
     window.clearTimeout(detailTimer);
     // Debounce so holding an arrow key doesn't start a tshark run per row.
-    detailTimer = window.setTimeout(() => void loadDetail(frame), 60);
+    detailTimer = window.setTimeout(() => {
+      void loadDetail(frame);
+      void showComment(frame);
+    }, 60);
   }
+
+  // ------------------------------------------------------------------ packet comments
+
+  /** Comment shown in the bar: frame, text ("" none), unsaved edit. */
+  const comment = { frame: /** @type {number | null} */ (null), text: "", edited: false };
+
+  /**
+   * Show `frame`'s comment above its details (edits included), or hide the bar.
+   * @param {number | null} frame
+   */
+  async function showComment(frame) {
+    if (frame === null) {
+      comment.frame = null;
+      el.commentBar.classList.add("hidden");
+      return;
+    }
+    let res;
+    try {
+      res = await rpc("packet_comments", { frames: [frame] }).promise;
+    } catch {
+      return; // (no capture)
+    }
+    if (state.selectedFrame !== frame) {
+      return;
+    }
+    const editing = !el.commentEditor.classList.contains("hidden") && comment.frame === frame;
+    comment.frame = frame;
+    comment.text = res.comments[String(frame)] ?? "";
+    comment.edited = res.edited.includes(frame);
+    el.commentText.textContent = comment.text;
+    el.commentEdited.classList.toggle("hidden", !comment.edited);
+    if (!editing) {
+      el.commentEditor.classList.add("hidden");
+      el.commentView.classList.remove("hidden");
+      el.commentBar.classList.toggle("hidden", !comment.text && !comment.edited);
+    }
+    if (!comment.text && comment.edited) {
+      el.commentText.textContent = "(comment deleted)";
+    }
+  }
+
+  /** Edit (or add) the selected packet's comment in the bar. */
+  function editComment() {
+    const frame = state.selectedFrame;
+    if (frame === null) {
+      return;
+    }
+    const open = () => {
+      el.commentInput.value = comment.frame === frame ? comment.text : "";
+      el.commentView.classList.add("hidden");
+      el.commentEditor.classList.remove("hidden");
+      el.commentBar.classList.remove("hidden");
+      el.commentInput.focus();
+    };
+    if (comment.frame === frame) {
+      open();
+    } else {
+      void showComment(frame).then(open);
+    }
+  }
+
+  function applyComment() {
+    if (comment.frame === null) {
+      return;
+    }
+    const text = el.commentInput.value.replace(/\s+$/, "");
+    el.commentEditor.classList.add("hidden");
+    el.commentView.classList.remove("hidden");
+    if (text !== comment.text) {
+      vscode.postMessage({ type: "setComment", frame: comment.frame, text });
+    } else {
+      el.commentBar.classList.toggle("hidden", !comment.text && !comment.edited);
+    }
+  }
+
+  function cancelComment() {
+    el.commentEditor.classList.add("hidden");
+    el.commentView.classList.remove("hidden");
+    el.commentBar.classList.toggle("hidden", !comment.text && !comment.edited);
+    el.viewport.focus();
+  }
+
+  /** @param {number} frame */
+  function deleteComment(frame) {
+    vscode.postMessage({ type: "setComment", frame, text: "" });
+  }
+
+  $("comment-edit").addEventListener("click", () => editComment());
+  $("comment-delete").addEventListener("click", () => {
+    if (comment.frame !== null) {
+      deleteComment(comment.frame);
+    }
+  });
+  $("comment-apply").addEventListener("click", () => applyComment());
+  $("comment-cancel").addEventListener("click", () => cancelComment());
+  el.commentInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      applyComment();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      cancelComment();
+    }
+  });
 
   /** After a filter/sort change, find where the selected frame went. */
   async function relocateSelection() {
@@ -1432,6 +1555,7 @@
 
   function clearDetail() {
     reportSelection(null);
+    void showComment(null);
     state.detail = null;
     state.selectedNodeId = null;
     nodeIndex.clear();
@@ -1880,6 +2004,7 @@
       ["Follow UDP Stream", follow("udp")],
       ["Follow TLS Stream", /TLS|SSL/.test(protocol) ? follow("tls") : null],
       ["Follow HTTP Stream", /HTTP/.test(protocol) ? follow("http") : null],
+      ["TCP Stream Graph", () => vscode.postMessage({ type: "tcpGraph", frame: row.number })],
       ["-", null],
       // Sends packet data: the host asks for consent first (pcapViewer.ai.allowPacketData).
       ...(state.ai.available
@@ -1915,6 +2040,8 @@
         state.timeRef === row.number ? "Unset Time Reference" : "Set Time Reference",
         () => toggleTimeReference(),
       ],
+      [row.comment ? "Edit Packet Comment…" : "Add Packet Comment…", () => editComment()],
+      ["Delete Packet Comment", row.comment ? () => deleteComment(row.number) : null],
       ["Select All", () => void selectAll()],
       ["-", null],
       ["Copy Value", cellValue ? () => copy(cellValue) : null],
@@ -2968,6 +3095,14 @@
         break;
       case "toggleTimeReference":
         toggleTimeReference();
+        break;
+      case "editPacketComment":
+        editComment();
+        break;
+      case "deletePacketComment":
+        if (state.selectedFrame !== null) {
+          deleteComment(state.selectedFrame);
+        }
         break;
     }
   }

@@ -392,3 +392,139 @@ table.rules .empty-rules {
   color: var(--vscode-descriptionForeground);
   white-space: normal;
 }
+
+/* Flow graph: endpoint columns, one arrow per packet. */
+.flow-scroll {
+  position: relative;
+  flex: 1;
+  min-height: 200px;
+  height: calc(100vh - 120px);
+  overflow: auto;
+  border: 1px solid var(--border);
+}
+
+.flow-scroll:focus {
+  outline: 1px solid var(--vscode-focusBorder);
+}
+
+.flow-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  height: 28px;
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  border-bottom: 1px solid var(--border);
+}
+
+.flow-gutter-title,
+.flow-node {
+  position: absolute;
+  top: 0;
+  box-sizing: border-box;
+  padding: 6px 6px 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-weight: 600;
+}
+
+.flow-node {
+  text-align: center;
+}
+
+.flow-gutter-title {
+  left: 0;
+  width: 150px;
+  color: var(--vscode-descriptionForeground);
+}
+
+.flow-body {
+  position: relative;
+}
+
+.flow-window {
+  position: absolute;
+  left: 0;
+  font-family: var(--mono);
+  font-size: var(--mono-size);
+}
+
+.flow-life {
+  stroke: var(--border);
+  stroke-dasharray: 3 3;
+}
+
+.flow-bg {
+  fill: transparent;
+  cursor: pointer;
+}
+
+.flow-row:hover .flow-bg {
+  fill: var(--vscode-list-hoverBackground);
+}
+
+.flow-row.selected .flow-bg {
+  fill: var(--vscode-list-activeSelectionBackground);
+}
+
+.flow-row.selected text {
+  fill: var(--vscode-list-activeSelectionForeground, var(--vscode-foreground));
+}
+
+.flow-time {
+  fill: var(--vscode-descriptionForeground);
+}
+
+.flow-label {
+  fill: var(--vscode-foreground);
+}
+
+.flow-label.middle {
+  text-anchor: middle;
+}
+
+.flow-arrow {
+  stroke: var(--vscode-charts-blue, #3794ff);
+  stroke-width: 1.5;
+  fill: none;
+}
+
+.flow-head {
+  fill: var(--vscode-charts-blue, #3794ff);
+}
+
+/* TCP stream graphs (share .chart, .series-line, .crosshair and .tooltip). */
+.chart line.grid {
+  stroke: var(--vscode-editorWidget-border, var(--border));
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+
+.chart .axis-label {
+  fill: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.chart .seg {
+  stroke: var(--vscode-charts-blue, #3794ff);
+  stroke-width: 2;
+}
+
+.chart .dot {
+  fill: var(--vscode-charts-blue, #3794ff);
+}
+
+.chart .seg.retrans {
+  stroke: var(--vscode-charts-red, #f14c4c);
+}
+
+.chart .dot.retrans {
+  fill: var(--vscode-charts-red, #f14c4c);
+}
+
+.chart .focus {
+  fill: none;
+  stroke: var(--vscode-foreground);
+  stroke-width: 1.5;
+}

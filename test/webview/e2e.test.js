@@ -28,6 +28,8 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
   let server, browser, page, client;
   // What the stand-in host received / keeps (mirrors pcapEditor.ts behaviour).
   const hostLog = [];
+  /** Unsaved comment edits (the real host keeps them in PcapDocument). */
+  const commentEdits = {};
   let savedFilters = [{ name: "Web", filter: "http" }];
   // Stubbed "✨ Ask AI" answer (the real host validates suggestions with tshark first); null = never answer.
   /** @type {{suggestions: {filter: string, explanation: string}[], message?: string} | null} */
@@ -150,6 +152,12 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
         ].includes(msg.type)
       ) {
         hostLog.push(msg);
+      } else if (msg.type === "setComment") {
+        // Like PcapDocument/pushComments: the edits go to the backend, then the viewer refreshes.
+        hostLog.push(msg);
+        commentEdits[msg.frame] = msg.text || null;
+        await client.request("set_comments", { edits: commentEdits });
+        await post({ type: "commentsChanged" });
       } else if (msg.type === "cancel") {
         // Like PcapEditorSession: cancel the backend request behind a webview rpc.
         const backendId = inflight.get(msg.id);
@@ -646,6 +654,35 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
   const command = (name) => post({ type: "command", command: name });
   const headerIds = () =>
     page.$$eval("#list-header > div", (cells) => cells.map((c) => c.dataset.id));
+
+  /** Open another capture in the viewer, as the host would after a reload. */
+  async function reopenCapture(file, extra = {}, label = "Names: MAC") {
+    const info = await client.request(
+      "open",
+      { path: path.join(ROOT, "test", "fixtures", file), columns: ["tcp.stream"], ...extra },
+      { timeoutMs: 0 },
+    );
+    await post({
+      type: "init",
+      info,
+      columns: customCols,
+      layout,
+      timeFormat: "relative",
+      quickDetail: { after: 20000, window: 300 },
+      filter: "",
+      history: [],
+      savedFilters,
+      elapsedMs: 1,
+      names: label,
+    });
+    await page.waitForFunction(
+      (n) => document.querySelector("#status-left").textContent.includes(`Packets: ${n}`),
+      info.frames,
+    );
+    await page.waitForFunction(
+      () => document.querySelectorAll("#list-rows .list-row:not(.loading)").length >= 11,
+    );
+  }
 
   async function cleanView() {
     await post({ type: "aiAvailable", available: false });
@@ -1490,35 +1527,8 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     await page.click("#status-names");
     assert.deepEqual(hostLog.at(-1), { type: "pickNameResolution" });
     const names = { mac: true, network: true, capturedDns: true, transport: true };
-    const reopen = async (file, extra, label) => {
-      const info = await client.request(
-        "open",
-        { path: path.join(ROOT, "test", "fixtures", file), columns: ["tcp.stream"], ...extra },
-        { timeoutMs: 0 },
-      );
-      await post({
-        type: "init",
-        info,
-        columns: customCols,
-        layout,
-        timeFormat: "relative",
-        quickDetail: { after: 20000, window: 300 },
-        filter: "",
-        history: [],
-        savedFilters,
-        elapsedMs: 1,
-        names: label,
-      });
-      await page.waitForFunction(
-        (n) => document.querySelector("#status-left").textContent.includes(`Packets: ${n}`),
-        info.frames,
-      );
-      await page.waitForFunction(
-        () => document.querySelectorAll("#list-rows .list-row:not(.loading)").length >= 11,
-      );
-    };
     try {
-      await reopen("mixed.pcapng", { names }, "Names: MAC, network (capture), ports");
+      await reopenCapture("mixed.pcapng", { names }, "Names: MAC, network (capture), ports");
       assert.equal(await page.textContent("#status-names"), "Names: MAC, network (capture), ports");
       const source = rowEl(11).locator("div").nth(2);
       assert.equal(await source.textContent(), "example.com");
@@ -1537,7 +1547,73 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
       assert.equal(await page.inputValue("#filter-input"), "eth.dst == ff:ff:ff:ff:ff:ff");
     } finally {
       await page.fill("#filter-input", "");
-      await reopen("http.pcap", {}, "Names: MAC");
+      await reopenCapture("http.pcap");
+    }
+  });
+
+  test("packet comments: row stripe and tooltip, comment bar, edit, delete, add", async () => {
+    await cleanView();
+    try {
+      await reopenCapture("comments.pcapng");
+      await page.waitForFunction(() =>
+        document.querySelectorAll("#list-rows .list-row")[1]?.classList.contains("has-comment"),
+      );
+      assert.equal(
+        await rowEl(2).locator("div").nth(0).getAttribute("title"),
+        "SYN-ACK from the server",
+      );
+      assert.ok(!(await rowEl(1).getAttribute("class")).includes("has-comment"));
+
+      await rowEl(4).click();
+      await page.waitForFunction(
+        () => !document.querySelector("#comment-bar").classList.contains("hidden"),
+      );
+      assert.equal(
+        await page.textContent("#comment-text"),
+        "The request\nsecond line\twith a tab",
+        "multi-line, shown as is",
+      );
+      assert.ok(await page.isHidden("#comment-edited"));
+
+      await page.click("#comment-edit");
+      assert.equal(await page.inputValue("#comment-input"), "The request\nsecond line\twith a tab");
+      await page.fill("#comment-input", "edited request");
+      await page.press("#comment-input", "Control+Enter");
+      assert.deepEqual(hostLog.at(-1), { type: "setComment", frame: 4, text: "edited request" });
+      await page.waitForFunction(
+        () => document.querySelector("#comment-text").textContent === "edited request",
+      );
+      assert.ok(await page.isVisible("#comment-edited"), "unsaved");
+      await page.waitForFunction(() =>
+        document.querySelectorAll("#list-rows .list-row")[3]?.classList.contains("comment-edited"),
+      );
+
+      await page.click("#comment-delete");
+      assert.deepEqual(hostLog.at(-1), { type: "setComment", frame: 4, text: "" });
+      await page.waitForFunction(
+        () => document.querySelector("#comment-text").textContent === "(comment deleted)",
+      );
+
+      // Add one from the row menu; Esc cancels, Apply adds.
+      await rowEl(1).click({ button: "right" });
+      await page.click("#context-menu .item:text-is('Add Packet Comment…')");
+      await page.waitForFunction(() => document.activeElement?.id === "comment-input");
+      await page.keyboard.press("Escape");
+      assert.ok(await page.isHidden("#comment-editor"));
+      await post({ type: "command", command: "editPacketComment" }); // Ctrl+Alt+C
+      await page.waitForFunction(() => document.activeElement?.id === "comment-input");
+      await page.keyboard.type("first packet");
+      await page.click("#comment-apply");
+      assert.deepEqual(hostLog.at(-1), { type: "setComment", frame: 1, text: "first packet" });
+      await page.waitForFunction(() =>
+        document.querySelectorAll("#list-rows .list-row")[0]?.classList.contains("has-comment"),
+      );
+      assert.equal(await rowEl(1).locator("div").nth(0).getAttribute("title"), "first packet");
+    } finally {
+      for (const key of Object.keys(commentEdits)) {
+        delete commentEdits[key];
+      }
+      await reopenCapture("http.pcap");
     }
   });
 

@@ -1236,3 +1236,113 @@ def object_came_in(
 def folder_has(world: World, names: str) -> None:
     assert world.save_dir is not None
     assert sorted(p.name for p in world.save_dir.iterdir()) == sorted(items(names))
+
+
+# ---------------------------------------------------------------------- packet comments
+
+
+@given(parsers.re(r'a copy of the capture "(?P<name>[^"]+)" is open$'))
+def given_copy_open(world: World, name: str, tmp_path: Path) -> None:
+    copy = tmp_path / name
+    copy.write_bytes((FIXTURES / name).read_bytes())
+    world.info = world.call(world.service.open, {"path": str(copy)})
+    assert world.error is None, world.error
+    world.save_dir = tmp_path
+
+
+def _comments(world: World, frames: list[int]) -> dict[str, str]:
+    res = world.service.packet_comments({"frames": frames}, world.ctx)
+    found: dict[str, str] = res["comments"]
+    return found
+
+
+@then(parsers.re(r'packet (?P<n>\d+) has the comment "(?P<text>[^"]*)"$'))
+def packet_has_comment(world: World, n: str, text: str) -> None:
+    assert _comments(world, [int(n)]).get(n) == text.replace("\\n", "\n")
+
+
+@then(parsers.re(r"packet (?P<n>\d+) has no comment$"))
+def packet_has_no_comment(world: World, n: str) -> None:
+    assert n not in _comments(world, [int(n)])
+
+
+@when(parsers.re(r'I set the comment of packet (?P<n>\d+) to "(?P<text>[^"]*)"$'))
+def set_comment(world: World, n: str, text: str) -> None:
+    edits = dict(world.service._comment_edits)
+    edits[int(n)] = text or None
+    world.call(world.service.set_comments, {"edits": {str(k): v for k, v in edits.items()}})
+    assert world.error is None, world.error
+
+
+@when(parsers.re(r"I delete the comment of packet (?P<n>\d+)$"))
+def delete_comment(world: World, n: str) -> None:
+    set_comment(world, n, "")
+
+
+@when(parsers.re(r"I save the comments (?P<where>into the capture|as a new file)$"))
+def save_comments(world: World, where: str) -> None:
+    assert world.save_dir is not None
+    params: dict[str, Any] = (
+        {"inPlace": True}
+        if where == "into the capture"
+        else {"dest": str(world.save_dir / "saved.pcapng")}
+    )
+    world.exported = world.call(world.service.save_comments, params)
+
+
+@then(parsers.re(r"the saved file has comments on packets (?P<frames>.+)$"))
+def saved_file_comments(world: World, frames: str) -> None:
+    from pcap_backend import comments  # noqa: PLC0415
+
+    assert world.error is None, world.error
+    assert world.exported is not None
+    saved = comments.read_comments(Path(world.exported["path"]))
+    assert sorted(saved) == numbers(frames)
+
+
+@then(parsers.re(r'saving the comments into the capture is refused with "(?P<text>[^"]+)"$'))
+def save_refused(world: World, text: str) -> None:
+    world.call(world.service.save_comments, {"inPlace": True, "edits": {"1": "x"}})
+    assert world.error is not None and text in str(world.error)
+
+
+# ---------------------------------------------------------------------- flow and TCP graphs
+
+
+@when("I request the flow graph")
+def request_flow_graph(world: World) -> None:
+    world.table = world.call(world.service.flow_graph, {"offset": 0, "limit": 500})
+
+
+@then(parsers.re(r"the flow graph has (?P<packets>\d+) packets between (?P<nodes>\d+) endpoints$"))
+def flow_graph_counts(world: World, packets: str, nodes: str) -> None:
+    assert world.error is None, world.error
+    assert world.table is not None
+    assert world.table["total"] == int(packets)
+    assert len(world.table["nodes"]) + world.table["more"] == int(nodes)
+
+
+@then(parsers.re(r"the first endpoints of the flow graph are (?P<names>.+)$"))
+def flow_graph_first_nodes(world: World, names: str) -> None:
+    assert world.table is not None
+    expected = items(names)
+    assert world.table["nodes"][: len(expected)] == expected
+
+
+@when(parsers.re(r"I request the TCP stream graph of packet (?P<n>\d+)$"))
+def request_tcp_graph(world: World, n: str) -> None:
+    world.table = world.call(world.service.tcp_graph, {"frame": int(n)})
+
+
+@then(
+    parsers.re(
+        r'the TCP stream graph shows stream (?P<stream>\d+) between "(?P<a>[^"]+)" '
+        r'and "(?P<b>[^"]+)" with (?P<count>\d+) packets$'
+    )
+)
+def tcp_graph_shows(world: World, stream: str, a: str, b: str, count: str) -> None:
+    assert world.error is None, world.error
+    assert world.table is not None
+    assert world.table["stream"] == int(stream)
+    assert world.table["endpoints"] == [a, b]
+    assert len(world.table["points"]) == int(count)

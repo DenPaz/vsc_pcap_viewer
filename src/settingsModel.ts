@@ -500,3 +500,18 @@ export function nameResolutionLabel(n: NameResolution): string {
   }
   return `Names: ${parts.length ? parts.join(", ") : "off"}`;
 }
+
+/** Unsaved comment edits from a hot-exit backup (see backupCustomDocument). */
+export function parseCommentBackup(text: string): Map<number, string> {
+  const raw = JSON.parse(text) as unknown;
+  const edits = new Map<number, string>();
+  if (raw && typeof raw === "object") {
+    for (const [key, value] of Object.entries(raw)) {
+      const n = Number(key);
+      if (Number.isInteger(n) && n > 0 && (typeof value === "string" || value === null)) {
+        edits.set(n, value ?? "");
+      }
+    }
+  }
+  return edits;
+}

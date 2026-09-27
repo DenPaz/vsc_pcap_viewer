@@ -458,6 +458,39 @@ def zstd_compress(data: bytes) -> bytes:
     return zstd.compress(data)
 
 
+# Comments of comments.pcapng (frame → its comments; frame 5 has two).
+PACKET_COMMENTS = {
+    2: ["SYN-ACK from the server"],
+    4: ["The request\nsecond line\twith a tab"],
+    5: ["first of two", "second of two"],
+}
+
+
+def comments_pcapng(records: list[tuple[float, bytes]], comments: dict[int, list[str]]) -> bytes:
+    """A little-endian pcapng (Ethernet) whose packets carry ``comments``
+    (opt_comment options of Enhanced Packet Blocks), written by hand."""
+
+    def block(kind: int, body: bytes) -> bytes:
+        body += b"\0" * (-len(body) % 4)
+        total = len(body) + 12
+        return struct.pack("<II", kind, total) + body + struct.pack("<I", total)
+
+    def option(code: int, value: bytes) -> bytes:
+        return struct.pack("<HH", code, len(value)) + value + b"\0" * (-len(value) % 4)
+
+    out = block(0x0A0D0D0A, struct.pack("<IHHq", 0x1A2B3C4D, 1, 0, -1))
+    out += block(1, struct.pack("<HHI", 1, 0, 65535))
+    for n, (ts, data) in enumerate(records, start=1):
+        micros = round(ts * 1_000_000)
+        body = struct.pack("<IIIII", 0, micros >> 32, micros & 0xFFFFFFFF, len(data), len(data))
+        body += data + b"\0" * (-len(data) % 4)
+        texts = comments.get(n, [])
+        if texts:
+            body += b"".join(option(1, t.encode()) for t in texts) + option(0, b"")
+        out += block(6, body)
+    return out
+
+
 def format_fixtures() -> None:
     """Every extra file type the viewer registers for, from the base fixtures."""
     FORMATS.mkdir(exist_ok=True)
@@ -572,6 +605,9 @@ def main() -> None:
     wrpcap(str(HERE / "tls.pcap"), tls_packets())
     wrpcapng(str(HERE / "mixed.pcapng"), mixed_packets())
     wrpcap(str(HERE / "objects.pcap"), objects_packets())
+    (HERE / "comments.pcapng").write_bytes(
+        comments_pcapng(_records(http_packets()), PACKET_COMMENTS)
+    )
     # A truncated file to exercise malformed-capture handling.
     data = (HERE / "http.pcap").read_bytes()
     (HERE / "truncated.pcap").write_bytes(data[: len(data) - 30])

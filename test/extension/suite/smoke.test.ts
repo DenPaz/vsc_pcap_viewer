@@ -3,13 +3,17 @@
  * custom editor and check that the backend indexed it and answers requests.
  */
 import * as assert from "node:assert/strict";
+import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import type { PcapViewerApi } from "../../../src/extension";
 // Same module instances as the extension's (both load out/src/panels/*.js).
+import { FlowGraphPanel } from "../../../src/panels/flowGraphPanel";
 import { FollowPanel } from "../../../src/panels/followPanel";
 import { ObjectsPanel } from "../../../src/panels/objectsPanel";
 import { StatsPanel } from "../../../src/panels/statsPanel";
+import { TcpGraphPanel } from "../../../src/panels/tcpGraphPanel";
 
 const FIXTURES = path.resolve(__dirname, "../../../../test/fixtures");
 
@@ -120,6 +124,11 @@ suite("PCAP Viewer smoke test", () => {
       "pcapViewer.mergeCaptures",
       "pcapViewer.exportObjects",
       "pcapViewer.nameResolution",
+      "pcapViewer.editPacketComment",
+      "pcapViewer.deletePacketComment",
+      "pcapViewer.deleteAllPacketComments",
+      "pcapViewer.statistics.flowGraph",
+      "pcapViewer.statistics.tcpStreamGraph",
       "pcapViewer.toggleTimeReference",
       "pcapViewer.timeFormat",
     ]) {
@@ -161,6 +170,67 @@ suite("PCAP Viewer smoke test", () => {
     // Closing the editor must stop the backend process (and close its panels).
     await vscode.commands.executeCommand("workbench.action.closeAllEditors");
     await waitFor(() => (backend.running ? undefined : true), 10_000);
+  });
+
+  test("packet comments: an edit makes the capture dirty, undo and save work", async () => {
+    const ext = vscode.extensions.all.find((e) => e.packageJSON.name === "pcap-viewer");
+    const api = (await ext!.activate()) as PcapViewerApi;
+    // A copy: saving writes the comments into the file.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pcap-smoke-"));
+    const file = path.join(dir, "comments.pcapng");
+    fs.copyFileSync(path.join(FIXTURES, "comments.pcapng"), file);
+    const uri = vscode.Uri.file(file);
+    await vscode.commands.executeCommand("vscode.openWith", uri, "pcapViewer.editor");
+    const session = await waitFor(() =>
+      api.provider.allSessions.find((s) => s.uri.fsPath === uri.fsPath && indexed(s)),
+    );
+    const comment = async (frame: number): Promise<string | undefined> => {
+      const res = await session.backend?.request<{ comments: Record<string, string> }>(
+        "packet_comments",
+        { frames: [frame] },
+      );
+      return res?.comments[String(frame)];
+    };
+    assert.equal(await comment(2), "SYN-ACK from the server");
+    const dirty = () => vscode.window.tabGroups.activeTabGroup.activeTab?.isDirty;
+    assert.equal(dirty(), false);
+
+    session.editComments(new Map([[1, "from the smoke test"]]), "Edit Packet Comment");
+    await waitFor(() => (dirty() ? true : undefined));
+    await waitForAsync(async () =>
+      (await comment(1)) === "from the smoke test" ? true : undefined,
+    );
+    await vscode.commands.executeCommand("undo");
+    await waitFor(() => (dirty() === false ? true : undefined));
+    await waitForAsync(async () => ((await comment(1)) === undefined ? true : undefined));
+
+    session.editComments(new Map([[1, "saved"]]), "Edit Packet Comment");
+    await waitFor(() => (dirty() ? true : undefined));
+    const before = fs.statSync(file).mtimeMs;
+    await vscode.commands.executeCommand("workbench.action.files.save");
+    await waitFor(() => (dirty() === false ? true : undefined));
+    assert.ok(fs.statSync(file).mtimeMs > before || fs.statSync(file).size > 0, "written");
+    assert.equal(await comment(1), "saved", "now in the file");
+    assert.ok(fs.readFileSync(file).includes(Buffer.from("saved")));
+
+    // The flow graph and TCP stream graph panels talk to the same backend.
+    await vscode.commands.executeCommand("pcapViewer.statistics.flowGraph");
+    const flow = await waitFor(
+      () => FlowGraphPanel.all.find((p) => p.session === session)?.firstPage,
+    );
+    assert.equal(flow.total, 11);
+    assert.deepEqual(flow.nodes, ["192.168.1.10", "93.184.216.34"]);
+    session.reveal();
+    await vscode.commands.executeCommand("pcapViewer.statistics.tcpStreamGraph", 4);
+    const graph = await waitFor(
+      () => TcpGraphPanel.all.find((p) => p.session === session)?.current,
+    );
+    assert.equal(graph.stream, 0);
+    assert.equal(graph.points.length, 11);
+
+    await vscode.commands.executeCommand("workbench.action.closeAllEditors");
+    await waitFor(() => (api.provider.allSessions.length ? undefined : true), 10_000);
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 
   test("changing name resolution re-indexes open captures", async () => {

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Packet comments: shown on the packet's row and above its details; add, edit
+  and delete them (`Ctrl+Alt+C`, the row menu, _PCAP: Delete All Packet
+  Comments_). Edits are ordinary unsaved changes: undo with `Ctrl+Z`, save
+  into the capture with `Ctrl+S` (a new `.pcapng` for other formats).
+- _PCAP Statistics: Flow Graph_: the displayed packets as arrows between their
+  endpoints.
+- _PCAP Statistics: TCP Stream Graph_: Stevens, throughput, round-trip time
+  and window scaling graphs of a TCP stream.
 - _PCAP: Export Objects…_: the files a capture carried over HTTP, SMB, TFTP,
   IMF, DICOM and FTP-DATA, with the packet, host, content type and size of
   each; filter, sort, go to the packet, and save one or all of them.

@@ -420,6 +420,69 @@ suite("webview lib: coloring", () => {
 suite("webview lib: navigation and customisation", () => {
   const col = (id, extra = {}) => ({ id, field: id, ...extra });
 
+  test("flowArrow places arrows between endpoint columns", () => {
+    const layout = { gutter: 100, column: 50 };
+    assert.deepEqual(lib.flowArrow(0, 2, 3, layout), { x1: 125, x2: 225, self: false });
+    assert.deepEqual(lib.flowArrow(1, 1, 3, layout), { x1: 175, x2: 175, self: true });
+    assert.equal(lib.flowArrow(-1, 0, 3, layout).x1, 275, "past the limit: the 'other' column");
+    assert.equal(lib.truncate("abcdef", 4), "abc…");
+    assert.equal(lib.truncate("abc", 4), "abc");
+    assert.equal(lib.truncate("abc", 0), "");
+  });
+
+  test("niceRange covers min..max with round ticks", () => {
+    assert.deepEqual(lib.niceRange(0.018, 0.038), [0.015, 0.02, 0.025, 0.03, 0.035, 0.04]);
+    assert.deepEqual(lib.niceRange(120, 480), [100, 200, 300, 400, 500]);
+    assert.deepEqual(lib.niceRange(5, 5), lib.niceTicks(5));
+  });
+
+  test("tcpGraphSeries builds the four TCP stream graphs", () => {
+    // frame, time, dir, seq, len, ack, win, rtt, retrans
+    const pts = [
+      [1, 0, 0, 0, 0, 0, 8192, null, 0],
+      [2, 0.1, 1, 0, 0, 1, 8192, 0.1, 0],
+      [3, 0.2, 0, 1, 100, 1, 8192, null, 0],
+      [4, 0.3, 1, 1, 0, 101, 4096, 0.1, 0],
+      [5, 0.4, 0, 101, 100, 1, 8192, null, 0],
+      [6, 0.5, 0, 101, 100, 1, 8192, null, 1],
+    ];
+    const stevens = lib.tcpGraphSeries(pts, 0, "stevens");
+    assert.deepEqual(
+      stevens.points.map((/** @type {any} */ p) => [p.frame, p.y, p.y2, p.flag]),
+      [
+        [3, 1, 101, false],
+        [5, 101, 201, false],
+        [6, 101, 201, true],
+      ],
+    );
+    const tput = lib.tcpGraphSeries(pts, 0, "throughput", { window: 0.25 });
+    assert.deepEqual(
+      tput.points.map((/** @type {any} */ p) => p.y),
+      [400, 800, 800],
+      "bytes in the last 0.25 s, per second",
+    );
+    const rtt = lib.tcpGraphSeries(pts, 0, "rtt");
+    assert.deepEqual(
+      rtt.points.map((/** @type {any} */ p) => [p.frame, p.y]),
+      [
+        [2, 100],
+        [4, 100],
+      ],
+      "the receiver's ACKs, in ms",
+    );
+    const win = lib.tcpGraphSeries(pts, 0, "window");
+    assert.deepEqual(
+      win.line.map((/** @type {any} */ p) => p.y),
+      [8192, 4096],
+    );
+    assert.deepEqual(
+      win.points.map((/** @type {any} */ p) => p.y),
+      [100, 100, 100],
+      "bytes sent but not acknowledged",
+    );
+    assert.equal(lib.tcpGraphSeries(pts, 1, "stevens").points.length, 0, "no data that way");
+  });
+
   test("filterObjects filters Export Objects rows by protocol and text", () => {
     const objs = [
       { id: 0, protocol: "http", name: "logo.png", host: "example.com", contentType: "image/png" },

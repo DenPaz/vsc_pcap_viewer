@@ -30,6 +30,8 @@ import {
   addColumn,
   nameResolutionLabel,
   normalizeColumns,
+  exportFileName,
+  parseCommentBackup,
   pushHistory,
 } from "./settingsModel";
 
@@ -53,16 +55,71 @@ function coloringPayload(
   }));
 }
 
-class PcapDocument implements vscode.CustomDocument {
-  constructor(readonly uri: vscode.Uri) {}
-  dispose(): void {}
+/** A change of a document's comment edits; `reload`: the file's comments changed too (saved). */
+interface CommentEditsChange {
+  reload: boolean;
 }
 
 /**
- * Read-only custom editor for capture files. Each editor panel owns one
- * backend process (the backend keeps per-view filter/sort state).
+ * A capture file. The only thing that can be edited is packet comments: the
+ * document holds the edits not saved yet (frame → new comment, "" deletes),
+ * and every editor on it shows them (each backend gets the whole set).
  */
-export class PcapEditorProvider implements vscode.CustomReadonlyEditorProvider<PcapDocument> {
+export class PcapDocument implements vscode.CustomDocument {
+  private edits = new Map<number, string>();
+  private readonly changeEmitter = new vscode.EventEmitter<CommentEditsChange>();
+  readonly onDidChangeEdits = this.changeEmitter.event;
+
+  constructor(
+    readonly uri: vscode.Uri,
+    restored?: Map<number, string>,
+  ) {
+    this.edits = new Map(restored ?? []);
+  }
+
+  get editCount(): number {
+    return this.edits.size;
+  }
+
+  /** The edit of `frame`, undefined if it has none. */
+  editOf(frame: number): string | undefined {
+    return this.edits.get(frame);
+  }
+
+  /** Apply `changes` (undefined: drop that frame's edit). */
+  apply(changes: Map<number, string | undefined>): void {
+    for (const [frame, text] of changes) {
+      if (text === undefined) {
+        this.edits.delete(frame);
+      } else {
+        this.edits.set(frame, text);
+      }
+    }
+    this.changeEmitter.fire({ reload: false });
+  }
+
+  /** Drop every edit (saved or reverted). */
+  clear(reload: boolean): void {
+    this.edits.clear();
+    this.changeEmitter.fire({ reload });
+  }
+
+  /** The edits as the backend's set_comments/save_comments take them. */
+  editsParam(): Record<string, string | null> {
+    return Object.fromEntries([...this.edits].map(([n, t]) => [String(n), t || null]));
+  }
+
+  dispose(): void {
+    this.changeEmitter.dispose();
+  }
+}
+
+/**
+ * Custom editor for capture files. Each editor panel owns one backend process
+ * (the backend keeps per-view filter/sort state). Packet comments are the one
+ * edit: VS Code tracks them (dirty state, undo/redo, save, hot-exit backups).
+ */
+export class PcapEditorProvider implements vscode.CustomEditorProvider<PcapDocument> {
   /** Default editor for unambiguous capture files (package.json customEditors). */
   static readonly viewType = "pcapViewer.editor";
   /** Same editor, only offered in "Reopen Editor With…" for generic extensions (*.log, *.1…). */
@@ -70,6 +127,10 @@ export class PcapEditorProvider implements vscode.CustomReadonlyEditorProvider<P
 
   private readonly sessions = new Set<PcapEditorSession>();
   private active?: PcapEditorSession;
+  private readonly changeEmitter = new vscode.EventEmitter<
+    vscode.CustomDocumentEditEvent<PcapDocument>
+  >();
+  readonly onDidChangeCustomDocument = this.changeEmitter.event;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -98,17 +159,30 @@ export class PcapEditorProvider implements vscode.CustomReadonlyEditorProvider<P
     return provider;
   }
 
-  openCustomDocument(uri: vscode.Uri): PcapDocument {
-    return new PcapDocument(uri);
+  async openCustomDocument(
+    uri: vscode.Uri,
+    openContext: vscode.CustomDocumentOpenContext,
+  ): Promise<PcapDocument> {
+    let restored: Map<number, string> | undefined;
+    if (openContext.backupId) {
+      try {
+        const raw = await vscode.workspace.fs.readFile(vscode.Uri.parse(openContext.backupId));
+        restored = parseCommentBackup(new TextDecoder().decode(raw));
+      } catch (err) {
+        this.log.warn(`could not restore unsaved packet comments: ${String(err)}`);
+      }
+    }
+    return new PcapDocument(uri, restored);
   }
 
   resolveCustomEditor(document: PcapDocument, panel: vscode.WebviewPanel): void {
     const session = new PcapEditorSession(
       this.context,
-      document.uri,
+      document,
       panel,
       this.log,
       this.assistant,
+      (changes, label) => this.editComments(document, changes, label),
     );
     this.sessions.add(session);
     this.active = session;
@@ -131,6 +205,109 @@ export class PcapEditorProvider implements vscode.CustomReadonlyEditorProvider<P
 
   get activeSession(): PcapEditorSession | undefined {
     return this.active;
+  }
+
+  /** Change comments (frame → text, "" deletes) as one undoable edit. */
+  editComments(document: PcapDocument, changes: Map<number, string>, label: string): void {
+    const before = new Map([...changes.keys()].map((n) => [n, document.editOf(n)]));
+    const after = new Map<number, string | undefined>(changes);
+    document.apply(after);
+    this.changeEmitter.fire({
+      document,
+      label,
+      undo: () => document.apply(before),
+      redo: () => document.apply(after),
+    });
+  }
+
+  async saveCustomDocument(
+    document: PcapDocument,
+    cancellation: vscode.CancellationToken,
+  ): Promise<void> {
+    await this.saveComments(document, undefined, cancellation);
+  }
+
+  async saveCustomDocumentAs(
+    document: PcapDocument,
+    destination: vscode.Uri,
+    cancellation: vscode.CancellationToken,
+  ): Promise<void> {
+    await this.saveComments(document, destination, cancellation);
+  }
+
+  async revertCustomDocument(document: PcapDocument): Promise<void> {
+    document.clear(false);
+  }
+
+  async backupCustomDocument(
+    document: PcapDocument,
+    context: vscode.CustomDocumentBackupContext,
+  ): Promise<vscode.CustomDocumentBackup> {
+    const data = new TextEncoder().encode(JSON.stringify(document.editsParam()));
+    await vscode.workspace.fs.writeFile(context.destination, data);
+    return {
+      id: context.destination.toString(),
+      delete: () => void vscode.workspace.fs.delete(context.destination).then(undefined, () => {}),
+    };
+  }
+
+  /**
+   * Write the comment edits with editcap: into the capture itself (plain
+   * pcapng only; other formats can't hold comments, so they get a new
+   * .pcapng, which then opens) or to `destination` (Save As).
+   */
+  private async saveComments(
+    document: PcapDocument,
+    destination: vscode.Uri | undefined,
+    cancellation: vscode.CancellationToken,
+  ): Promise<void> {
+    const session = [...this.sessions].find((s) => s.document === document && s.backend?.running);
+    const client = session?.backend;
+    if (!session || !client) {
+      throw new Error("The capture is not loaded (the PCAP backend is not running).");
+    }
+    const edits = document.editsParam();
+    const inPlace = !destination || destination.fsPath === document.uri.fsPath;
+    const request = (params: Record<string, unknown>) =>
+      vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Window, title: "Saving packet comments" },
+        () =>
+          client.request<{ path: string; comments: number }>(
+            "save_comments",
+            { edits, ...params },
+            { timeoutMs: 0, cancellation },
+          ),
+      );
+    if (inPlace && session.openInfo?.comments?.inPlace) {
+      await request({ inPlace: true });
+      document.clear(true);
+      return;
+    }
+    let target = destination;
+    if (inPlace) {
+      const choice = await vscode.window.showWarningMessage(
+        "Packet comments can only be saved in pcapng files. Save them in a new .pcapng file?",
+        { modal: true },
+        "Save As…",
+      );
+      target =
+        choice &&
+        (await vscode.window.showSaveDialog({
+          defaultUri: vscode.Uri.file(exportFileName(document.uri.fsPath, "comments", "pcapng")),
+          filters: { "pcapng capture": ["pcapng"] },
+          title: "Save Packet Comments",
+        }));
+      if (!target) {
+        throw new vscode.CancellationError();
+      }
+    }
+    const saved = target!;
+    await request({ dest: saved.fsPath });
+    if (inPlace) {
+      // The comments now live in the new file: open it; this capture is unchanged.
+      document.clear(false);
+      await vscode.commands.executeCommand("vscode.openWith", saved, PcapEditorProvider.viewType);
+    }
   }
 
   get allSessions(): readonly PcapEditorSession[] {
@@ -172,6 +349,9 @@ export class PcapEditorSession {
   private readonly activateEmitter = new vscode.EventEmitter<void>();
   /** Fires when one of this capture's auxiliary panels gains focus. */
   readonly onDidActivate = this.activateEmitter.event;
+  private readonly filterEmitter = new vscode.EventEmitter<string>();
+  /** Fires with the new display filter when the viewer applies one (panels that follow the view). */
+  readonly onDidChangeFilter = this.filterEmitter.event;
   private client?: BackendClient;
   private info?: OpenResult;
   private filter = "";
@@ -190,13 +370,18 @@ export class PcapEditorSession {
   private readonly aiRequests = new Map<number, vscode.CancellationTokenSource>();
   private readonly ready: Promise<void>;
 
+  readonly uri: vscode.Uri;
+
   constructor(
     private readonly context: vscode.ExtensionContext,
-    readonly uri: vscode.Uri,
+    readonly document: PcapDocument,
     readonly panel: vscode.WebviewPanel,
     private readonly log: vscode.LogOutputChannel,
     private readonly assistant: FilterAssistant,
+    /** Change packet comments (frame → text, "" deletes) as one undoable edit. */
+    readonly editComments: (changes: Map<number, string>, label: string) => void,
   ) {
+    this.uri = document.uri;
     const webviewRoot = vscode.Uri.joinPath(context.extensionUri, "src", "webview");
     panel.webview.options = { enableScripts: true, localResourceRoots: [webviewRoot] };
     panel.webview.html = this.renderHtml(webviewRoot);
@@ -211,11 +396,28 @@ export class PcapEditorSession {
       }),
     );
     this.disposables.push(assistant.onDidChangeAvailability(() => void this.postAiAvailability()));
+    this.disposables.push(document.onDidChangeEdits((e) => void this.pushComments(e.reload)));
     void this.ready.then(() => this.load());
   }
 
   get openInfo(): OpenResult | undefined {
     return this.info;
+  }
+
+  /** Send the document's comment edits to this editor's backend and refresh the viewer. */
+  private async pushComments(reload: boolean): Promise<void> {
+    const client = this.client;
+    if (!client?.running || !this.info || this.disposed) {
+      return; // (the next load pushes them)
+    }
+    try {
+      await client.request("set_comments", { edits: this.document.editsParam(), reload });
+    } catch (err) {
+      this.log.warn(`${this.uri.fsPath}: packet comments not updated: ${String(err)}`);
+    }
+    if (this.client === client && !this.disposed) {
+      this.post({ type: "commentsChanged" });
+    }
   }
 
   get backend(): BackendClient | undefined {
@@ -281,6 +483,15 @@ export class PcapEditorSession {
       const early: Record<string, unknown>[] = [];
       let onIndex = (p: Record<string, unknown>) => void early.push(p);
       const stopIndexEvents = client.onNotification("index", (p) => onIndex(p));
+      // The file's packet comments are read after the open: show them once known.
+      client.onNotification("comments", (p) => {
+        if (this.client === client && !this.disposed) {
+          if (typeof p.error === "string") {
+            this.log.warn(`${this.uri.fsPath}: ${p.error}`);
+          }
+          this.post({ type: "commentsChanged" });
+        }
+      });
       // Streaming filters report their matches as they come.
       client.onNotification("filter", (p) => {
         if (this.client === client && !this.disposed) {
@@ -329,6 +540,9 @@ export class PcapEditorSession {
         if (!info.coloring) {
           void this.applyColoring();
         }
+      }
+      if (this.document.editCount) {
+        void this.pushComments(false); // edits made in another editor, or restored
       }
       void this.postAiAvailability();
       void this.offerMerge();
@@ -621,6 +835,7 @@ export class PcapEditorSession {
         return this.load();
       case "filterApplied":
         this.filter = msg.expr;
+        this.filterEmitter.fire(msg.expr);
         if (msg.expr.trim()) {
           const history = pushHistory(this.history(), msg.expr);
           await this.context.globalState.update(HISTORY_KEY, history);
@@ -641,6 +856,9 @@ export class PcapEditorSession {
         return;
       case "follow":
         FollowPanel.show(this.context, this, msg.proto, msg.frame);
+        return;
+      case "tcpGraph":
+        await vscode.commands.executeCommand("pcapViewer.statistics.tcpStreamGraph", msg.frame);
         return;
       case "decodeAs":
         await vscode.commands.executeCommand("pcapViewer.decodeAs", msg.frame);
@@ -684,6 +902,12 @@ export class PcapEditorSession {
         return;
       case "pickNameResolution":
         await vscode.commands.executeCommand("pcapViewer.nameResolution");
+        return;
+      case "setComment":
+        this.editComments(
+          new Map([[msg.frame, msg.text]]),
+          msg.text ? "Edit Packet Comment" : "Delete Packet Comment",
+        );
         return;
       case "exportMarked":
         await vscode.commands.executeCommand("pcapViewer.exportMarked");

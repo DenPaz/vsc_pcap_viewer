@@ -204,6 +204,21 @@
         "category": "PCAP"
       },
       {
+        "command": "pcapViewer.editPacketComment",
+        "title": "Add or Edit Packet Comment…",
+        "category": "PCAP"
+      },
+      {
+        "command": "pcapViewer.deletePacketComment",
+        "title": "Delete Packet Comment",
+        "category": "PCAP"
+      },
+      {
+        "command": "pcapViewer.deleteAllPacketComments",
+        "title": "Delete All Packet Comments",
+        "category": "PCAP"
+      },
+      {
         "command": "pcapViewer.timeFormat",
         "title": "Time Display Format…",
         "category": "PCAP"
@@ -271,6 +286,16 @@
       {
         "command": "pcapViewer.statistics.conversations",
         "title": "Conversations",
+        "category": "PCAP Statistics"
+      },
+      {
+        "command": "pcapViewer.statistics.flowGraph",
+        "title": "Flow Graph",
+        "category": "PCAP Statistics"
+      },
+      {
+        "command": "pcapViewer.statistics.tcpStreamGraph",
+        "title": "TCP Stream Graph",
         "category": "PCAP Statistics"
       },
       {
@@ -427,6 +452,14 @@
           "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
         },
         {
+          "command": "pcapViewer.statistics.tcpStreamGraph",
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow || activeWebviewPanelId == pcapViewer.tcpGraph"
+        },
+        {
+          "command": "pcapViewer.statistics.flowGraph",
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow || activeWebviewPanelId == pcapViewer.flowGraph"
+        },
+        {
           "command": "pcapViewer.statistics.conversations",
           "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
         },
@@ -559,6 +592,18 @@
           "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/"
         },
         {
+          "command": "pcapViewer.editPacketComment",
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/"
+        },
+        {
+          "command": "pcapViewer.deletePacketComment",
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/"
+        },
+        {
+          "command": "pcapViewer.deleteAllPacketComments",
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/"
+        },
+        {
           "command": "pcapViewer.timeFormat",
           "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/"
         }
@@ -599,6 +644,12 @@
         "command": "pcapViewer.toggleTimeReference",
         "key": "ctrl+t",
         "mac": "cmd+t",
+        "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inputFocus"
+      },
+      {
+        "command": "pcapViewer.editPacketComment",
+        "key": "ctrl+alt+c",
+        "mac": "cmd+alt+c",
         "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ && !sideBarFocus && !panelFocus && !auxiliaryBarFocus && !inputFocus"
       },
       {

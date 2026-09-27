@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import coloring, navigation, objects, pdml, stats
+from . import coloring, comments, navigation, objects, pdml, stats
 from .cache import FrameIndex, LruCache, RowStore, sort_frames, sort_frames_by_key
 from .cancellation import CancelledError, CancelToken
 from .export import (
@@ -80,6 +80,8 @@ EXPORT_CHUNK = 5000
 # line at 32767 characters). Bigger marked-packet exports run in chunks + mergecap.
 MAX_FILTER_ARG = 16_000
 NEIGHBOR_CHUNK = 2000
+# Flow graph: columns (endpoints) shown; the others share an "other" column.
+MAX_FLOW_NODES = 200
 # Quick detail: packets dissected before the one asked for (see _quick_detail).
 QUICK_WINDOW = 300
 MIN_QUICK_WINDOW = 2
@@ -222,6 +224,10 @@ class _Open:
     # Saved-index cache and this capture's key in it (None: not cached).
     cache: IndexCache | None = None
     cache_key: str | None = None
+    # Packet comments in the file (comments.py), read in the background after open.
+    comments: dict[int, list[str]] = field(default_factory=dict)
+    comments_error: str | None = None
+    comments_ready: threading.Event = field(default_factory=threading.Event)
 
     def frame_count(self) -> int:
         """Frames known so far: during a streaming open, the rows published
@@ -359,6 +365,10 @@ class PcapService:
         # so concurrent requests extract once.
         self._objects: tuple[_Open, list[ExportedObject]] | None = None
         self._objects_lock = threading.Lock()
+        # Flow graph nodes of a view: (filter id, node names, name → index).
+        self._flow: tuple[int, list[str], dict[str, int]] | None = None
+        # Packet comment edits not saved yet (frame → text; None deletes), set by the host.
+        self._comment_edits: dict[int, str | None] = {}
         self._filter_seq = 0
         self._next_filter_id = 0
         self._store_seq = 0
@@ -370,6 +380,7 @@ class PcapService:
         self._details: LruCache[int, dict[str, Any]] = LruCache(detail_cache_size)
         # Quick (approximate) details by (frame, window); see _quick_detail.
         self._quick: LruCache[tuple[int, int], dict[str, Any]] = LruCache(16)
+        self._tcp_graphs: LruCache[int, dict[str, Any]] = LruCache(4)
         self._quick_seq = itertools.count()
         self._catalog_warming = threading.Event()
         self._field_index: LruCache[tuple[str, ...], FieldCatalog] = LruCache(2)
@@ -430,7 +441,16 @@ class PcapService:
         self._objects = None
         self._colors = None
         self._marks = set()
-        for cache in (self._filters, self._sorts, self._sort_columns, self._details, self._quick):
+        self._comment_edits = {}
+        self._flow = None
+        for cache in (
+            self._filters,
+            self._sorts,
+            self._sort_columns,
+            self._details,
+            self._quick,
+            self._tcp_graphs,
+        ):
             cache.clear()
         if self._work_dir is not None:
             shutil.rmtree(self._work_dir, ignore_errors=True)
@@ -587,6 +607,7 @@ class PcapService:
                 cache=cache,
                 cache_key=key,
             )
+            self._pool.submit(self._load_comments, self._file)
             if not complete:
                 info.frames = len(indexing.store.rows)
                 indexing.attached = True
@@ -615,6 +636,8 @@ class PcapService:
         result["columns"] = self._column_descriptors(f.columns)
         result["filterId"] = self._view.filter_id if self._view else 0
         result["indexing"] = indexing
+        # Comment edits can be saved into the file itself only if it is plain pcapng.
+        result["comments"] = {"inPlace": comments.is_pcapng(f.path)}
         return result
 
     def _run_index(
@@ -767,6 +790,7 @@ class PcapService:
             self._file = _Open(
                 path, tshark, info, store, columns=columns, cache=cache, cache_key=key
             )
+            self._pool.submit(self._load_comments, self._file)
             self._next_filter_id += 1
             everything = FrameIndex.all(info.frames)
             self._view = _View(self._next_filter_id, "", everything, None, everything)
@@ -1257,6 +1281,7 @@ class PcapService:
         for row in rows:
             if row["number"] in marks:
                 row["marked"] = True
+        self._add_comments(f, rows)
         if colors is not None:
             for row in rows:
                 n = row["number"]
@@ -1858,6 +1883,35 @@ class PcapService:
             raise InvalidParamsError(f"packet {frame} is not part of a {label} stream")
         return int(value)
 
+    # ------------------------------------------------------------------ TCP stream graphs
+
+    def tcp_graph(self, params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
+        """The packets of TCP ``stream`` (or the stream of ``frame``) for the
+        TCP stream graphs: ``endpoints`` [A, B] ("address:port", A = the first
+        packet's source) and ``points``, one array per packet in the order of
+        ``fields`` (``dir`` 0 = A→B; ``rtt`` in seconds or null; ``retrans``
+        and ``syn`` 0/1). One tshark pass per stream, cached."""
+        f = self._require_file()
+        if params.get("stream") is not None:
+            stream = param(params, "stream", int)
+            if stream < 0:
+                raise InvalidParamsError("stream must be >= 0")
+        else:
+            stream = self._stream_of(f, "tcp", param(params, "frame", int), ctx)
+        cached = self._tcp_graphs.get(stream)
+        if cached is not None:
+            return cached
+        ctx.progress({"phase": "tcp_graph", "fraction": None})
+        argv = f.tshark.argv(
+            "-Y", f"tcp.stream == {stream}", *_fields_args(_TCP_GRAPH_FIELDS), capture=str(f.path)
+        )  # fmt: skip
+        res = run(argv, ctx.token)
+        if res.returncode != 0 and not res.stdout:
+            raise f.tshark.error(res.stderr, res.returncode, "reading the TCP stream failed")
+        result = {"stream": stream, **parse_tcp_graph(res.stdout.decode("utf-8", "replace"))}
+        self._tcp_graphs.put(stream, result)
+        return result
+
     # ------------------------------------------------------------------ statistics
 
     def stats(self, params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
@@ -2328,6 +2382,225 @@ class PcapService:
                 raise ToolError(res.stderr.strip() or "mergecap failed", res.stderr, res.returncode)
         return {"ok": True, "path": str(dest), "size": dest.stat().st_size, "inputs": len(inputs)}
 
+    # ------------------------------------------------------------------ flow graph
+
+    def flow_graph(self, params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
+        """A sequence diagram of the displayed packets, in capture order:
+        ``nodes`` (Source/Destination values in order of first appearance, at
+        most MAX_FLOW_NODES; ``more`` counts the rest) and the arrows of packets
+        ``[offset, offset + limit)``: ``number``, ``time``, ``from``/``to`` (node
+        index, -1 for a node past the limit), ``protocol`` and ``info``. The
+        nodes are computed once per view."""
+        offset = param(params, "offset", int, 0)
+        limit = min(max(0, param(params, "limit", int, 200)), MAX_PAGE)
+        f, view = self._require_view()
+        self._require_complete()
+        nodes, index = self._flow_nodes(f, view, ctx)
+        frames = view.matched.slice(offset, limit)
+        arrows = []
+        for n, cells in zip(frames, f.base.rows.get_many(frames), strict=True):
+            src, dst = cells[2], cells[3]
+            arrows.append(
+                {
+                    "number": n,
+                    "time": cells[_TIME_IDX],
+                    "from": index.get(src, -1),
+                    "to": index.get(dst, -1),
+                    "protocol": cells[4],
+                    "info": cells[6],
+                }
+            )
+        return {
+            "filterId": view.filter_id,
+            "total": len(view.matched),
+            "nodes": nodes[:MAX_FLOW_NODES],
+            "more": max(0, len(nodes) - MAX_FLOW_NODES),
+            "rows": arrows,
+        }
+
+    def _flow_nodes(
+        self, f: _Open, view: _View, ctx: RequestContext
+    ) -> tuple[list[str], dict[str, int]]:
+        with self._lock:
+            cached = self._flow
+        if cached is not None and cached[0] == view.filter_id:
+            return cached[1], cached[2]
+        ctx.progress({"phase": "flow", "fraction": None})
+        columns = []
+        for fld in (BASE_COLUMNS[2].field, BASE_COLUMNS[3].field):
+            values = self._sort_columns.get(fld)
+            if values is None:
+                loc = self._locate(f, fld)
+                assert loc is not None
+                values = loc[0].column(loc[1])
+                self._sort_columns.put(fld, values)
+            columns.append(values)
+        src, dst = columns
+        nodes: list[str] = []
+        index: dict[str, int] = {}
+        for i, n in enumerate(view.matched.frames()):
+            if i % 65536 == 0:
+                ctx.token.raise_if_cancelled()
+            for name in (src[n - 1], dst[n - 1]):
+                if name not in index:
+                    index[name] = len(nodes)
+                    nodes.append(name)
+        # Only the first MAX_FLOW_NODES get a column; the others are "-1".
+        index = {name: i for name, i in index.items() if i < MAX_FLOW_NODES}
+        with self._lock:
+            self._flow = (view.filter_id, nodes, index)
+        return nodes, index
+
+    # ------------------------------------------------------------------ comments
+
+    def _load_comments(self, f: _Open) -> None:
+        """Read the file's packet comments (pool thread); report them with a
+        "comments" notification when there are any (rows fetched before don't
+        show them)."""
+        try:
+            f.comments = comments.read_comments(f.path)
+        except comments.UnreadableError as exc:
+            f.comments_error = str(exc)
+        except (OSError, ValueError, EOFError) as exc:  # a damaged file: no comments
+            f.comments_error = f"could not read the packet comments: {exc}"
+        finally:
+            f.comments_ready.set()
+        with self._lock:
+            current = self._file is f
+        if current and (f.comments or f.comments_error):
+            self.notify("comments", {"count": len(f.comments), "error": f.comments_error})
+
+    def _effective_comment(self, f: _Open, frame: int) -> str | None:
+        if frame in self._comment_edits:
+            return self._comment_edits[frame] or None
+        texts = f.comments.get(frame)
+        return "\n".join(texts) if texts else None
+
+    def _add_comments(self, f: _Open, rows: list[dict[str, Any]]) -> None:
+        with self._lock:
+            edits = self._comment_edits
+        for row in rows:
+            n = row["number"]
+            text = self._effective_comment(f, n)
+            if text:
+                row["comment"] = text
+            if n in edits:
+                row["commentEdited"] = True
+
+    def set_comments(self, params: dict[str, Any], _ctx: RequestContext) -> dict[str, Any]:
+        """Replace the unsaved comment edits: ``edits`` maps frame numbers (as
+        strings, JSON keys) to the new comment, ``null`` or ``""`` to delete it.
+        Rows show them (``comment``, ``commentEdited``) until saved. ``reload:
+        true`` reads the file's comments again first (another editor saved it)."""
+        f = self._require_file()
+        edits = _comment_edits(params, f.frame_count())
+        if params.get("reload"):
+            f.comments_ready.wait(60)
+            try:
+                saved = comments.read_comments(f.path)
+            except comments.UnreadableError, OSError, ValueError, EOFError:
+                saved = f.comments
+            with self._lock:
+                f.comments = saved
+                for cache in (self._details, self._quick, self._filters):
+                    cache.clear()
+        with self._lock:
+            self._comment_edits = edits
+        return {"edits": len(edits)}
+
+    def packet_comments(self, params: dict[str, Any], _ctx: RequestContext) -> dict[str, Any]:
+        """The comments of ``frames`` (``all: true``: of every packet), edits
+        included, and why the file's comments couldn't be read (``error``)."""
+        f = self._require_file()
+        f.comments_ready.wait(60)
+        if params.get("all"):
+            with self._lock:
+                wanted = sorted(set(f.comments) | set(self._comment_edits))
+        else:
+            wanted = _frame_list(params, "frames", MAX_PAGE)
+        found = {}
+        for n in wanted:
+            text = self._effective_comment(f, n)
+            if text:
+                found[str(n)] = text
+        with self._lock:
+            edited = [n for n in wanted if n in self._comment_edits]
+        return {"comments": found, "edited": edited, "error": f.comments_error}
+
+    def save_comments(self, params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
+        """Write the capture with the comment edits applied (``edits``, default
+        the unsaved ones) as pcapng: into the open capture itself with
+        ``inPlace: true`` (plain pcapng only; the edits then become its
+        comments), else to ``dest``. Needs editcap; the file appears only once
+        complete."""
+        f = self._require_file()
+        edits = _comment_edits(params, f.frame_count()) if "edits" in params else None
+        with self._lock:
+            if edits is None:
+                edits = dict(self._comment_edits)
+        f.comments_ready.wait(60)
+        if f.comments_error:
+            raise ToolError(f"comments can't be saved: {f.comments_error}")
+        in_place = bool(params.get("inPlace"))
+        if in_place and not comments.is_pcapng(f.path):
+            raise InvalidParamsError("comments can only be saved into a pcapng file: save as")
+        dest = f.path if in_place else check_destination(param(params, "dest", str), f.path)
+        try:
+            editcap = find_tool("editcap", sibling_of=f.tshark.path)
+        except ToolNotFoundError as exc:
+            raise ToolError("saving comments needs editcap (part of Wireshark)") from exc
+        args, result = comments.editcap_args(f.comments, edits)
+        ctx.progress({"phase": "save", "fraction": None})
+        if not in_place:
+            with atomic_output(dest) as tmp:
+                self._run_editcap(editcap, f.path, tmp, args, ctx)
+            return {"path": str(dest), "comments": len(result)}
+        tmp = dest.with_name(f".{dest.name}.{os.getpid()}.part")
+        try:
+            self._run_editcap(editcap, f.path, tmp, args, ctx)
+            with self._lock:  # no pass starts on the old file meanwhile
+                _replace(tmp, dest)
+        finally:
+            tmp.unlink(missing_ok=True)
+        with self._lock:
+            f.comments = {
+                n: f.comments[n] if n in f.comments and n not in edits else [text]
+                for n, text in result.items()
+            }
+            self._comment_edits = {}
+            # Detail trees show the old comments; comment filters matched them.
+            for cache in (self._details, self._quick, self._filters):
+                cache.clear()
+        return {"path": str(dest), "comments": len(result)}
+
+    def _run_editcap(
+        self, editcap: Path, src: Path, dest: Path, args: list[str], ctx: RequestContext
+    ) -> None:
+        """editcap ``args`` over ``src`` into ``dest`` (pcapng); several runs when
+        the comments would make too long a command line (Windows). Only the
+        first run discards the file's comments."""
+        discard = [a for a in args if a == "--discard-packet-comments"]
+        values = [args[i + 1] for i, a in enumerate(args) if a == "-a"]
+        chunks: list[list[str]] = [[]]
+        size = 0
+        for value in values:
+            if chunks[-1] and size + len(value) > MAX_FILTER_ARG:
+                chunks.append([])
+                size = 0
+            chunks[-1].append(value)
+            size += len(value) + 4
+        source = src
+        for i, chunk in enumerate(chunks):
+            options = (discard if i == 0 else []) + [x for v in chunk for x in ("-a", v)]
+            out = dest if i == len(chunks) - 1 else dest.with_name(f"{dest.name}.{i}")
+            res = run([str(editcap), "-F", "pcapng", *options, str(source), str(out)], ctx.token)
+            if source != src:
+                source.unlink(missing_ok=True)
+            if res.returncode != 0 or not out.exists():
+                out.unlink(missing_ok=True)
+                raise ToolError(res.stderr.strip() or "editcap failed", res.stderr, res.returncode)
+            source = out
+
     # ------------------------------------------------------------------ objects
 
     def export_objects(self, _params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
@@ -2604,6 +2877,100 @@ def _finish_index_pass(
             inline.colors.append(0)
 
 
+_TCP_GRAPH_FIELDS = (
+    "frame.number",
+    "frame.time_relative",
+    "ip.src",
+    "ipv6.src",
+    "tcp.srcport",
+    "tcp.seq",
+    "tcp.len",
+    "tcp.ack",
+    "tcp.window_size",
+    "tcp.analysis.ack_rtt",
+    "tcp.analysis.retransmission",
+    "tcp.flags.syn",
+)
+TCP_GRAPH_POINT = ("frame", "time", "dir", "seq", "len", "ack", "win", "rtt", "retrans", "syn")
+
+
+def _last(cell: str) -> str:
+    """The innermost value of a field repeated by tunnelling (tshark joins them with ",")."""
+    return cell.rsplit(",", 1)[-1]
+
+
+def parse_tcp_graph(text: str) -> dict[str, Any]:
+    """Points of a TCP stream from tshark's ``_TCP_GRAPH_FIELDS`` output."""
+    endpoints: list[str] = []
+    points: list[list[Any]] = []
+
+    def number(cell: str) -> int:
+        value = _last(cell)
+        return int(value) if value.isdigit() else 0
+
+    for line in text.split("\n"):
+        cells = line.split("\t")
+        if len(cells) < len(_TCP_GRAPH_FIELDS) or not cells[0].isdigit():
+            continue
+        address = _last(cells[2]) or _last(cells[3])
+        endpoint = (
+            f"[{address}]:{_last(cells[4])}" if ":" in address else f"{address}:{_last(cells[4])}"
+        )
+        if endpoint not in endpoints:
+            endpoints.append(endpoint)
+        try:
+            rtt: float | None = float(_last(cells[9])) if cells[9] else None
+        except ValueError:
+            rtt = None
+        points.append(
+            [
+                int(cells[0]),
+                float(cells[1] or 0),
+                0 if endpoint == endpoints[0] else 1,
+                number(cells[5]),
+                number(cells[6]),
+                number(cells[7]),
+                number(cells[8]),
+                rtt,
+                1 if cells[10] else 0,
+                1 if _last(cells[11]) in ("1", "True") else 0,
+            ]
+        )
+    return {"endpoints": endpoints[:2], "fields": list(TCP_GRAPH_POINT), "points": points}
+
+
+def _comment_edits(params: dict[str, Any], frames: int) -> dict[int, str | None]:
+    raw = params.get("edits")
+    if not isinstance(raw, dict):
+        raise InvalidParamsError("edits must map frame numbers to comments")
+    edits: dict[int, str | None] = {}
+    for key, text in raw.items():
+        try:
+            n = int(key)
+        except TypeError, ValueError:
+            raise InvalidParamsError(f"not a frame number: {key!r}") from None
+        if not 1 <= n <= frames:
+            raise InvalidParamsError(f"no frame {n} in this capture")
+        if text is not None and not isinstance(text, str):
+            raise InvalidParamsError(f"the comment of frame {n} must be text or null")
+        edits[n] = text or None
+    return edits
+
+
+def _replace(tmp: Path, dest: Path) -> None:
+    """Replace ``dest`` by ``tmp``; on Windows a tshark still reading ``dest``
+    makes that fail for a moment, so retry briefly."""
+    for attempt in range(10):
+        try:
+            tmp.replace(dest)
+        except PermissionError:
+            if attempt == 9:
+                raise ToolError("the capture file is in use; try saving again") from None
+            time.sleep(0.2)
+        else:
+            return
+
+
 def _names_param(params: dict[str, Any]) -> dict[str, Any] | None:
     """The optional ``names`` switches (pcapViewer.nameResolution.*)."""
     names = params.get("names")
@@ -2822,6 +3189,11 @@ def rpc_methods(service: PcapService) -> dict[str, Callable[[dict[str, Any], Req
         "field_types": service.field_types,
         "export": service.export,
         "merge": service.merge,
+        "flow_graph": service.flow_graph,
+        "tcp_graph": service.tcp_graph,
+        "set_comments": service.set_comments,
+        "packet_comments": service.packet_comments,
+        "save_comments": service.save_comments,
         "export_objects": service.export_objects,
         "save_objects": service.save_objects,
         "close": service.close,

@@ -39,6 +39,8 @@ export interface OpenResult {
    * `coloringId`. `colored`/`errors` once known (else in the "done" event).
    */
   coloring?: { coloringId: number; colored?: number; errors?: Record<string, string> };
+  /** Comment edits can be saved into the file itself (plain pcapng). */
+  comments?: { inPlace: boolean };
 }
 
 /** Backend methods the webview may call directly (anything else is refused). */
@@ -57,6 +59,7 @@ export const WEBVIEW_RPC_METHODS = new Set([
   "mark_packets",
   "unmark_all",
   "field_types",
+  "packet_comments",
 ]);
 
 /** Actions the host asks the webview to perform (command palette and keybindings). */
@@ -76,6 +79,8 @@ export const VIEWER_COMMANDS = [
   "previousMark",
   "unmarkAll",
   "toggleTimeReference",
+  "editPacketComment",
+  "deletePacketComment",
 ] as const;
 export type ViewerCommand = (typeof VIEWER_COMMANDS)[number];
 
@@ -103,6 +108,9 @@ export type WebviewToHost =
   | { type: "columnLayout"; layout: ColumnLayout }
   | { type: "pickTimeFormat" }
   | { type: "pickNameResolution" }
+  | { type: "tcpGraph"; frame: number }
+  /** Change a packet's comment ("" deletes it): an undoable edit of the document. */
+  | { type: "setComment"; frame: number; text: string }
   | { type: "exportMarked" }
   | { type: "exportSelected" }
   /** "Ask Copilot About This Packet…" / "…About N Selected Packets". */
@@ -113,6 +121,8 @@ export type WebviewToHost =
 
 export type HostToWebview =
   | { type: "loading"; message: string }
+  /** Comments changed (edited, saved, or read from the file): refresh rows and the comment bar. */
+  | { type: "commentsChanged" }
   /** Progress of the capture load, or (with `id`) of the webview's request `id`. */
   | {
       type: "progress";
