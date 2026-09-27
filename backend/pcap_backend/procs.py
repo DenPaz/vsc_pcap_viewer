@@ -33,7 +33,7 @@ _reapers: set[threading.Thread] = set()
 
 
 def _log(message: str) -> None:
-    print(f"pcap-viewer: {message}", file=sys.stderr, flush=True)  # stdout is the protocol
+    print(f"pcap-viewer: {message}", file=sys.stderr, flush=True)  # noqa: T201 - stdout is the protocol
 
 
 def _program(proc: Proc) -> Path:

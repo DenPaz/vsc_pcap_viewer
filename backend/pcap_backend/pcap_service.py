@@ -443,7 +443,7 @@ class PcapService:
         self._lock.release()
         try:
             future.result(timeout=30)
-        except Exception:  # noqa: S110 - it was cancelled; errors don't matter now
+        except Exception:  # noqa: BLE001, S110 - it was cancelled; errors don't matter now
             pass
         finally:
             self._lock.acquire()
@@ -457,13 +457,13 @@ class PcapService:
     def _require_file(self) -> _Open:
         with self._lock:
             if self._file is None:
-                raise NotOpenError()
+                raise NotOpenError
             return self._file
 
     def _require_view(self) -> tuple[_Open, _View]:
         with self._lock:
             if self._file is None or self._view is None:
-                raise NotOpenError()
+                raise NotOpenError
             view = self._view
             indexing = self._indexing is not None
             if indexing and not view.expr and view.sort is None:
@@ -651,7 +651,7 @@ class PcapService:
                     setattr(info, name, meta[name])
             if info.start_time is None and len(base.rows):
                 info.start_time = self._first_epoch(tshark, path, indexing.token)
-        except BaseException as exc:  # handed to `open` or the client
+        except BaseException as exc:  # noqa: BLE001 - handed to `open` or the client
             indexing.error = exc
         with self._lock:
             if indexing.error is None:
@@ -811,7 +811,7 @@ class PcapService:
                 names=options.names,
             )
         except (OSError, ToolError) as exc:
-            print(f"pcap-viewer: index cache off for this capture: {exc}", file=sys.stderr)
+            print(f"pcap-viewer: index cache off for this capture: {exc}", file=sys.stderr)  # noqa: T201
             return None
 
     def _column_descriptors(self, custom: Sequence[str]) -> list[dict[str, Any]]:
@@ -1081,7 +1081,7 @@ class PcapService:
             matched = self._run_filter(f, live.expr, ctx, live.frames)
         except CancelledError:
             pass
-        except Exception as exc:  # reported to the client as "failed"
+        except Exception as exc:  # noqa: BLE001 - reported to the client as "failed"
             error = str(exc) or type(exc).__name__
         with self._lock:
             live.running = False
@@ -1763,14 +1763,14 @@ class PcapService:
             detail["tree"],
             offset=first - 1,
             window=window,
-            is_framenum=self._framenum_check(ctx),
+            is_framenum=self._framenum_check(),
             time_relative=f.base.rows.get(number)[_TIME_IDX] or None,
         )
         detail = {"number": number, **detail, "approximate": True, "window": [first, number]}
         self._quick.put(key, detail)
         return detail
 
-    def _framenum_check(self, ctx: RequestContext) -> Callable[[str], bool]:
+    def _framenum_check(self) -> Callable[[str], bool]:
         """Whether a field is FT_FRAMENUM: from the field catalogue when it is
         loaded (the webview warms it after open), else known names, while the
         catalogue loads in the background (a quick view must not wait for it)."""
@@ -1792,7 +1792,7 @@ class PcapService:
         try:
             self._catalog(RequestContext())
         except (RpcError, ToolError, OSError) as exc:  # a real request reports it
-            print(f"pcap-viewer: field catalogue not loaded: {exc}", file=sys.stderr)
+            print(f"pcap-viewer: field catalogue not loaded: {exc}", file=sys.stderr)  # noqa: T201
         finally:
             self._catalog_warming.clear()
 
@@ -1976,7 +1976,7 @@ class PcapService:
             if seq != self._coloring_seq:
                 raise CancelledError("superseded by newer coloring rules")
             if self._file is not f:
-                raise NotOpenError()
+                raise NotOpenError
             self._coloring_id += 1
             self._colors = colors
             coloring_id = self._coloring_id
@@ -2326,7 +2326,7 @@ class PcapService:
 
     # ------------------------------------------------------------------ objects
 
-    def export_objects(self, params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
+    def export_objects(self, _params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
         """Files carried by HTTP, SMB, TFTP, IMF, DICOM and FTP-DATA (see
         objects.py): ``objects`` with ``id``, ``protocol``, ``name``, ``size``,
         and when known the ``frame`` that carried it, ``host`` and ``contentType``.
@@ -2342,7 +2342,7 @@ class PcapService:
     def _extract_objects(self, f: _Open, ctx: RequestContext) -> list[ExportedObject]:
         with self._lock:
             if self._work_dir is None:
-                raise NotOpenError()
+                raise NotOpenError
             folder = self._work_dir / "objects"
         shutil.rmtree(folder, ignore_errors=True)  # (a cancelled earlier run)
         folder.mkdir()
@@ -2681,7 +2681,7 @@ def _parse_rules(raw: list[Any]) -> tuple[list[coloring.ColorRule | str], dict[i
     """Coloring rules (at most MAX_RULES) and the reasons some can't be used."""
     rules = [coloring.parse_rule(r) for r in raw[: coloring.MAX_RULES]]
     errors = {i: r for i, r in enumerate(rules) if isinstance(r, str)}
-    errors.update({i: "too many coloring rules" for i in range(coloring.MAX_RULES, len(raw))})
+    errors.update(dict.fromkeys(range(coloring.MAX_RULES, len(raw)), "too many coloring rules"))
     return rules, errors
 
 

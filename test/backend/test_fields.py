@@ -1,6 +1,6 @@
 from pcap_backend.fields import FieldCatalog
 
-SAMPLE = "\n".join(
+SAMPLE = "\n".join(  # noqa: FLY002 - one tshark row per line
     [
         "P\tHypertext Transfer Protocol\thttp",
         "P\tHTTP2\thttp2",

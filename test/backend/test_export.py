@@ -37,9 +37,14 @@ def test_check_destination_refuses_the_open_capture(tmp_path: Path) -> None:
 def test_atomic_output_only_replaces_on_success(tmp_path: Path) -> None:
     dest = tmp_path / "out.csv"
     dest.write_text("old")
-    with pytest.raises(RuntimeError), atomic_output(dest) as tmp:
-        tmp.write_text("partial")
-        raise RuntimeError
+
+    def fail_midway() -> None:
+        with atomic_output(dest) as tmp:
+            tmp.write_text("partial")
+            raise RuntimeError
+
+    with pytest.raises(RuntimeError):
+        fail_midway()
     assert dest.read_text() == "old"
     assert list(tmp_path.iterdir()) == [dest]
     with atomic_output(dest) as tmp:

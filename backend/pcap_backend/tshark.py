@@ -164,10 +164,7 @@ class DissectionOptions:
 
     def check_scripts(self) -> list[str]:
         """Return warnings for Lua scripts and key log files tshark would silently ignore."""
-        warnings: list[str] = []
-        for script in self.lua_scripts:
-            if not Path(script).is_file():
-                warnings.append(f"Lua script not found: {script}")
+        warnings = [f"Lua script not found: {s}" for s in self.lua_scripts if not Path(s).is_file()]
         for key, value in self.prefs:
             if key.endswith(".keylog_file") and value and not Path(value).is_file():
                 warnings.append(f"Key log file not found ({key}): {value}")

@@ -47,8 +47,44 @@ line-length = 100
 target-version = "py314"
 src = ["backend", "test/backend"]
 
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+docstring-code-format = true
+
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "S", "PTH", "PL"]
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes
+    "I",        # isort
+    "N",        # pep8-naming
+    "UP",       # pyupgrade
+    "B",        # bugbear
+    "A",        # shadowed builtins
+    "C4",       # comprehensions
+    "SIM",      # simplify
+    "RET",      # return statements
+    "PIE",      # misc. lints
+    "PERF",     # performance anti-patterns
+    "FURB",     # refurb
+    "FLY",      # static joins → f-strings
+    "RSE",      # raise statements
+    "TRY",      # exception handling
+    "BLE",      # blind except
+    "ARG",      # unused arguments
+    "DTZ",      # naive datetimes
+    "T10",      # debugger calls
+    "T20",      # print: stdout is the backend's protocol channel
+    "S",        # bandit (security)
+    "PTH",      # pathlib
+    "PL",       # pylint
+    "PT",       # pytest style
+    "G", "LOG", # logging
+    "ISC",      # implicit string concatenation
+    "ICN", "TID", "PGH", "EXE", "YTT", "ASYNC",
+    "RUF",      # ruff-specific
+]
 ignore = [
     "S603",    # subprocess without shell: we always pass argv lists, never shell=True
     "PLR0913", # too many arguments
@@ -57,15 +93,26 @@ ignore = [
     "PLR0912", # too many branches
     "PLR0917", # too many positional arguments
     "S101",    # asserts are used for type narrowing
+    "TRY003",  # messages are given where the exception is raised (errors reach the user)
+    "PT018",   # composite assertions are deliberate in the tests
+    "ISC001",  # conflicts with the formatter
 ]
 
 [tool.ruff.lint.per-file-ignores]
 "test/**" = ["S101", "PLR2004", "S108"]
-"test/fixtures/generate.py" = ["S311"]
+"test/fixtures/generate.py" = ["S311", "T201"]  # a command-line tool: it reports on stdout
+"test/perf/bench.py" = ["T201"]  # a command-line tool: it reports on stdout
 "test/backend/test_stats.py" = ["E501"]  # captured tshark report text
 "test/backend/test_export.py" = ["E501"]  # one-line request literals
 "test/backend/test_navigation.py" = ["E501"]
 "test/backend/test_quick_detail.py" = ["E501"]  # a hand-laid-out PDML tree
+
+[tool.ruff.lint.isort]
+known-first-party = ["pcap_backend"]
+
+[tool.ruff.lint.flake8-pytest-style]
+fixture-parentheses = false
+mark-parentheses = false
 
 [tool.mypy]
 python_version = "3.14"

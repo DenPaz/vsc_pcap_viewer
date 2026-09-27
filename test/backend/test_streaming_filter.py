@@ -168,8 +168,9 @@ def test_a_new_filter_replaces_a_streaming_one(
 
 
 @pytest.mark.tshark
+@pytest.mark.usefixtures("slow_filter")
 def test_cancelling_the_request_keeps_the_previous_view(
-    service: PcapService, slow_filter: threading.Event, monkeypatch: pytest.MonkeyPatch
+    service: PcapService, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(pcap_service, "FIRST_BATCH", 100)  # wait for the whole pass
     service.open({"path": MIXED}, RequestContext())
@@ -183,9 +184,8 @@ def test_cancelling_the_request_keeps_the_previous_view(
 
 
 @pytest.mark.tshark
-def test_closing_stops_a_streaming_filter(
-    service: PcapService, ctx: RequestContext, slow_filter: threading.Event
-) -> None:
+@pytest.mark.usefixtures("slow_filter")
+def test_closing_stops_a_streaming_filter(service: PcapService, ctx: RequestContext) -> None:
     events = _recorder(service)
     service.open({"path": MIXED}, ctx)
     assert service.set_filter({"expr": "udp", "stream": True}, ctx)["filtering"]

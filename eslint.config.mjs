@@ -1,5 +1,6 @@
 // @ts-check
 import js from "@eslint/js";
+import prettier from "eslint-config-prettier";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
@@ -74,4 +75,6 @@ export default tseslint.config(
       },
     },
   },
+  // Last: turn off the style rules Prettier owns.
+  prettier,
 );

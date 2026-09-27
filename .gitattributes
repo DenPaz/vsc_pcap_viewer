@@ -1,0 +1,9 @@
+# LF in the repository and in working trees, on every OS (Prettier and ruff format expect LF).
+* text=auto eol=lf
+
+# Captures and other binary files: never touch their bytes.
+*.pcap binary
+*.pcapng binary
+*.vsix binary
+*.png binary
+test/fixtures/formats/** binary

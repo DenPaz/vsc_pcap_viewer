@@ -2,8 +2,16 @@
 
 A detail tree node looks like::
 
-    {"id": 7, "label": "Source Address: 10.0.0.1", "name": "ip.src",
-     "show": "10.0.0.1", "pos": 26, "size": 4, "src": 0, "children": [...]}
+    {
+        "id": 7,
+        "label": "Source Address: 10.0.0.1",
+        "name": "ip.src",
+        "show": "10.0.0.1",
+        "pos": 26,
+        "size": 4,
+        "src": 0,
+        "children": [...],
+    }
 
 ``pos``/``size`` index into the byte source ``src`` (0 = the frame itself,
 higher indexes = reassembled/decompressed buffers, in the order tshark

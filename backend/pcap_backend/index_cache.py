@@ -47,7 +47,7 @@ class CachedIndex:
 
 
 def _log(message: str) -> None:
-    print(f"pcap-viewer: index cache: {message}", file=sys.stderr, flush=True)
+    print(f"pcap-viewer: index cache: {message}", file=sys.stderr, flush=True)  # noqa: T201 - stderr
 
 
 def _file_fingerprint(path: Path) -> list[Any]:

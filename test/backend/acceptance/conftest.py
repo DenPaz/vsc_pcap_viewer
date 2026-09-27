@@ -806,7 +806,7 @@ def property_is(world: World, key: str, value: str) -> None:
 
 
 @given("a Lua dissector with a syntax error")
-def given_bad_lua(world: World, tmp_path: Path, request: pytest.FixtureRequest) -> None:
+def given_bad_lua(world: World, tmp_path: Path) -> None:
     if hasattr(os, "geteuid") and os.geteuid() == 0:
         pytest.skip("tshark disables Lua dissectors when running as root")
     script = tmp_path / "broken.lua"

@@ -1,0 +1,19 @@
+# Build output, dependencies and caches
+out/
+node_modules/
+.venv/
+.vscode-test/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+*.vsix
+
+# Lockfiles are written by their tools
+pnpm-lock.yaml
+uv.lock
+
+# Capture fixtures (binary, or byte-exact test data)
+test/fixtures/formats/
+
+# Python is formatted by ruff
+*.py
