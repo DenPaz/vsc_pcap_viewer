@@ -81,6 +81,8 @@ def test_parse_tcp_graph() -> None:
     assert graph["points"][3][8] == 1
     assert len(graph["points"]) == 5
     assert parse_tcp_graph("") == {"endpoints": [], "fields": graph["fields"], "points": []}
+    # tshark on Windows ends lines with \r\n: the last field (the SYN flag) must still parse.
+    assert parse_tcp_graph(text.replace("\n", "\r\n")) == graph
 
 
 @pytest.mark.tshark

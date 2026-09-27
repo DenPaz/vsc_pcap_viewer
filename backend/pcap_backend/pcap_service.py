@@ -2909,7 +2909,7 @@ def parse_tcp_graph(text: str) -> dict[str, Any]:
         return int(value) if value.isdigit() else 0
 
     for line in text.split("\n"):
-        cells = line.split("\t")
+        cells = line.removesuffix("\r").split("\t")  # tshark on Windows writes \r\n
         if len(cells) < len(_TCP_GRAPH_FIELDS) or not cells[0].isdigit():
             continue
         address = _last(cells[2]) or _last(cells[3])
