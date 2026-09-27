@@ -123,12 +123,23 @@ maybe("statistics and follow panels (Chromium + real backend)", function () {
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     await page.waitForSelector(".chart .tooltip:not(.hidden)");
     assert.match(await page.textContent(".chart .tooltip strong"), /^\d+ packets$/);
+    // A resize redraws the chart (e.g. when the table below gets a scrollbar):
+    // the hovered point and its tooltip stay.
+    const drawn = await page.$(".chart svg");
+    await page.setViewportSize({ width: 1000, height: 800 });
+    await page.waitForFunction((old) => document.querySelector(".chart svg") !== old, drawn);
+    assert.equal(await page.$eval(".chart .tooltip", (t) => t.classList.contains("hidden")), false, "the tooltip survives a redraw");
+    const shrunk = await page.$(".chart svg");
+    await page.setViewportSize({ width: 1200, height: 800 });
+    await page.waitForFunction((old) => document.querySelector(".chart svg") !== old, shrunk);
+    const resized = await page.locator(".chart svg").boundingBox();
+    await page.mouse.move(resized.x + resized.width / 2, resized.y + resized.height / 2);
     await page.focus(".chart");
     await page.keyboard.press("Home");
     await page.keyboard.press("ArrowRight");
     assert.match(await page.textContent(".chart .tooltip span"), /^0\.00\d+–0\.00\d+ s$/);
     await page.selectOption("select[aria-label='Metric']", "bytes");
-    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.move(resized.x + resized.width / 2 + 5, resized.y + resized.height / 2);
     await page.waitForFunction(() => /bytes$/.test(document.querySelector(".chart .tooltip strong")?.textContent ?? ""));
   });
 
