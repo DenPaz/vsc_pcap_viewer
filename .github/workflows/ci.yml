@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install tshark
         run: |
           echo "wireshark-common wireshark-common/install-setuid boolean false" | sudo debconf-set-selections
@@ -20,12 +20,12 @@ jobs:
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y tshark xvfb
       # Python 3.14 on PATH for the extension (it looks for python3.14/python3);
       # uv uses the same version from .python-version for the dev venv.
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version-file: .python-version
-      - uses: astral-sh/setup-uv@v6
-      - uses: pnpm/action-setup@v4 # version from package.json "packageManager"
-      - uses: actions/setup-node@v4
+      - uses: astral-sh/setup-uv@v7
+      - uses: pnpm/action-setup@v6 # version from package.json "packageManager"
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
@@ -57,7 +57,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # tshark, capinfos, editcap and mergecap, so the tshark tests run here too.
       - name: Install Wireshark (macOS)
         if: runner.os == 'macOS'
@@ -70,12 +70,12 @@ jobs:
           "C:\Program Files\Wireshark" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: tshark version
         run: tshark --version
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version-file: .python-version
-      - uses: astral-sh/setup-uv@v6
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: astral-sh/setup-uv@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
