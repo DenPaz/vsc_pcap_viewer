@@ -4,7 +4,19 @@ Open `.pcap` / `.pcapng` captures directly in VS Code with a Wireshark-like
 packet list, protocol tree and hex view. All dissection and filtering is done
 by **tshark** (Wireshark's command-line tool), so results match Wireshark exactly.
 
-> Status: v0.1, feature-complete against the project brief. Offline analysis only; live capture is out of scope.
+![The packet list, protocol tree and bytes of an HTTP response reassembled from two TCP segments](media/screenshots/viewer.png)
+
+## Installation
+
+1. Install **PCAP Viewer** from the VS Code Marketplace or Open VSX (search
+   for "PCAP Viewer"), or download the `.vsix` from the
+   [GitHub releases](https://github.com/DenPaz/vsc_pcap_viewer/releases) and
+   run `code --install-extension pcap-viewer-<version>.vsix`.
+2. It needs **tshark** (it comes with Wireshark) and **Python 3.14+**; see
+   [Requirements](#requirements). The **Get Started with PCAP Viewer**
+   walkthrough (_Help › Welcome_, or _PCAP: Get Started_) checks both, says
+   how to install what's missing on your system, and opens a sample capture.
+   _PCAP: Check Python and TShark_ runs the same check at any time.
 
 ## Features
 
@@ -58,6 +70,9 @@ by **tshark** (Wireshark's command-line tool), so results match Wireshark exactl
   by your Lua dissectors): field and protocol names with their type and
   description, then operators (`==`, `contains`, `&&`, …) after a field.
   `Tab` takes the first suggestion, `↑`/`↓` + `Enter` pick one, `Ctrl+Space` asks explicitly.
+
+  ![Completions for dns.flags.r with each field's type and description](media/screenshots/filter.png)
+
 - **AI help for display filters** (optional, through VS Code's Language Model
   API and GitHub Copilot): click ✨ in the filter bar, describe the packets you
   want ("DNS queries that got no answer"), press Enter, and pick one of up to
@@ -240,6 +255,9 @@ is anything unusual?`) describes the capture from its statistics only:
   Expert Information and Capture File Properties. Each opens in a panel with
   sortable columns, CSV copy, and an option to limit it to the current display
   filter. Rows can apply or prepare a display filter, and expert rows jump to their packet.
+
+  ![The protocol hierarchy of the sample capture](media/screenshots/statistics.png)
+
 - **Lua dissectors**: _PCAP: New Lua Dissector_ scaffolds one in your
   dissectors folder. _PCAP: Reload Dissectors_ checks the scripts first, so
   Lua errors appear immediately with a link to the line, then re-indexes open
@@ -334,6 +352,9 @@ tshark built with them (`tshark --version` lists "with Zstandard", "with LZ4").
 | PCAP: Colorize with Filter…                                                                                           |                                       | Add a coloring rule (also in the detail tree's right-click menu)                                                  |
 | PCAP: Toggle Packet Coloring / Edit Coloring Rules                                                                    |                                       | Turn coloring on or off / edit `pcapViewer.coloringRules` in a rules editor                                       |
 | PCAP: Show Log                                                                                                        |                                       | Backend and tshark messages (Lua errors, warnings)                                                                |
+| PCAP: Get Started                                                                                                     |                                       | The setup walkthrough: Python, tshark, a sample capture and the main features                                     |
+| PCAP: Check Python and TShark                                                                                         |                                       | Check that the backend's Python and tshark are found, with install help                                           |
+| PCAP: Open Sample Capture                                                                                             |                                       | Open a small capture with ARP, ICMP, DNS and HTTP                                                                 |
 
 Keyboard: in the list use ↑/↓/PgUp/PgDn/Home/End, `Enter`/`→` to move to the
 tree; in the tree use arrows to navigate and expand/collapse (`Enter` on a frame
@@ -464,9 +485,10 @@ something in the meantime.
 
 ## Roadmap
 
-Every item of the project brief is implemented. Possible next steps: live
-capture from a network interface (`dumpcap`), and getting ready to publish
-(an icon, a release workflow, screenshots).
+Every item of the project brief is implemented, and more (see the
+[CHANGELOG](CHANGELOG.md)). Possible next steps: running where the capture
+lives (Remote SSH, WSL, Dev Containers), comparing two captures, and VoIP
+calls.
 
 ## Running locally (Linux)
 
@@ -608,6 +630,34 @@ To capture your own, start the browser with the variable set
 | `pnpm install` fails with "Ignored build scripts"                                                                                                                                               | Use the pnpm version pinned in `package.json` (`corepack enable pnpm`). The build-script policy is in `pnpm-workspace.yaml`.                                                                                                                                                                                                                                                                                                                                                                                                                        |
 
 See `CLAUDE.md` for architecture notes and design decisions.
+
+## Releasing
+
+The version lives in `package.json` and the release notes in `CHANGELOG.md`,
+whose `## Unreleased` section collects the changes as they are merged.
+
+```sh
+pnpm run release:prepare 0.2.0   # bumps package.json, moves "Unreleased" under "0.2.0 — <date>"
+git commit -am "Release 0.2.0"
+git tag v0.2.0
+git push origin HEAD v0.2.0
+```
+
+Pushing the tag runs `.github/workflows/release.yml`: the whole CI first,
+then a check that the tag, `package.json` and the CHANGELOG agree
+(`node scripts/release.mjs check v0.2.0`), then `vsce package` and a GitHub
+release with the `.vsix` and that version's notes. It also publishes to the
+VS Code Marketplace and Open VSX when the repository has the `VSCE_PAT` and
+`OVSX_PAT` secrets (Azure DevOps and open-vsx.org access tokens); without
+them those steps are skipped. Running the workflow by hand on the tag retries
+a failed release (an existing release gets the `.vsix` replaced; versions
+already published are skipped). Every CI run also keeps the `.vsix` as an
+artifact.
+
+The icon is `media/icon.svg` rendered by `node scripts/render-icon.js`; the
+screenshots in `media/screenshots/` come from `node scripts/screenshots.js`
+(the real webviews and backend on the sample capture, in VS Code's Dark
+Modern colors; run `pnpm run compile` first).
 
 ## Security
 

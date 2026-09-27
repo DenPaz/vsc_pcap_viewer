@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  # The release workflow runs everything here first (release.yml).
+  workflow_call:
+
+permissions:
+  contents: read
 
 jobs:
   linux:
@@ -51,6 +56,11 @@ jobs:
         run: xvfb-run -a pnpm run test:extension
       - name: Package
         run: pnpm run package
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vsix
+          path: "*.vsix"
+          if-no-files-found: error
 
   cross-platform:
     name: ${{ matrix.os }} (backend, unit, webview e2e, VS Code smoke)

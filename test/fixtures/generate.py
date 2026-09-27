@@ -16,6 +16,7 @@ library, so their bytes never depend on a Wireshark version.
 import argparse
 import gzip
 import random
+import shutil
 import ssl
 import struct
 from pathlib import Path
@@ -604,6 +605,8 @@ def main() -> None:
     wrpcap(str(HERE / "udp_custom.pcap"), udp_custom_packets())
     wrpcap(str(HERE / "tls.pcap"), tls_packets())
     wrpcapng(str(HERE / "mixed.pcapng"), mixed_packets())
+    # The walkthrough's sample capture (PCAP: Open Sample Capture) is the same file.
+    shutil.copyfile(HERE / "mixed.pcapng", HERE.parents[1] / "media" / "sample.pcapng")
     wrpcap(str(HERE / "objects.pcap"), objects_packets())
     (HERE / "comments.pcapng").write_bytes(
         comments_pcapng(_records(http_packets()), PACKET_COMMENTS)

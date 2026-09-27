@@ -78,6 +78,29 @@ export default tseslint.config(
       },
     },
   },
+  {
+    // Release and asset scripts, and their tests (Node).
+    files: ["scripts/**/*.{js,mjs}", "test/scripts/**/*.mjs"],
+    languageOptions: {
+      globals: {
+        require: "readonly",
+        module: "writable",
+        process: "readonly",
+        console: "readonly",
+        URL: "readonly",
+        __dirname: "readonly",
+        suite: "readonly",
+        test: "readonly",
+        // (inside page.evaluate callbacks, which run in Chromium)
+        window: "readonly",
+        document: "readonly",
+      },
+    },
+    rules: {
+      "@typescript-eslint/no-require-imports": "off",
+      eqeqeq: ["error", "always"],
+    },
+  },
   // Last: turn off the style rules Prettier owns.
   prettier,
 );
