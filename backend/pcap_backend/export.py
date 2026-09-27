@@ -1,5 +1,6 @@
-"""Helpers for the ``export`` method: destination checks, atomic output files
-and the packet-list writers (CSV / JSON).
+"""Helpers for the ``export`` method: destination checks, atomic output files,
+the packet-list writers (CSV / JSON) and the writer that joins tshark's
+dissection output (text / PDML / JSON) from several passes into one file.
 
 Packet data is untrusted. CSV cells that a spreadsheet would evaluate as a
 formula (``=``, ``+``, ``@``, ``-`` followed by a non-number, tab, CR) are
@@ -13,13 +14,19 @@ import re
 from collections.abc import Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
-from typing import IO
+from typing import IO, BinaryIO
 
 from .protocol import InvalidParamsError
 
 CAPTURE_FORMATS = ("pcapng", "pcap")
 LIST_FORMATS = ("csv", "json")
-EXPORT_KINDS = (*CAPTURE_FORMATS, *LIST_FORMATS, "bytes")
+EXPORT_KINDS = (*CAPTURE_FORMATS, *LIST_FORMATS, "bytes", "dissections")
+# Full dissections, as Wireshark's "Export Packet Dissections": tshark's options.
+DISSECTION_FORMATS: dict[str, list[str]] = {
+    "text": ["-V"],
+    "pdml": ["-T", "pdml"],
+    "json": ["-T", "json"],
+}
 
 _NUMBER_RE = re.compile(r"^-?\d+(\.\d+)?$")
 _FORMULA_START = ("=", "+", "@", "\t", "\r")
@@ -111,3 +118,64 @@ class PacketListWriter:
     def close(self) -> None:
         if self._fmt == "json":
             self._fh.write("\n]\n" if self.rows else "]\n")
+
+
+_TEXT_PACKET = re.compile(rb"^Frame \d+: ")
+
+
+class DissectionWriter:
+    """Write tshark's dissection output to one file, possibly from several passes
+    (a big frame set is filtered in chunks, see ``frame_set_filters``).
+
+    Text is concatenated. PDML keeps the first pass's header and one closing
+    ``</pdml>``. JSON is one array: the passes' ``[``/``]`` lines are dropped and
+    a comma joins the last object of one pass to the first of the next. Feed
+    each pass's lines (without line breaks) to :meth:`line`, calling
+    :meth:`next_pass` before each pass and :meth:`close` at the end.
+    """
+
+    def __init__(self, fmt: str, out: BinaryIO) -> None:
+        if fmt not in DISSECTION_FORMATS:
+            raise InvalidParamsError(f"format must be one of {', '.join(DISSECTION_FORMATS)}")
+        self.fmt = fmt
+        self.out = out
+        self.passes = 0
+        self._in_header = False
+        self._held: bytes | None = None  # JSON: the last line, until we know what follows
+        if fmt == "json":
+            out.write(b"[\n")
+
+    def next_pass(self) -> None:
+        self.passes += 1
+        self._in_header = self.fmt == "pdml" and self.passes > 1
+
+    def line(self, line: bytes) -> bool:
+        """Write one line of the current pass; True if it starts a packet."""
+        if self.fmt == "text":
+            self.out.write(line + b"\n")
+            return bool(_TEXT_PACKET.match(line))
+        if self.fmt == "pdml":
+            if self._in_header:  # later passes: skip up to and including <pdml ...>
+                self._in_header = not line.startswith(b"<pdml")
+                return False
+            if line == b"</pdml>":
+                return False
+            self.out.write(line + b"\n")
+            return line == b"<packet>"
+        if line in (b"[", b"]", b"[]"):
+            return False
+        start = line == b"  {"
+        if start and self._held == b"  }":
+            self._held = b"  },"  # the previous pass's last packet
+        if self._held is not None:
+            self.out.write(self._held + b"\n")
+        self._held = line
+        return start
+
+    def close(self) -> None:
+        if self.fmt == "pdml":
+            self.out.write(b"</pdml>\n")
+        elif self.fmt == "json":
+            if self._held is not None:
+                self.out.write(self._held + b"\n")
+            self.out.write(b"]\n")

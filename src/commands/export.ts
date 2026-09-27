@@ -239,6 +239,70 @@ export async function exportPacketList(provider: PcapEditorProvider): Promise<Ex
   return result;
 }
 
+/** "PCAP: Export Packet Dissections…": tshark's full packet details as plain text, PDML or JSON. */
+export async function exportDissections(provider: PcapEditorProvider): Promise<ExportResult | undefined> {
+  const session = requireSession(provider);
+  if (!session || !backendOf(session)) {
+    return undefined;
+  }
+  const title = "Export Packet Dissections";
+  const filter = session.currentFilter.trim();
+  const frames = session.openInfo?.frames ?? 0;
+  type ScopeItem = vscode.QuickPickItem & { params: Record<string, unknown>; suffix: string };
+  const scopes: ScopeItem[] = [
+    { label: "Displayed packets", description: filter ? `filter: ${filter}` : `no display filter: all ${frames.toLocaleString()} packets`, params: {}, suffix: filter ? "filtered" : "dissections" },
+    { label: "All packets", description: `${frames.toLocaleString()} packets`, params: { filter: "" }, suffix: "dissections" },
+  ];
+  const selected = session.selectedFrames.length ? session.selectedFrames : session.selectedFrame !== null ? [session.selectedFrame] : [];
+  if (selected.length) {
+    const one = selected.length === 1;
+    scopes.push({ label: one ? "Selected packet" : "Selected packets", description: one ? `packet ${selected[0]}` : plural(selected.length, "packet"), params: { frames: selected }, suffix: one ? `frame${selected[0]}` : "selected" });
+  }
+  if (session.markedCount) {
+    scopes.push({ label: "Marked packets", description: plural(session.markedCount, "packet"), params: { marked: true }, suffix: "marked" });
+  }
+  const scope = await vscode.window.showQuickPick(scopes, { title: `${title} (1/3)`, placeHolder: "Which packets?" });
+  if (!scope) {
+    return undefined;
+  }
+  const format = await vscode.window.showQuickPick(
+    [
+      { label: "Plain text", description: "the packet details as in the tree (tshark -V)", format: "text", ext: "txt", name: "Text" },
+      { label: "PDML", description: "XML with every field (tshark -T pdml)", format: "pdml", ext: "pdml", name: "PDML" },
+      { label: "JSON", description: "an array of packets with every field (tshark -T json)", format: "json", ext: "json", name: "JSON" },
+    ],
+    { title: `${title} (2/3)`, placeHolder: "Format" },
+  );
+  if (!format) {
+    return undefined;
+  }
+  const contents = await vscode.window.showQuickPick(
+    [
+      { label: "Packet details", bytes: false },
+      { label: "Packet details and bytes", description: "adds each packet's hex dump", bytes: true },
+    ],
+    { title: `${title} (3/3)`, placeHolder: "Contents" },
+  );
+  if (!contents) {
+    return undefined;
+  }
+  const dest = await chooseDestination(session, scope.suffix, format.ext, { [format.name]: [format.ext], "All files": ["*"] });
+  if (!dest) {
+    return undefined;
+  }
+  const result = await runExport(session, `Exporting packet dissections to ${path.basename(dest)}`, {
+    kind: "dissections",
+    format: format.format,
+    bytes: contents.bytes,
+    dest,
+    ...scope.params,
+  });
+  if (result) {
+    void reportExport(result, `${plural(result.packets ?? 0, "packet")} (${format.label})`, false);
+  }
+  return result;
+}
+
 /** "PCAP: Export Packet Bytes…": raw bytes of the selected packet (or one of its reassembled sources). */
 export async function exportPacketBytes(provider: PcapEditorProvider, frame?: number): Promise<ExportResult | undefined> {
   const session = requireSession(provider);
@@ -283,6 +347,7 @@ export function registerExportCommands(context: vscode.ExtensionContext, provide
   context.subscriptions.push(
     vscode.commands.registerCommand("pcapViewer.exportFiltered", () => exportFiltered(provider)),
     vscode.commands.registerCommand("pcapViewer.exportPacketList", () => exportPacketList(provider)),
+    vscode.commands.registerCommand("pcapViewer.exportDissections", () => exportDissections(provider)),
     vscode.commands.registerCommand("pcapViewer.exportMarked", () => exportMarked(provider)),
     vscode.commands.registerCommand("pcapViewer.exportSelected", () => exportSelected(provider)),
     vscode.commands.registerCommand("pcapViewer.exportPacketBytes", (frame?: number) => exportPacketBytes(provider, frame)),

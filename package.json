@@ -334,6 +334,16 @@
         "category": "PCAP"
       },
       {
+        "command": "pcapViewer.exportDissections",
+        "title": "Export Packet Dissections\u2026",
+        "category": "PCAP"
+      },
+      {
+        "command": "pcapViewer.mergeCaptures",
+        "title": "Merge Captures\u2026",
+        "category": "PCAP"
+      },
+      {
         "command": "pcapViewer.exportPacketBytes",
         "title": "Export Packet Bytes\u2026",
         "category": "PCAP"
@@ -350,7 +360,7 @@
       },
       {
         "command": "pcapViewer.manageColoringRules",
-        "title": "Manage Coloring Rules",
+        "title": "Edit Coloring Rules",
         "category": "PCAP"
       },
       {
@@ -440,6 +450,10 @@
         },
         {
           "command": "pcapViewer.exportPacketList",
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
+        },
+        {
+          "command": "pcapViewer.exportDissections",
           "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
         },
         {

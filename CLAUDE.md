@@ -60,13 +60,14 @@ The `Makefile` wraps all of these (`make` lists the targets; `make check` = lint
   custom editor + one `PcapEditorSession` per panel. `src/backendClient.ts`
   JSON-RPC client (no `vscode` import: unit-testable). `src/settingsModel.ts`
   pure settings helpers. `src/commands/` command implementations
-  (`export.ts`, `coloring.ts`, `dissectors.ts`, `tls.ts`, …).
+  (`export.ts`, `coloring.ts`, `dissectors.ts`, `tls.ts`, `merge.ts`, …).
+  `src/rotation.ts` recognises rotated capture pieces (pure).
 - `src/webview/` plain JS/CSS/HTML (no build step). `lib.js` = pure helpers
   shared with Node tests; `main.js` = UI. Type-checked via JSDoc +
   `tsconfig.webview.json`.
-- `src/panels/` statistics and follow-stream webview panels (`panelHtml.ts`
-  builds their CSP'd HTML); their UIs are `src/webview/stats.js` and
-  `follow.js` with `panel.css`.
+- `src/panels/` statistics, follow-stream and coloring-rules webview panels
+  (`panelHtml.ts` builds their CSP'd HTML); their UIs are `src/webview/stats.js`,
+  `follow.js` and `coloring.js` with `panel.css`.
 - `backend/pcap_backend/` Python package run as `python -m pcap_backend`
   with `PYTHONPATH=backend`. `server.py` (JSON-RPC), `pcap_service.py`
   (methods), `tshark.py` (discovery/argv/process helpers), `cache.py`
@@ -413,6 +414,32 @@ UI behaviour stays in the Chromium test (`test/webview/e2e.test.js`).
   a destination that is the open capture is refused (tshark would truncate
   its input). CSV cells that look like formulas get a `'` prefix (packet text
   is untrusted); JSON is keyed by column id with numbers for numeric columns.
+  *Dissections* (`kind: "dissections"`, `format` text/pdml/json =
+  `-V`/`-T pdml`/`-T json`, `-x` with `bytes`) stream tshark's stdout into the
+  file. The scope is chosen like a capture export (`_export_scope`); a big
+  frame set means several `-Y frame.number in {…}` passes, which
+  `export.DissectionWriter` joins: text concatenated, PDML with one header and
+  one `</pdml>`, JSON as one array (a held-back last line becomes `  },` when
+  another pass's first object `  {` follows).
+- **Merging** (`merge {inputs, dest, format, append}`, no open capture needed):
+  `mergecap` (found next to tshark) into an atomic output, `-a` for a rotated
+  capture's pieces (given in order), by timestamp otherwise; `dest` may not be
+  an input. `rotation.ts` recognises pieces: tcpdump `-C`/`-W`
+  (`trace.pcap`, `trace.pcap1`…, `-W` numbers the first too) and dumpcap ring
+  buffers / `editcap -c` splits (`name_00001_<14-digit time>.pcapng`, which the
+  tests make with editcap). Opening a piece offers the merge once per editor
+  (`offerMerge`; "Don't Ask Again" is a globalState flag). *PCAP: Merge
+  Captures…* uses the active capture's backend, else a short-lived one.
+- **Coloring rules editor** (`ColoringPanel`, `coloring.js`; the
+  `pcapViewer.manageColoringRules` command, titled *Edit Coloring Rules*): one
+  panel per window, reading and writing `pcapViewer.coloringRules` for the
+  capture that was active (`editableColoringRules` keeps disabled rules;
+  `coloringRulesSetting` writes `enabled` only when false and fills empty
+  names from the filter). Filters are checked with the active (else any open)
+  session's `validateFilter`, debounced; empty filters and `@` block saving,
+  tshark compile errors only mark the row (tshark skips such rules). "saved"
+  carries the stored rules and the editor reloads them; a settings change
+  while the editor has unsaved edits only says so (Revert loads it).
 - **AI filter help** (`src/aiFilter.ts` pure, `src/ai.ts` host, `src/commands/ai.ts`):
   Copilot's inline completions can't reach the webview, so the host uses
   `vscode.lm.selectChatModels({ vendor: "copilot" })` (stable in 1.90 = our
