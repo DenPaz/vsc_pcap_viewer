@@ -306,6 +306,7 @@ def run(
     token = token or CancelToken()
     proc = _popen(argv, env)
     PROCESSES.add(proc)
+    finished = False
     try:
         token.register(proc)  # kills the process if the token is already cancelled
         try:
@@ -314,21 +315,21 @@ def run(
             while True:
                 try:
                     out, err = proc.communicate(timeout=procs.POLL_INTERVAL)
+                    finished = True
                     break
                 except subprocess.TimeoutExpired:
                     token.raise_if_cancelled()
         finally:
             token.unregister(proc)
     finally:
-        if proc.returncode is None:
-            # Cancelled: stop it, reap it and close its pipes.
-            if procs.kill_process(proc):
-                proc.communicate()
-                PROCESSES.discard(proc)
-            else:
-                procs.stop_process(proc, on_reaped=lambda: PROCESSES.discard(proc))
+        if finished:
+            PROCESSES.discard(proc)  # communicate() reaped it and closed its pipes
         else:
-            PROCESSES.discard(proc)
+            # Cancelled: stop it, reap it and close its pipes. Also when it has
+            # exited already: any poll() (the kill of a cancelled token,
+            # kill_all, len(PROCESSES)) can have reaped it, and its pipes are
+            # still open.
+            procs.stop_process(proc, on_reaped=lambda: PROCESSES.discard(proc))
     token.raise_if_cancelled()
     return RunResult(proc.returncode, out, clean_stderr(err.decode("utf-8", "replace")))
 

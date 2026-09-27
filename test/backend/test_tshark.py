@@ -1,6 +1,8 @@
 import os
+import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -109,6 +111,36 @@ def test_stream_lines_and_cancellation() -> None:
     token.cancel()
     with pytest.raises(CancelledError):
         list(gen)
+    assert len(ts.PROCESSES) == 0
+
+
+def test_cancel_closes_the_pipes_of_a_child_reaped_meanwhile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Any poll() can reap a child before its runner looks (the kill of an
+    already-cancelled token, kill_all, len(PROCESSES)): the runner must still
+    close its pipes (a leak showed up as an unraisable ResourceWarning)."""
+    started: list[subprocess.Popen[bytes]] = []
+    real_popen = ts._popen
+
+    def popen(argv: Any, env: Any = None, stdin: Any = None) -> subprocess.Popen[bytes]:
+        proc = real_popen(argv, env, stdin)
+        proc.wait()  # it exits and is reaped before the token is looked at
+        started.append(proc)
+        return proc
+
+    monkeypatch.setattr(ts, "_popen", popen)
+    token = CancelToken()
+    token.cancel()
+    argv = [sys.executable, "-c", "print('x')"]
+    with pytest.raises(CancelledError):
+        ts.run(argv, token)
+    with pytest.raises(CancelledError):
+        list(ts.stream_lines(argv, StreamResult(), token))
+    assert len(started) == 2
+    for proc in started:
+        assert proc.stdout is not None and proc.stdout.closed
+        assert proc.stderr is not None and proc.stderr.closed
     assert len(ts.PROCESSES) == 0
 
 

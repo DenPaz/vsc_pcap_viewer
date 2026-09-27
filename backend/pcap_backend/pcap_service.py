@@ -30,7 +30,7 @@ import time
 from array import array
 from bisect import bisect_left, bisect_right
 from collections.abc import Callable, Iterable, Sequence
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -1955,7 +1955,14 @@ class PcapService:
         pdml_argv = tshark.argv(*select, "-T", "pdml", capture=str(capture))
         hex_argv = tshark.argv(*select, "-x", capture=str(capture))
         hex_future = self._pool.submit(run, hex_argv, ctx.token)
-        pdml_res = run(pdml_argv, ctx.token)
+        try:
+            pdml_res = run(pdml_argv, ctx.token)
+        except BaseException:
+            # (A cancel.) Don't return while the -x run still reads the capture
+            # (a quick window is deleted right after): it stops at the same token.
+            if not hex_future.cancel():
+                wait([hex_future])
+            raise
         hex_res = hex_future.result()
         if not pdml_res.stdout.strip():
             raise tshark.error(
