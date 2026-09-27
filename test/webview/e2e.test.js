@@ -58,6 +58,18 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
   suiteSetup(async function () {
     server = await serveWebview();
     const origin = `http://127.0.0.1:${server.address().port}`;
+    // Live capture uses a stand-in dumpcap (no capture rights needed): it "captures"
+    // mixed.pcapng's 26 packets, one every 80 ms, then stays idle until stopped.
+    const venvPython = path.join(
+      ROOT,
+      ".venv",
+      process.platform === "win32" ? "Scripts/python.exe" : "bin/python",
+    );
+    process.env.PCAP_VIEWER_DUMPCAP = JSON.stringify([
+      process.env.PCAP_VIEWER_PYTHON ?? (fs.existsSync(venvPython) ? venvPython : "python3"),
+      path.join(ROOT, "test", "fixtures", "fake_dumpcap.py"),
+    ]);
+    process.env.FAKE_DUMPCAP_DELAY = "0.08";
     client = await startBackend(deps);
     // Streaming filters report their matches as "filter" notifications (see src/pcapEditor.ts).
     client.onNotification("filter", (p) => void post({ type: "filterEvent", ...p }));
@@ -152,6 +164,9 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
         ].includes(msg.type)
       ) {
         hostLog.push(msg);
+      } else if (msg.type === "stopCapture") {
+        hostLog.push(msg);
+        await client.request("capture_stop", {});
       } else if (msg.type === "setComment") {
         // Like PcapDocument/pushComments: the edits go to the backend, then the viewer refreshes.
         hostLog.push(msg);
@@ -1615,6 +1630,88 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
       }
       await reopenCapture("http.pcap");
     }
+  });
+
+  test("live capture: the status bar shows it, the list follows new packets, Stop", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "pcapviewer-e2e-capture-"));
+    // Like PcapEditorSession: "index" and "capture" notifications go to the viewer.
+    const stopIndex = client.onNotification("index", (p) =>
+      post(
+        p.event === "progress"
+          ? { type: "indexProgress", frames: p.frames, fraction: p.fraction ?? null, view: p.view }
+          : {
+              type: "indexDone",
+              info: p.info,
+              error: p.event === "failed" ? p.message : undefined,
+              view: p.view,
+            },
+      ),
+    );
+    const stopCapture = client.onNotification("capture", (p) =>
+      post({ type: "captureEvent", ...p }),
+    );
+    try {
+      await page.setViewportSize({ width: 1200, height: 500 }); // (so the list must scroll)
+      const info = await client.request(
+        "capture_start",
+        { dest: path.join(tmp, "live.pcapng"), interfaces: ["fake0"], columns: ["tcp.stream"] },
+        { timeoutMs: 0 },
+      );
+      assert.equal(info.capture.running, true);
+      await post({
+        type: "init",
+        info,
+        columns: customCols,
+        layout,
+        timeFormat: "relative",
+        quickDetail: { after: 20000, window: 300 },
+        filter: "",
+        history: [],
+        savedFilters,
+        elapsedMs: 1,
+        names: "Names: MAC",
+      });
+      await page.waitForSelector("#status-capture:not(.hidden)");
+      assert.match(await page.textContent("#capture-text"), /^Capturing on fake0 · 0:0\d · /);
+      assert.ok(await page.isVisible("#capture-stop"));
+      await page.waitForFunction(() =>
+        /Packets: ([2-9]\d|1[5-9])/.test(document.querySelector("#status-left").textContent),
+      );
+      assert.doesNotMatch(await page.textContent("#status-left"), /Indexing/);
+      // The end of the list was in view: it stays in view as packets arrive.
+      const atEnd = () =>
+        page.$eval(
+          "#list-viewport",
+          (v) => v.scrollTop > 0 && v.scrollTop + v.clientHeight >= v.scrollHeight - 30,
+        );
+      await page.waitForFunction(() => {
+        const v = document.getElementById("list-viewport");
+        return v.scrollTop > 0 && v.scrollTop + v.clientHeight >= v.scrollHeight - 30;
+      });
+      assert.ok(await atEnd());
+      await page.waitForFunction(
+        () => document.querySelectorAll("#list-rows .list-row:not(.loading)").length > 0,
+      );
+      // Sorting waits for the end of the capture.
+      await page.click('#list-header > div[data-id="length"]');
+      assert.match(await page.textContent("#filter-error"), /when the capture stops/);
+      await page.click("#capture-stop");
+      await waitForHost((m) => m.type === "stopCapture");
+      await page.waitForFunction(() =>
+        document.querySelector("#status-capture").classList.contains("stopped"),
+      );
+      assert.match(await page.textContent("#capture-text"), /^Captured on fake0 in 0:0\d/);
+      assert.equal(await page.isVisible("#capture-stop"), false);
+      await page.waitForFunction(() =>
+        /^Packets: \d+$/.test(document.querySelector("#status-left").textContent.split(" · ")[0]),
+      );
+    } finally {
+      stopIndex();
+      stopCapture();
+      await page.setViewportSize({ width: 1200, height: 800 });
+      await reopenCapture("http.pcap");
+    }
+    assert.equal(await page.isVisible("#status-capture"), false, "a plain file: no capture");
   });
 
   test("no script errors or CSP violations", () => {

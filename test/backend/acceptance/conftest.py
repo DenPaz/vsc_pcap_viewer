@@ -19,7 +19,7 @@ from pytest_bdd import given, parsers, then, when
 from pcap_backend.cancellation import CancelledError
 from pcap_backend.pcap_service import BASE_COLUMNS, PcapService
 from pcap_backend.protocol import FilterError, RequestContext, RpcError, UnsupportedFormatError
-from pcap_backend.tshark import PROCESSES, ConfigError
+from pcap_backend.tshark import PROCESSES, ConfigError, ToolError
 
 ROOT = Path(__file__).resolve().parents[3]
 FIXTURES = ROOT / "test" / "fixtures"
@@ -74,7 +74,7 @@ class World:
         self.error = None
         try:
             return fn(params, self.ctx)
-        except (RpcError, ConfigError, CancelledError) as exc:
+        except (RpcError, ConfigError, CancelledError, ToolError) as exc:
             self.error = exc
             return None
 
@@ -1346,3 +1346,198 @@ def tcp_graph_shows(world: World, stream: str, a: str, b: str, count: str) -> No
     assert world.table["stream"] == int(stream)
     assert world.table["endpoints"] == [a, b]
     assert len(world.table["points"]) == int(count)
+
+
+# ---------------------------------------------------------------------- live capture
+
+
+def _until(check: Any, timeout: float = 20) -> None:
+    deadline = time.monotonic() + timeout
+    while not check():
+        assert time.monotonic() < deadline, "timed out"
+        time.sleep(0.02)
+
+
+def _index_end(world: World) -> dict[str, Any] | None:
+    return next(
+        (e for e in world.events if e.get("method") == "index" and e["event"] != "progress"),
+        None,
+    )
+
+
+def _stand_in(world: World, monkeypatch: pytest.MonkeyPatch, **env: str) -> None:
+    import sys  # noqa: PLC0415
+
+    monkeypatch.setenv(
+        "PCAP_VIEWER_DUMPCAP", json.dumps([sys.executable, str(FIXTURES / "fake_dumpcap.py")])
+    )
+    monkeypatch.setenv("FAKE_DUMPCAP_DELAY", "0.05")
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    world.service.notify = lambda method, params: world.events.append({"method": method, **params})
+
+
+@given(parsers.re(r'a stand-in dumpcap that replays "(?P<name>[^"]+)"$'))
+def stand_in_dumpcap(world: World, monkeypatch: pytest.MonkeyPatch, name: str) -> None:
+    _stand_in(world, monkeypatch, FAKE_DUMPCAP_SOURCE=str(FIXTURES / name))
+
+
+@given("a stand-in dumpcap without permission to capture")
+def stand_in_denied(world: World, monkeypatch: pytest.MonkeyPatch) -> None:
+    _stand_in(
+        world,
+        monkeypatch,
+        FAKE_DUMPCAP_FAIL="You don't have permission to capture on that device "
+        "(socket: Operation not permitted)",
+    )
+
+
+@when(
+    parsers.re(
+        r'I start capturing on "(?P<iface>[^"]+)"'
+        r'(?: with the capture filter "(?P<flt>[^"]*)")?'
+        r"(?: stopping after (?P<packets>\d+) packets)?$"
+    )
+)
+def start_capturing(
+    world: World, tmp_path: Path, iface: str, flt: str | None, packets: str | None
+) -> None:
+    params: dict[str, Any] = {
+        "dest": str(tmp_path / "live.pcapng"),
+        "interfaces": [iface],
+        "filter": flt or "",
+    }
+    if packets:
+        params["limits"] = {"packets": int(packets)}
+    world.info = world.call(world.service.capture_start, params)
+
+
+@then("the capture is running")
+def capture_running(world: World) -> None:
+    assert world.error is None, world.error
+    assert world.info is not None and world.info["capture"]["running"] is True
+    assert world.info["indexing"] is True
+
+
+@then("packets appear in the list while capturing")
+def packets_appear(world: World) -> None:
+    _until(lambda: world.rows(limit=50)["total"] >= 5)
+    assert _index_end(world) is None, "still capturing"
+
+
+@when("I stop the capture")
+def stop_capture(world: World) -> None:
+    assert world.service.capture_stop({}, world.ctx) == {"stopped": True}
+
+
+@then("the capture stops with a complete file")
+def capture_complete(world: World) -> None:
+    _until(lambda: _index_end(world) is not None)
+    end = _index_end(world)
+    assert end is not None and end["event"] == "done", end
+    stopped = next(
+        e for e in world.events if e.get("method") == "capture" and e["event"] == "stopped"
+    )
+    assert end["info"]["frames"] == stopped["packets"] >= 5
+    assert end["info"]["capture"]["running"] is False
+
+
+@then("sorting works again")
+def sorting_works(world: World) -> None:
+    page = world.rows(limit=5, sort={"field": "frame.len", "desc": True})
+    lengths = [int(r["cells"][TITLE_TO_INDEX["Length"]]) for r in page["rows"]]
+    assert lengths == sorted(lengths, reverse=True)
+
+
+@then(parsers.re(r"the capture stops by itself with (?P<count>\d+) packets$"))
+def capture_stops_itself(world: World, count: str) -> None:
+    assert world.error is None, world.error
+    _until(lambda: _index_end(world) is not None)
+    end = _index_end(world)
+    assert end is not None and end["info"]["frames"] == int(count)
+
+
+@then(
+    parsers.re(
+        r'the capture filter "(?P<flt>[^"]*)" is (?P<result>valid|invalid) for "(?P<iface>[^"]+)"$'
+    )
+)
+def capture_filter_check(world: World, flt: str, result: str, iface: str) -> None:
+    res = world.service.validate_capture_filter({"filter": flt, "interface": iface}, world.ctx)
+    assert res["valid"] is (result == "valid"), res
+
+
+# ---------------------------------------------------------------------- capture editing
+
+
+@given(parsers.re(r'the capture "(?P<name>[^"]+)" merged with itself is open$'))
+def open_doubled(world: World, tmp_path: Path, name: str) -> None:
+    import subprocess  # noqa: PLC0415
+
+    from pcap_backend.tshark import find_tool  # noqa: PLC0415
+
+    doubled = tmp_path / f"doubled-{name}"
+    source = FIXTURES / name
+    subprocess.run(
+        [str(find_tool("mergecap")), "-w", str(doubled), str(source), str(source)], check=True
+    )
+    world.info = world.call(world.service.open, {"path": str(doubled)})
+    assert world.error is None, world.error
+
+
+def _edit(world: World, tmp_path: Path, **params: Any) -> None:
+    world.exported = world.call(
+        world.service.edit_capture, {"dest": str(tmp_path / "edited.pcapng"), **params}
+    )
+    assert world.error is None, world.error
+
+
+@when(parsers.re(r'I shift the capture\'s time by "(?P<offset>[^"]+)"$'))
+def shift_time(world: World, tmp_path: Path, offset: str) -> None:
+    _edit(world, tmp_path, operation="timeShift", offset=offset)
+
+
+@when(parsers.re(r'I keep the packets "(?P<frames>[^"]+)"$'))
+def keep_packets(world: World, tmp_path: Path, frames: str) -> None:
+    _edit(world, tmp_path, operation="keep", frames=frames)
+
+
+@when("I remove the duplicate packets")
+def remove_duplicates(world: World, tmp_path: Path) -> None:
+    _edit(world, tmp_path, operation="dedup")
+
+
+@when(parsers.re(r"I split the capture every (?P<n>\d+) packets$"))
+def split_capture(world: World, tmp_path: Path, n: str) -> None:
+    out = tmp_path / "pieces"
+    out.mkdir()
+    world.exported = world.call(
+        world.service.edit_capture, {"operation": "split", "packets": int(n), "dir": str(out)}
+    )
+    assert world.error is None, world.error
+
+
+@then(parsers.re(r"the edited capture has (?P<count>\d+) packets$"))
+def edited_count(world: World, count: str) -> None:
+    assert world.exported is not None and world.exported["packets"] == int(count)
+
+
+@then(parsers.re(r"the edited capture starts at (?P<epoch>[\d.]+)$"))
+def edited_start(world: World, epoch: str) -> None:
+    assert world.exported is not None
+    info = world.service.open({"path": world.exported["path"]}, world.ctx)
+    assert info["startTime"] == pytest.approx(float(epoch), abs=1e-6)
+
+
+@then(parsers.re(r"(?P<count>\d+) duplicates were removed$"))
+def duplicates_removed(world: World, count: str) -> None:
+    assert world.exported is not None and world.exported["removed"] == int(count)
+
+
+@then(parsers.re(r"it is split into files of (?P<counts>.+) packets$"))
+def split_into(world: World, counts: str) -> None:
+    from pcap_backend import comments  # noqa: PLC0415
+
+    assert world.exported is not None
+    files = [Path(p) for p in world.exported["files"]]
+    assert [comments.packet_count(p) for p in files] == numbers(counts)

@@ -1,11 +1,15 @@
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { BackendClient, ErrorCodes, RpcError, findPython } from "./backendClient";
+import type { CaptureLimits } from "./captureModel";
+import { discardTemporaryCapture, isTemporaryCapture } from "./tempCaptures";
 import { Settings, getSetting, readQuickDetail, readSettings, updateSetting } from "./config";
 import type { ExplainOutcome, ExplainSink, FilterAssistant, SuggestOutcome } from "./ai";
 import {
+  CaptureEvent,
   ColoringResult,
   FilterEvent,
   HostToWebview,
@@ -60,6 +64,16 @@ interface CommentEditsChange {
   reload: boolean;
 }
 
+/** What "PCAP: Start Capture…" asks of the new capture's editor (capture_start). */
+export interface CaptureRequest {
+  interfaces: string[];
+  /** Friendly names of the interfaces (for messages). */
+  labels: string[];
+  filter: string;
+  limits: CaptureLimits;
+  promiscuous: boolean;
+}
+
 /**
  * A capture file. The only thing that can be edited is packet comments: the
  * document holds the edits not saved yet (frame → new comment, "" deletes),
@@ -69,12 +83,23 @@ export class PcapDocument implements vscode.CustomDocument {
   private edits = new Map<number, string>();
   private readonly changeEmitter = new vscode.EventEmitter<CommentEditsChange>();
   readonly onDidChangeEdits = this.changeEmitter.event;
+  /** An unsaved capture (tempCaptures.ts): always dirty, discarded when closed. */
+  readonly temporary: boolean;
+  /** The live capture to start, until the first load starts it (reloads open the file). */
+  captureRequest?: CaptureRequest;
+  /** VS Code was told the document is dirty (unsaved captures only). */
+  markedUnsaved = false;
+  private readonly onDispose?: () => void;
 
   constructor(
     readonly uri: vscode.Uri,
     restored?: Map<number, string>,
+    options: { temporary?: boolean; capture?: CaptureRequest; onDispose?: () => void } = {},
   ) {
     this.edits = new Map(restored ?? []);
+    this.temporary = !!options.temporary;
+    this.captureRequest = options.capture;
+    this.onDispose = options.onDispose;
   }
 
   get editCount(): number {
@@ -111,6 +136,7 @@ export class PcapDocument implements vscode.CustomDocument {
 
   dispose(): void {
     this.changeEmitter.dispose();
+    this.onDispose?.();
   }
 }
 
@@ -128,9 +154,12 @@ export class PcapEditorProvider implements vscode.CustomEditorProvider<PcapDocum
   private readonly sessions = new Set<PcapEditorSession>();
   private active?: PcapEditorSession;
   private readonly changeEmitter = new vscode.EventEmitter<
-    vscode.CustomDocumentEditEvent<PcapDocument>
+    | vscode.CustomDocumentEditEvent<PcapDocument>
+    | vscode.CustomDocumentContentChangeEvent<PcapDocument>
   >();
   readonly onDidChangeCustomDocument = this.changeEmitter.event;
+  /** Captures to start, by the URI of the (empty) file their editor opens. */
+  private readonly pendingCaptures = new Map<string, CaptureRequest>();
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -172,7 +201,20 @@ export class PcapEditorProvider implements vscode.CustomEditorProvider<PcapDocum
         this.log.warn(`could not restore unsaved packet comments: ${String(err)}`);
       }
     }
-    return new PcapDocument(uri, restored);
+    const key = uri.toString();
+    const capture = this.pendingCaptures.get(key);
+    this.pendingCaptures.delete(key);
+    const temporary = isTemporaryCapture(this.context, uri);
+    return new PcapDocument(uri, restored, {
+      temporary,
+      capture,
+      onDispose: temporary ? () => discardTemporaryCapture(this.context, uri.fsPath) : undefined,
+    });
+  }
+
+  /** The next editor opened on `uri` starts this live capture into it. */
+  queueCapture(uri: vscode.Uri, request: CaptureRequest): void {
+    this.pendingCaptures.set(uri.toString(), request);
   }
 
   resolveCustomEditor(document: PcapDocument, panel: vscode.WebviewPanel): void {
@@ -185,22 +227,46 @@ export class PcapEditorProvider implements vscode.CustomEditorProvider<PcapDocum
       (changes, label) => this.editComments(document, changes, label),
     );
     this.sessions.add(session);
-    this.active = session;
+    this.setActive(session);
     panel.onDidChangeViewState(() => {
       if (panel.active) {
-        this.active = session;
+        this.setActive(session);
       }
     });
     // Focusing one of this capture's statistics/follow panels makes it the
     // target of capture commands too (not whichever editor was focused last).
-    session.onDidActivate(() => (this.active = session));
+    session.onDidActivate(() => this.setActive(session));
+    session.onDidChangeCapture(() => this.updateContext());
     panel.onDidDispose(() => {
       this.sessions.delete(session);
       if (this.active === session) {
-        this.active = undefined;
+        this.setActive(undefined);
       }
       void session.dispose();
     });
+    if (document.temporary && !document.markedUnsaved) {
+      this.markUnsaved(document);
+    }
+  }
+
+  private setActive(session: PcapEditorSession | undefined): void {
+    this.active = session;
+    this.updateContext();
+  }
+
+  /** `pcapViewer.capturing`: the active capture is live (Stop Capture in the editor title). */
+  private updateContext(): void {
+    void vscode.commands.executeCommand(
+      "setContext",
+      "pcapViewer.capturing",
+      !!this.active?.capturing,
+    );
+  }
+
+  /** An unsaved capture: VS Code shows it dirty, so saving and closing ask what to do with it. */
+  private markUnsaved(document: PcapDocument): void {
+    document.markedUnsaved = true;
+    this.changeEmitter.fire({ document });
   }
 
   get activeSession(): PcapEditorSession | undefined {
@@ -224,6 +290,10 @@ export class PcapEditorProvider implements vscode.CustomEditorProvider<PcapDocum
     document: PcapDocument,
     cancellation: vscode.CancellationToken,
   ): Promise<void> {
+    if (document.temporary) {
+      await this.saveTemporary(document, cancellation);
+      return;
+    }
     await this.saveComments(document, undefined, cancellation);
   }
 
@@ -232,11 +302,55 @@ export class PcapEditorProvider implements vscode.CustomEditorProvider<PcapDocum
     destination: vscode.Uri,
     cancellation: vscode.CancellationToken,
   ): Promise<void> {
+    if (document.temporary) {
+      await this.stopCaptureToSave(document);
+    }
     await this.saveComments(document, destination, cancellation);
   }
 
   async revertCustomDocument(document: PcapDocument): Promise<void> {
+    // (An unsaved capture then counts as discarded: closing it no longer asks.)
     document.clear(false);
+  }
+
+  /**
+   * Save an unsaved capture: ask where (Save As), write it there with its
+   * comment edits, open it, and close this one (which discards the temporary file).
+   */
+  private async saveTemporary(
+    document: PcapDocument,
+    cancellation: vscode.CancellationToken,
+  ): Promise<void> {
+    await this.stopCaptureToSave(document);
+    const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? os.homedir();
+    const target = await vscode.window.showSaveDialog({
+      defaultUri: vscode.Uri.file(path.join(folder, path.basename(document.uri.fsPath))),
+      filters: { "pcapng capture": ["pcapng"] },
+      title: "Save Capture",
+    });
+    if (!target) {
+      throw new vscode.CancellationError();
+    }
+    await this.saveComments(document, target, cancellation);
+    await vscode.commands.executeCommand("vscode.openWith", target, PcapEditorProvider.viewType);
+    setTimeout(() => void closeEditorsOf(document.uri), 0); // (once this save is done)
+  }
+
+  /** A capture still running is stopped (after asking) before it is saved. */
+  private async stopCaptureToSave(document: PcapDocument): Promise<void> {
+    const session = [...this.sessions].find((s) => s.document === document && s.capturing);
+    if (!session) {
+      return;
+    }
+    const choice = await vscode.window.showWarningMessage(
+      "The capture is still running. Stop it and save the packets captured so far?",
+      { modal: true },
+      "Stop and Save",
+    );
+    if (!choice) {
+      throw new vscode.CancellationError();
+    }
+    await session.stopCapture(true);
   }
 
   async backupCustomDocument(
@@ -320,6 +434,29 @@ export class PcapEditorProvider implements vscode.CustomEditorProvider<PcapDocum
   }
 }
 
+/**
+ * Close the editor tabs showing `uri` once VS Code counts them saved (after an
+ * unsaved capture was saved elsewhere; a dirty tab would ask again).
+ */
+async function closeEditorsOf(uri: vscode.Uri, attempts = 25): Promise<void> {
+  for (let i = 0; i < attempts; i++) {
+    const tabs = vscode.window.tabGroups.all
+      .flatMap((g) => g.tabs)
+      .filter(
+        (t) =>
+          t.input instanceof vscode.TabInputCustom && t.input.uri.toString() === uri.toString(),
+      );
+    if (!tabs.length) {
+      return;
+    }
+    if (tabs.every((t) => !t.isDirty)) {
+      await vscode.window.tabGroups.close(tabs);
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+}
+
 let nextSessionId = 1;
 
 /** Where saved packet-list indexes live (the extension's own storage). */
@@ -352,6 +489,15 @@ export class PcapEditorSession {
   private readonly filterEmitter = new vscode.EventEmitter<string>();
   /** Fires with the new display filter when the viewer applies one (panels that follow the view). */
   readonly onDidChangeFilter = this.filterEmitter.event;
+  private readonly captureEmitter = new vscode.EventEmitter<void>();
+  /** Fires when a live capture starts or stops. */
+  readonly onDidChangeCapture = this.captureEmitter.event;
+  /** A live capture is writing this capture (capture_start). */
+  capturing = false;
+  /** Settings changed while capturing: reload once the capture is indexed. */
+  private reloadWhenCaptured = false;
+  /** Called when the index pass ends (see whenIndexed). */
+  private indexedWaiters: (() => void)[] = [];
   private client?: BackendClient;
   private info?: OpenResult;
   private filter = "";
@@ -430,6 +576,11 @@ export class PcapEditorSession {
 
   /** (Re)start the backend and index the file. */
   async load(): Promise<void> {
+    if (this.capturing) {
+      // Restarting would end the capture: apply the settings once it's done.
+      this.reloadWhenCaptured = true;
+      return;
+    }
     const seq = ++this.loadSeq;
     const settings = readSettings(this.uri);
     this.watchKeyLog(settings.tlsKeyLogFile);
@@ -498,12 +649,19 @@ export class PcapEditorSession {
           this.post({ type: "filterEvent", ...(p as unknown as FilterEvent) });
         }
       });
+      client.onNotification("capture", (p) =>
+        this.onCaptureEvent(client, p as unknown as CaptureEvent),
+      );
       const info = await this.openFile(client, settings);
       if (seq !== this.loadSeq || this.disposed) {
         stopIndexEvents();
         return;
       }
       this.info = info;
+      if (info.capture?.running) {
+        this.capturing = true;
+        this.captureEmitter.fire();
+      }
       if (info.fromCache) {
         this.log.info(`${this.uri.fsPath}: opened from the saved index (no index pass)`);
       }
@@ -545,7 +703,9 @@ export class PcapEditorSession {
         void this.pushComments(false); // edits made in another editor, or restored
       }
       void this.postAiAvailability();
-      void this.offerMerge();
+      if (!this.document.temporary) {
+        void this.offerMerge();
+      }
     } catch (err) {
       if (seq !== this.loadSeq || this.disposed) {
         return;
@@ -696,6 +856,15 @@ export class PcapEditorSession {
       this.log.warn(`${this.uri.fsPath}: indexing stopped: ${error}`);
     }
     this.indexing = false;
+    this.indexedWaiters.splice(0).forEach((resolve) => resolve());
+    if (this.capturing) {
+      this.capturing = false; // (its "stopped" event normally came first)
+      this.captureEmitter.fire();
+    }
+    if (this.reloadWhenCaptured) {
+      this.reloadWhenCaptured = false;
+      setTimeout(() => void this.load(), 0);
+    }
     if (this.info) {
       this.post({
         type: "indexDone",
@@ -721,44 +890,66 @@ export class PcapEditorSession {
         title: `Indexing ${vscode.workspace.asRelativePath(this.uri)}`,
       },
       async (progress) => {
-        const pending = client.send<OpenResult>(
-          "open",
-          {
-            path: this.uri.fsPath,
-            lua: settings.luaScripts,
-            decodeAs: settings.decodeAs,
-            prefs: settings.prefs,
-            names: settings.nameResolution,
-            columns: settings.columns.map((c) => c.field),
-            // Show the first rows while the rest is indexed, and reuse saved indexes.
-            stream: true,
-            // Colors come with the rows: the index pass evaluates the coloring rules.
-            coloring: coloringRules(settings).length
-              ? { rules: coloringPayload(coloringRules(settings)) }
-              : undefined,
-            cache:
-              settings.indexCacheBytes > 0
-                ? { dir: indexCacheDir(this.context), maxBytes: settings.indexCacheBytes }
-                : undefined,
+        const common = {
+          lua: settings.luaScripts,
+          decodeAs: settings.decodeAs,
+          prefs: settings.prefs,
+          names: settings.nameResolution,
+          columns: settings.columns.map((c) => c.field),
+          // Show the first rows while the rest is indexed.
+          stream: true,
+          // Colors come with the rows: the index pass evaluates the coloring rules.
+          coloring: coloringRules(settings).length
+            ? { rules: coloringPayload(coloringRules(settings)) }
+            : undefined,
+        };
+        // A new capture's first load starts it; later loads (settings) open the file.
+        const capture = this.document.captureRequest;
+        const [method, params] = capture
+          ? [
+              "capture_start",
+              {
+                ...common,
+                dest: this.uri.fsPath,
+                interfaces: capture.interfaces,
+                filter: capture.filter,
+                limits: capture.limits,
+                promiscuous: capture.promiscuous,
+              },
+            ]
+          : [
+              "open",
+              {
+                ...common,
+                path: this.uri.fsPath,
+                // Reuse saved indexes (not for unsaved captures: they are discarded).
+                cache:
+                  settings.indexCacheBytes > 0 && !this.document.temporary
+                    ? { dir: indexCacheDir(this.context), maxBytes: settings.indexCacheBytes }
+                    : undefined,
+              },
+            ];
+        const pending = client.send<OpenResult>(method, params, {
+          timeoutMs: 0,
+          onProgress: (p) => {
+            this.post({
+              type: "progress",
+              phase: p.phase,
+              fraction: p.fraction,
+              frames: p.frames,
+            });
+            if (typeof p.frames === "number") {
+              progress.report({ message: `${p.frames.toLocaleString()} packets` });
+            }
           },
-          {
-            timeoutMs: 0,
-            onProgress: (p) => {
-              this.post({
-                type: "progress",
-                phase: p.phase,
-                fraction: p.fraction,
-                frames: p.frames,
-              });
-              if (typeof p.frames === "number") {
-                progress.report({ message: `${p.frames.toLocaleString()} packets` });
-              }
-            },
-          },
-        );
+        });
         this.loading = { id: pending.id, client };
         try {
-          return await pending.promise;
+          const info = await pending.promise;
+          if (capture && this.document.captureRequest === capture) {
+            this.document.captureRequest = undefined; // started (a failed start is retried by Reload)
+          }
+          return info;
         } finally {
           this.loading = undefined;
         }
@@ -928,10 +1119,59 @@ export class PcapEditorSession {
         await vscode.env.clipboard.writeText(String(msg.text));
         vscode.window.setStatusBarMessage("Copied to clipboard", 2000);
         return;
+      case "stopCapture":
+        await this.stopCapture();
+        return;
       case "showLog":
         this.log.show();
         return;
     }
+  }
+
+  // ------------------------------------------------------------------ live capture
+
+  /** The backend's "capture" notification: statistics go to the viewer; the end is reported. */
+  private onCaptureEvent(client: BackendClient, p: CaptureEvent): void {
+    if (this.client !== client || this.disposed) {
+      return;
+    }
+    this.post({ type: "captureEvent", ...p });
+    if (p.event !== "stopped") {
+      return;
+    }
+    const name = path.basename(this.uri.fsPath);
+    this.log.info(
+      `${name}: capture stopped after ${p.packets} packets, ${p.bytes} bytes` +
+        (p.dropped ? `, ${p.dropped} dropped` : ""),
+    );
+    if (p.error) {
+      this.log.error(`${name}: ${p.error}`);
+      void vscode.window
+        .showErrorMessage(`PCAP Viewer: the capture stopped: ${p.error}`, "Show Log")
+        .then((choice) => choice && this.log.show());
+    }
+    this.capturing = false;
+    this.captureEmitter.fire();
+  }
+
+  /** Stop the live capture; with `wait`, until its last packets are indexed. */
+  async stopCapture(wait = false): Promise<void> {
+    const client = this.client;
+    if (!client?.running || !this.capturing) {
+      return;
+    }
+    const indexed = this.whenIndexed();
+    await client.request("capture_stop", {});
+    if (wait) {
+      await indexed;
+    }
+  }
+
+  /** Resolves once the index pass is done (at once when it is). */
+  whenIndexed(): Promise<void> {
+    return this.indexing
+      ? new Promise((resolve) => this.indexedWaiters.push(resolve))
+      : Promise.resolve();
   }
 
   private async forwardRpc(
@@ -1276,6 +1516,10 @@ export class PcapEditorSession {
     this.disposeEmitter.fire();
     this.disposeEmitter.dispose();
     this.activateEmitter.dispose();
+    this.indexedWaiters.splice(0).forEach((resolve) => resolve());
+    this.capturing = false;
+    this.captureEmitter.fire();
+    this.captureEmitter.dispose();
     for (const d of this.disposables) {
       d.dispose();
     }

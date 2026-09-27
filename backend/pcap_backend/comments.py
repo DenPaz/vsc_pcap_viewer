@@ -80,13 +80,13 @@ def _options(data: bytes, endian: str) -> Iterator[tuple[int, bytes]]:
         pos += 4 + length + (-length % 4)
 
 
-def read_comments(path: Path) -> dict[int, list[str]]:
-    """Comments by frame number (1-based, counting every packet block)."""
+def _packet_blocks(path: Path) -> Iterator[tuple[int, bytes, str]]:
+    """(block type, body, byte order) of every packet block (EPB, SPB and
+    obsolete PB) of a pcapng file, in order; nothing if it isn't pcapng. A
+    truncated last block ends it."""
     stream = _open(path)
     if stream is None:
-        return {}
-    comments: dict[int, list[str]] = {}
-    frame = 0
+        return
     endian = "<"
     with stream:
         while True:
@@ -104,21 +104,31 @@ def read_comments(path: Path) -> dict[int, list[str]]:
                 body = stream.read(total - 8)
             if total < 12 or len(body) < total - 8:
                 break  # truncated: keep what was read
-            body = body[:-4]  # the trailing copy of the total length
-            if block_type in (_EPB, _OBSOLETE_PB):
-                frame += 1
-                captured = struct.unpack_from(endian + "I", body, 12)[0]
-                start = 20 + captured + (-captured % 4)
-                texts = [
-                    value.decode("utf-8", "replace")
-                    for code, value in _options(body[start:], endian)
-                    if code == _OPT_COMMENT
-                ]
-                if texts:
-                    comments[frame] = texts
-            elif block_type == _SPB:
-                frame += 1
+            if block_type in (_EPB, _OBSOLETE_PB, _SPB):
+                yield block_type, body[:-4], endian  # (without the trailing length)
+
+
+def read_comments(path: Path) -> dict[int, list[str]]:
+    """Comments by frame number (1-based, counting every packet block)."""
+    comments: dict[int, list[str]] = {}
+    for frame, (block_type, body, endian) in enumerate(_packet_blocks(path), start=1):
+        if block_type == _SPB:
+            continue  # (no options)
+        captured = struct.unpack_from(endian + "I", body, 12)[0]
+        start = 20 + captured + (-captured % 4)
+        texts = [
+            value.decode("utf-8", "replace")
+            for code, value in _options(body[start:], endian)
+            if code == _OPT_COMMENT
+        ]
+        if texts:
+            comments[frame] = texts
     return comments
+
+
+def packet_count(path: Path) -> int:
+    """The number of packets of a pcapng file (0 if it isn't pcapng)."""
+    return sum(1 for _ in _packet_blocks(path))
 
 
 def editcap_args(

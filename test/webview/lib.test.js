@@ -199,6 +199,10 @@ suite("webview lib: bytes", () => {
     assert.equal(lib.formatRelativeTime(""), "");
     assert.equal(lib.formatBytes(512), "512 B");
     assert.equal(lib.formatBytes(1536), "1.5 KB");
+    assert.equal(lib.formatDuration(5.9), "0:05");
+    assert.equal(lib.formatDuration(754), "12:34");
+    assert.equal(lib.formatDuration(3723), "1:02:03");
+    assert.equal(lib.formatDuration(-1), "0:00");
   });
 });
 

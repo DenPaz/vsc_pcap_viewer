@@ -41,6 +41,31 @@ export interface OpenResult {
   coloring?: { coloringId: number; colored?: number; errors?: Record<string, string> };
   /** Comment edits can be saved into the file itself (plain pcapng). */
   comments?: { inPlace: boolean };
+  /** A live capture writes this file (capture_start): running, or how it went. */
+  capture?: CaptureState;
+}
+
+/** The backend's description of a live capture (capture_start, "done" info). */
+export interface CaptureState {
+  interfaces: string[];
+  filter: string;
+  running: boolean;
+  startedAt: number;
+  endedAt: number | null;
+  packets: number;
+  bytes: number;
+  dropped: number | null;
+  error: string | null;
+}
+
+/** The backend's "capture" notification: statistics now and then, then "stopped". */
+export interface CaptureEvent {
+  event: "stats" | "stopped";
+  packets: number;
+  bytes: number;
+  seconds: number;
+  dropped?: number | null;
+  error?: string;
 }
 
 /** Backend methods the webview may call directly (anything else is refused). */
@@ -117,6 +142,7 @@ export type WebviewToHost =
   | { type: "askAboutPackets"; frames: number[] }
   | { type: "marks"; count: number }
   | { type: "copy"; text: string }
+  | { type: "stopCapture" }
   | { type: "showLog" };
 
 export type HostToWebview =
@@ -161,6 +187,8 @@ export type HostToWebview =
    * estimate); with a filter applied, `view` is how many of its matches are shown.
    */
   | { type: "indexProgress"; frames: number; fraction: number | null; view?: ViewCounts }
+  /** A live capture's statistics, or its end. */
+  | ({ type: "captureEvent" } & CaptureEvent)
   /** The index pass ended: the final capture info (with `error` if it stopped early). */
   | { type: "indexDone"; info: OpenResult; error?: string; view?: ViewCounts }
   /** A streaming filter (set_filter with `stream`): more matches, or its end. */

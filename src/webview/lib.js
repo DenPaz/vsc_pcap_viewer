@@ -645,6 +645,18 @@
     return `${u === 0 ? v : v.toFixed(1)} ${units[u]}`;
   }
 
+  /**
+   * A duration as a clock: "0:05", "12:34", "1:02:03".
+   * @param {number} seconds
+   */
+  function formatDuration(seconds) {
+    const s = Math.max(0, Math.floor(seconds));
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const ss = String(s % 60).padStart(2, "0");
+    return h ? `${h}:${String(m).padStart(2, "0")}:${ss}` : `${m}:${ss}`;
+  }
+
   // ------------------------------------------------------------------ packet-list cells
 
   const MAC6_RE = /^[0-9a-fA-F]{2}(:[0-9a-fA-F]{2}){5}$/;
@@ -1036,6 +1048,7 @@
     formatOffset,
     formatRelativeTime,
     formatBytes,
+    formatDuration,
     rowColors,
     protocolFilterName,
     cellFilter,

@@ -233,6 +233,49 @@ suite("PCAP Viewer smoke test", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  test("live capture: an unsaved capture that fills, stops, saves elsewhere and is discarded", async () => {
+    const ext = vscode.extensions.all.find((e) => e.packageJSON.name === "pcap-viewer");
+    const api = (await ext!.activate()) as PcapViewerApi;
+    const uri = await vscode.commands.executeCommand<vscode.Uri | undefined>(
+      "pcapViewer.startCapture",
+      { interfaces: ["fake0"] },
+    );
+    assert.ok(uri, "the capture opened");
+    const session = await waitFor(() =>
+      api.provider.allSessions.find((s) => s.uri.fsPath === uri.fsPath && s.capturing),
+    );
+    assert.ok(session.document.temporary);
+    const dirty = () => vscode.window.tabGroups.activeTabGroup.activeTab?.isDirty;
+    await waitFor(() => (dirty() ? true : undefined));
+    await waitForAsync(async () => {
+      const page = await session.backend?.request<{ total: number }>("list_packets", {
+        offset: 0,
+        limit: 5,
+      });
+      return page && page.total >= 3 ? true : undefined;
+    });
+    await vscode.commands.executeCommand("pcapViewer.stopCapture");
+    await waitFor(() => (indexed(session) && !session.capturing ? true : undefined));
+    const frames = session.openInfo!.frames;
+    assert.ok(frames >= 3 && frames <= 26, `${frames} packets`);
+
+    // Save As writes the capture elsewhere (the dialog is VS Code's; call the provider).
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pcap-smoke-capture-"));
+    const saved = vscode.Uri.file(path.join(dir, "saved.pcapng"));
+    await api.provider.saveCustomDocumentAs(
+      session.document,
+      saved,
+      new vscode.CancellationTokenSource().token,
+    );
+    assert.ok(fs.statSync(saved.fsPath).size > 0);
+
+    // Closing without saving discards the temporary capture (a few seconds later).
+    await vscode.commands.executeCommand("workbench.action.revertAndCloseActiveEditor");
+    await waitFor(() => (api.provider.allSessions.length ? undefined : true), 10_000);
+    await waitFor(() => (fs.existsSync(uri.fsPath) ? undefined : true), 20_000);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
   test("changing name resolution re-indexes open captures", async () => {
     const ext = vscode.extensions.all.find((e) => e.packageJSON.name === "pcap-viewer");
     const api = (await ext!.activate()) as PcapViewerApi;

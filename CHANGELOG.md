@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Live capture: _PCAP: Start Capture…_ captures on one or more interfaces,
+  with a capture filter checked as you type, into a new capture that fills as
+  packets arrive (the list follows them). _Stop_ in the status bar or the
+  editor title, or `pcapViewer.capture.stopAfter*`. The capture is unsaved
+  until saved (`Ctrl+S` asks where); closing it without saving discards it.
+- Capture editing (_PCAP: Edit Capture…_): time shift, remove duplicate
+  packets, keep packets by number or time, truncate packets, split into files
+  of N packets or seconds, and embed a TLS key log in the capture. The result
+  opens as a new unsaved capture.
 - Packet comments: shown on the packet's row and above its details; add, edit
   and delete them (`Ctrl+Alt+C`, the row menu, _PCAP: Delete All Packet
   Comments_). Edits are ordinary unsaved changes: undo with `Ctrl+Z`, save

@@ -11,6 +11,7 @@ waited for and its pipes closed, so nothing leaks.
 """
 
 import contextlib
+import signal
 import subprocess
 import sys
 import threading
@@ -59,6 +60,28 @@ def kill_process(proc: Proc) -> bool:
         return False
     except OSError as exc:
         _log(f"could not stop {_program(proc).name} (pid {proc.pid}): {exc}")
+        return False
+    return True
+
+
+def interrupt_process(proc: Proc) -> bool:
+    """Ask ``proc`` to stop cleanly (SIGINT, like Ctrl+C: dumpcap then finishes
+    its output). Windows has no such signal for a child without a console: it
+    is killed instead. Never raises; False when the OS refused (see kill_process).
+    """
+    if sys.platform == "win32":
+        return kill_process(proc)
+    if proc.poll() is not None:
+        return True
+    try:
+        proc.send_signal(signal.SIGINT)
+    except ProcessLookupError:
+        return True
+    except PermissionError as exc:
+        _warn_kill_denied(proc, exc)
+        return False
+    except OSError as exc:
+        _log(f"could not interrupt {_program(proc).name} (pid {proc.pid}): {exc}")
         return False
     return True
 
