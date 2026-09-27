@@ -249,6 +249,16 @@
         "category": "PCAP"
       },
       {
+        "command": "pcapViewer.summarizeCapture",
+        "title": "Summarize Capture with Copilot",
+        "category": "PCAP"
+      },
+      {
+        "command": "pcapViewer.askAboutAnomaly",
+        "title": "Ask Copilot About Expert Information",
+        "category": "PCAP"
+      },
+      {
         "command": "pcapViewer.clearIndexCache",
         "title": "Clear Index Cache",
         "category": "PCAP"
@@ -685,6 +695,14 @@
         {
           "command": "pcapViewer.embedTlsKeys",
           "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/"
+        },
+        {
+          "command": "pcapViewer.summarizeCapture",
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow || activeWebviewPanelId == pcapViewer.tcpGraph"
+        },
+        {
+          "command": "pcapViewer.askAboutAnomaly",
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow || activeWebviewPanelId == pcapViewer.tcpGraph"
         }
       ],
       "editor/title": [
@@ -1135,7 +1153,7 @@
         "pcapViewer.ai.enabled": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "Offer AI help through VS Code's Language Model API (GitHub Copilot): display filters (the filter bar's ✨ action, *PCAP: Suggest Display Filter…* and `@pcap` in chat), where only your request, the current filter and protocol/field names are sent and suggestions are checked with tshark; and explaining packets (*Ask Copilot About This Packet…*, `@pcap /explain`), which sends packet data only if `#pcapViewer.ai.allowPacketData#` allows it."
+          "markdownDescription": "Offer AI help through VS Code's Language Model API (GitHub Copilot): display filters (the filter bar's ✨ action, *PCAP: Suggest Display Filter…* and `@pcap` in chat), where only your request, the current filter and protocol/field names are sent and suggestions are checked with tshark; the capture summary (`@pcap /summary`), anomaly explanations (*Ask Copilot…* in the Expert Information and TCP Stream Graph panels, `@pcap /anomaly`) and `@pcap` questions answered with tools, which send statistics only if `#pcapViewer.ai.allowCaptureStatistics#` allows it; and explaining packets (*Ask Copilot About This Packet…*, `@pcap /explain`), which sends packet data only if `#pcapViewer.ai.allowPacketData#` allows it."
         },
         "pcapViewer.ai.allowPacketData": {
           "type": "boolean",
@@ -1148,6 +1166,12 @@
           "default": false,
           "markdownDescription": "When explaining packets (with `#pcapViewer.ai.allowPacketData#`), also send raw bytes: the first 256 bytes of each packet as hex, and payload fields as bytes. Off: the hex dump is never sent and payload bytes are replaced by \"[N bytes not sent]\". User settings only.",
           "scope": "application"
+        },
+        "pcapViewer.ai.allowCaptureStatistics": {
+          "type": "boolean",
+          "default": false,
+          "scope": "application",
+          "markdownDescription": "Allow the AI features that send statistics computed from the capture (never packet contents) to the language model: *PCAP: Summarize Capture with Copilot* / `@pcap /summary`, *Ask Copilot…* in the Expert Information and TCP Stream Graph panels / `@pcap /anomaly`, and `@pcap` questions answered with tools. They send the capture properties, protocol hierarchy, top 15 conversations and endpoints (addresses, ports, host names, counts), expert information counts, traffic over time, the selected expert entries or up to 200 packets of a TCP stream as numbers and flags, and tool results (counts and statistics). You are asked once when this is off; `#pcapViewer.ai.allowPacketData#` implies it. User settings only."
         }
       }
     },
@@ -1162,14 +1186,167 @@
         "id": "pcapViewer.pcap",
         "name": "pcap",
         "fullName": "PCAP Viewer",
-        "description": "Ask for a Wireshark display filter for the open capture, or /explain packets",
+        "description": "Ask about the open capture (answered with tools where VS Code has them) or for a display filter; /summary, /anomaly, /explain",
         "isSticky": false,
         "commands": [
           {
             "name": "explain",
             "description": "Explain packets of the open capture, e.g. /explain 12 15-17 why the reset? (sends packet data: pcapViewer.ai.allowPacketData)"
+          },
+          {
+            "name": "summary",
+            "description": "Summarize the open capture from its statistics (sends statistics: pcapViewer.ai.allowCaptureStatistics)"
+          },
+          {
+            "name": "anomaly",
+            "description": "Explain expert information or a TCP stream, e.g. /anomaly stream 3 why so slow? (sends statistics: pcapViewer.ai.allowCaptureStatistics)"
           }
         ]
+      }
+    ],
+    "languageModelTools": [
+      {
+        "name": "pcap_capture_info",
+        "displayName": "Capture Properties",
+        "toolReferenceName": "pcapCaptureInfo",
+        "canBeReferencedInPrompt": true,
+        "userDescription": "The open capture's packets, duration, size and link type (PCAP Viewer)",
+        "modelDescription": "Properties of the capture open in PCAP Viewer: number of packets, first/last packet time, duration, file size, link type and file format.",
+        "tags": [
+          "pcap",
+          "wireshark"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "pcap_count",
+        "displayName": "Count Packets",
+        "toolReferenceName": "pcapCount",
+        "canBeReferencedInPrompt": true,
+        "userDescription": "Count the packets of the open capture matching a display filter (PCAP Viewer)",
+        "modelDescription": "Count the packets of the open capture that match a Wireshark display filter (for example 'dns.flags.rcode != 0' for failed DNS responses). Returns the match count and the total. Doesn't change what the viewer shows.",
+        "tags": [
+          "pcap",
+          "wireshark"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "filter": {
+              "type": "string",
+              "description": "A Wireshark display filter; empty counts every packet."
+            }
+          },
+          "required": [
+            "filter"
+          ]
+        }
+      },
+      {
+        "name": "pcap_stats",
+        "displayName": "Capture Statistics",
+        "toolReferenceName": "pcapStats",
+        "canBeReferencedInPrompt": true,
+        "userDescription": "Protocol hierarchy, conversations, endpoints, expert information or IO statistics of the open capture (PCAP Viewer)",
+        "modelDescription": "Statistics of the open capture computed by tshark: 'phs' protocol hierarchy, 'conv' conversations or 'endpoints' (with type eth, ip, ipv6, tcp or udp; top rows by bytes), 'expert' expert information counts, 'io' packets and bytes over time. An optional display filter limits them to matching packets.",
+        "tags": [
+          "pcap",
+          "wireshark"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "phs",
+                "conv",
+                "endpoints",
+                "expert",
+                "io"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "eth",
+                "ip",
+                "ipv6",
+                "tcp",
+                "udp"
+              ],
+              "description": "For conv and endpoints (default tcp)."
+            },
+            "filter": {
+              "type": "string",
+              "description": "Optional Wireshark display filter."
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        }
+      },
+      {
+        "name": "pcap_field_search",
+        "displayName": "Find Display Filter Fields",
+        "toolReferenceName": "pcapFieldSearch",
+        "canBeReferencedInPrompt": true,
+        "userDescription": "Wireshark display filter fields by prefix (PCAP Viewer)",
+        "modelDescription": "Find Wireshark display filter field names by prefix (for example 'dns.flags' or 'tcp.analysis'), with their types and descriptions. Use it before writing a filter with a field you are not sure about.",
+        "tags": [
+          "pcap",
+          "wireshark"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "prefix": {
+              "type": "string",
+              "description": "Start of a field or protocol name."
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 20
+            }
+          },
+          "required": [
+            "prefix"
+          ]
+        }
+      },
+      {
+        "name": "pcap_list_packets",
+        "displayName": "List Packets",
+        "toolReferenceName": "pcapListPackets",
+        "canBeReferencedInPrompt": true,
+        "userDescription": "The first packets of the open capture matching a display filter, summary lines only (PCAP Viewer)",
+        "modelDescription": "List the first packets of the open capture matching a display filter (at most 20): number, time, source, destination, protocol, length and info column only. Doesn't change what the viewer shows.",
+        "tags": [
+          "pcap",
+          "wireshark"
+        ],
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "filter": {
+              "type": "string",
+              "description": "A Wireshark display filter."
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 20
+            }
+          },
+          "required": [
+            "filter"
+          ]
+        }
       }
     ]
   },

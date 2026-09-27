@@ -102,6 +102,8 @@ _FRAMENUM_HINT = re.compile(
 # Most frames one request may name or return (multi-selection: Shift+click ranges,
 # copy, export). 4 bytes each in the backend, ~8 in JSON.
 MAX_SELECTION = 1_000_000
+# count_matches returns at most this many matching frame numbers.
+MAX_MATCH_FRAMES = 100
 PROGRESS_INTERVAL_S = 0.2
 # Streaming open: `open` returns once this many rows are indexed (or after
 # FIRST_BATCH_S with at least one), and the pass goes on in the background.
@@ -1150,6 +1152,40 @@ class PcapService:
         tshark = self._file.tshark if self._file else self._require_tshark()
         error = tshark.validate_filter(expr, ctx.token)
         return {"valid": error is None, "error": error} if error else {"valid": True}
+
+    def count_matches(self, params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
+        """How many packets match display filter ``filter`` (``""``: all), without
+        touching the viewer's view (the AI tools use it). ``limit`` (at most
+        MAX_MATCH_FRAMES) also returns the first matching frame numbers, in
+        capture order. Results come from and go to the filter cache (also the
+        saved index), so asking again, or applying the filter later, is instant.
+        """
+        expr = param(params, "filter", str, "").strip()
+        limit = param(params, "limit", int, 0)
+        if not 0 <= limit <= MAX_MATCH_FRAMES:
+            raise InvalidParamsError(f"limit must be between 0 and {MAX_MATCH_FRAMES}")
+        f = self._require_file()
+        self._require_indexed()
+        total = f.info.frames
+        matched = self._filters.get(expr) if expr else FrameIndex.all(total)
+        if matched is None and f.cache is not None and f.cache_key is not None:
+            saved = f.cache.load_filter(f.cache_key, expr, total)
+            if saved is not None:
+                matched = FrameIndex(saved, len(saved))
+                self._filters.put(expr, matched)
+        if matched is None:
+            error = f.tshark.validate_filter(expr, ctx.token)
+            if error:
+                raise FilterError(error, {"expr": expr})
+            matched = self._run_filter(f, expr, ctx)
+            self._filters.put(expr, matched)
+            self._save_filter(f, expr, matched)
+        return {
+            "filter": expr,
+            "count": len(matched),
+            "total": total,
+            "frames": matched.slice(0, limit),
+        }
 
     def set_filter(self, params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
         """Apply a display filter to the list (``""``: every packet).
@@ -3456,6 +3492,7 @@ def rpc_methods(service: PcapService) -> dict[str, Callable[[dict[str, Any], Req
         "capture_stop": service.capture_stop,
         "capture_info": service.capture_info,
         "validate_filter": service.validate_filter,
+        "count_matches": service.count_matches,
         "set_filter": service.set_filter,
         "stop_filter": service.stop_filter,
         "list_packets": service.list_packets,

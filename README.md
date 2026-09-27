@@ -75,6 +75,32 @@ reset?`). The answer streams in with _Go to packet_ buttons and _Apply
   Without the chat view, the answer opens in a Markdown editor instead. This
   **sends packet data**, so the first time you are asked, and your choice is
   saved in `pcapViewer.ai.allowPacketData`; see the privacy note below.
+- **Capture summary** (optional, off until you allow it): _PCAP: Summarize
+  Capture with Copilot_ or `@pcap /summary` (add a question: `@pcap /summary
+is anything unusual?`) describes the capture from its statistics only:
+  capture properties, protocol hierarchy, the top conversations and endpoints,
+  expert information counts and traffic over time. Suggested display filters
+  become _Apply filter_ buttons (checked with tshark). This sends statistics
+  that contain addresses and host names, so the first time you are asked, and
+  your choice is saved in `pcapViewer.ai.allowCaptureStatistics`.
+- **Explain expert information and TCP streams** (same setting): _Ask
+  Copilot…_ in the Expert Information panel explains the selected entry (or
+  the capture's errors and warnings when none is selected) with its
+  conversation's statistics; _Ask Copilot_ in the TCP Stream Graph panel
+  explains the stream from its sequence numbers, windows, round-trip times and
+  retransmissions (never its payload), with facts such as the retransmission
+  rate and zero-window events worked out first. Both open the chat view with
+  `@pcap /anomaly …` and suggest filters to look further.
+- **`@pcap` answers with tools** (VS Code releases with language model tools,
+  and the same setting): ask `@pcap` a question ("how many DNS queries got no
+  answer?") and it looks things up in the open capture with read-only tools
+  (`pcap_count`, `pcap_stats`, `pcap_capture_info`, `pcap_field_search` and
+  `pcap_list_packets`), at most 8 calls per question, and cites the filters it
+  used as _Apply filter_ buttons. The tools never change the viewer's filter.
+  Other chat participants and agent mode can use them too (`#pcapCount`…).
+  Listing packets also needs `pcapViewer.ai.allowPacketData`; without it a
+  tool answers that it isn't allowed. Older VS Code releases get display
+  filter suggestions from `@pcap` as before.
 - **Saved and recent filters** in the filter bar's ★ menu (or `↓` on an empty
   filter bar). Saved filters live in the `pcapViewer.savedFilters` setting, so
   they can be personal (user settings) or shared with a project (workspace settings).
@@ -269,6 +295,8 @@ tshark built with them (`tshark --version` lists "with Zstandard", "with LZ4").
 | PCAP: Save Display Filter…                                                                                            |                                       | Save the current filter under a name                                                                              |
 | PCAP: Suggest Display Filter…                                                                                         |                                       | Describe the packets; pick an AI-suggested, tshark-checked filter (also ✨ in the filter bar and `@pcap` in chat) |
 | PCAP: Ask Copilot About Selected Packets…                                                                             |                                       | Explain the selected packets in chat (`@pcap /explain`; sends packet data, asks first)                            |
+| PCAP: Summarize Capture with Copilot                                                                                  |                                       | Describe the capture from its statistics in chat (`@pcap /summary`; sends statistics, asks first)                 |
+| PCAP: Ask Copilot About Expert Information                                                                            |                                       | Explain the capture's errors and warnings in chat (`@pcap /anomaly`; sends statistics, asks first)                |
 | PCAP: Clear Index Cache                                                                                               |                                       | Delete the saved packet-list indexes                                                                              |
 | PCAP: Set TLS Key Log File…                                                                                           |                                       | Decrypt TLS with an `SSLKEYLOGFILE` key log (or stop using it)                                                    |
 | PCAP: Saved Display Filters                                                                                           |                                       | Apply or delete saved filters                                                                                     |
@@ -354,6 +382,7 @@ crash) are removed after 7 days.
 | `pcapViewer.colorize`                   | Color the packet list (default `true`)                                                                                                          |
 | `pcapViewer.ai.enabled`                 | Offer AI help when a language model is available (default `true`)                                                                               |
 | `pcapViewer.ai.allowPacketData`         | Let _Ask Copilot About This Packet…_ / `@pcap /explain` send packet rows and dissection trees (default `false`; asked once; user settings only) |
+| `pcapViewer.ai.allowCaptureStatistics`  | Let the capture summary, anomaly explanations and `@pcap`'s tools send statistics (default `false`; asked once; user settings only)             |
 | `pcapViewer.ai.allowPacketBytes`        | Also send raw bytes when explaining packets (default `false`; user settings only)                                                               |
 | `pcapViewer.capture.stopAfterPackets`   | Stop a live capture after this many packets (`0`: no limit)                                                                                     |
 | `pcapViewer.capture.stopAfterSeconds`   | Stop a live capture after this many seconds (`0`: no limit)                                                                                     |
@@ -605,6 +634,24 @@ See `CLAUDE.md` for architecture notes and design decisions.
   bytes of each packet). Both settings can only be set in user settings, so a
   workspace can't turn them on. The prompt tells the model that packet data is
   untrusted.
+- **Summaries, anomaly explanations and `@pcap`'s tools send statistics, only
+  if you allow it.** With `pcapViewer.ai.allowCaptureStatistics` off (the
+  default; `allowPacketData` implies it) they first ask you. They never send
+  packet contents or bytes, but conversations and endpoints hold addresses,
+  ports and host names. The prompts tell the model that the data is untrusted
+  and to answer only from it.
+
+  | Feature                                      | What is sent to the language model                                                                                                                                                                             | Needs                    |
+  | -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ |
+  | Filter help (✨, _Suggest Display Filter…_)  | Your description, the current filter, protocol names in the capture, matching Wireshark field names and descriptions                                                                                           | `ai.enabled`             |
+  | _Ask Copilot About This Packet…_, `/explain` | Up to 8 packets: their row and dissection tree (250 lines each), your question, the current filter; raw bytes only with `allowPacketBytes` (256 per packet)                                                    | `allowPacketData`        |
+  | _Summarize Capture_, `/summary`              | Capture properties (packets, duration, size, link type), protocol hierarchy (40 rows), top 15 TCP/UDP conversations and IP endpoints by bytes, expert counts by severity and group, traffic in 12 time buckets | `allowCaptureStatistics` |
+  | Expert _Ask Copilot…_, `/anomaly`            | Up to 10 expert entries (severity, group, protocol, summary, count, 5 packet numbers each) and up to 5 of their conversations' statistics rows                                                                 | `allowCaptureStatistics` |
+  | TCP Stream Graph _Ask Copilot_, `/anomaly`   | The stream's endpoints, derived facts (bytes and retransmissions each way, RTT min/median/max, zero windows) and up to 200 packets as numbers and flags: time, direction, seq, length, ack, window, RTT        | `allowCaptureStatistics` |
+  | `@pcap` tools: count, stats, capture info    | Filters the model chose and their packet counts, statistics tables (25 rows), capture properties                                                                                                               | `allowCaptureStatistics` |
+  | `@pcap` tool: field search                   | Field names, types and descriptions matching the model's search words (nothing from the capture)                                                                                                               | `ai.enabled`             |
+  | `@pcap` tool: list packets                   | Up to 20 packet-list rows (the summary line: number, time, addresses, protocol, length, info) for a filter                                                                                                     | `allowPacketData`        |
+
 - CSV exports prefix cells that a spreadsheet would run as a formula (`=`,
   `+`, `@`, `-`…) with `'`, since packet text is attacker-controlled.
 

@@ -118,6 +118,8 @@ suite("PCAP Viewer smoke test", () => {
       "pcapViewer.exportSelected",
       "pcapViewer.selectAll",
       "pcapViewer.askAboutPackets",
+      "pcapViewer.summarizeCapture",
+      "pcapViewer.askAboutAnomaly",
       "pcapViewer.clearIndexCache",
       "pcapViewer.setTlsKeyLogFile",
       "pcapViewer.exportDissections",
@@ -274,6 +276,51 @@ suite("PCAP Viewer smoke test", () => {
     await waitFor(() => (api.provider.allSessions.length ? undefined : true), 10_000);
     await waitFor(() => (fs.existsSync(uri.fsPath) ? undefined : true), 20_000);
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  test("language model tools: registered, and answering, where VS Code has the API", async function () {
+    const ext = vscode.extensions.all.find((e) => e.packageJSON.name === "pcap-viewer");
+    const api = (await ext!.activate()) as PcapViewerApi;
+    type Result = { content: { value?: string }[] };
+    const lm = vscode.lm as unknown as {
+      registerTool?: unknown;
+      tools?: readonly { name: string }[];
+      invokeTool?: (
+        name: string,
+        options: { input: object; toolInvocationToken: undefined },
+      ) => Thenable<Result>;
+    };
+    if (typeof lm.registerTool !== "function") {
+      this.skip(); // (VS Code before the tools API: @pcap works without them)
+    }
+    const names = (lm.tools ?? []).map((t) => t.name);
+    for (const name of [
+      "pcap_capture_info",
+      "pcap_count",
+      "pcap_stats",
+      "pcap_field_search",
+      "pcap_list_packets",
+    ]) {
+      assert.ok(names.includes(name), `${name} is registered`);
+    }
+    if (typeof lm.invokeTool !== "function") {
+      return;
+    }
+    const uri = vscode.Uri.file(path.join(FIXTURES, "dns.pcap"));
+    await vscode.commands.executeCommand("vscode.openWith", uri, "pcapViewer.editor");
+    await waitFor(() =>
+      api.provider.allSessions.find((s) => s.uri.fsPath === uri.fsPath && indexed(s)),
+    );
+    const text = async (name: string, input: object) =>
+      (await lm.invokeTool!(name, { input, toolInvocationToken: undefined })).content
+        .map((p) => p.value ?? "")
+        .join("");
+    // Field names aren't capture data: no consent needed.
+    assert.match(await text("pcap_field_search", { prefix: "dns.flags.rc" }), /dns\.flags\.rcode/);
+    // Counting is capture statistics: refused until the user allows it.
+    assert.match(await text("pcap_count", { filter: "dns" }), /Not allowed/);
+    await vscode.commands.executeCommand("workbench.action.closeAllEditors");
+    await waitFor(() => (api.provider.allSessions.length ? undefined : true), 10_000);
   });
 
   test("changing name resolution re-indexes open captures", async () => {

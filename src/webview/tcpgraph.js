@@ -64,11 +64,23 @@
     id: "tcp-direction",
     title: "Show the other direction",
   });
+  const askButton = h(
+    "button",
+    {
+      type: "button",
+      class: "secondary hidden",
+      id: "tcp-ask",
+      title:
+        "Ask Copilot to explain this stream (sends its sequence numbers, windows, round-trip times and flags, never payloads)",
+    },
+    ["Ask Copilot…"],
+  );
   const prev = h("button", { type: "button", class: "secondary", title: "Previous stream" }, ["◀"]);
   const next = h("button", { type: "button", class: "secondary", title: "Next stream" }, ["▶"]);
   const toolbar = h("div", { class: "toolbar", role: "toolbar" }, [
     h("label", {}, ["Graph ", kindSelect]),
     dirButton,
+    askButton,
     h("span", { class: "spacer" }),
     prev,
     next,
@@ -88,6 +100,10 @@
     state.dir = state.dir === 0 ? 1 : 0;
     draw();
   });
+  askButton.addEventListener(
+    "click",
+    () => state.data && vscode.postMessage({ type: "askCopilot", stream: state.data.stream }),
+  );
   prev.addEventListener("click", () => state.data && query({ stream: state.data.stream - 1 }));
   next.addEventListener("click", () => state.data && query({ stream: state.data.stream + 1 }));
 
@@ -105,6 +121,9 @@
   window.addEventListener("message", (event) => {
     const msg = event.data;
     if (msg.type === "init" || msg.type === "show") {
+      if (msg.type === "init") {
+        askButton.classList.toggle("hidden", !msg.ai);
+      }
       query({ frame: msg.frame });
     } else if (msg.type === "stream" && msg.id === state.queryId) {
       state.data = msg.result;

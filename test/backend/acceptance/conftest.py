@@ -1541,3 +1541,18 @@ def split_into(world: World, counts: str) -> None:
     assert world.exported is not None
     files = [Path(p) for p in world.exported["files"]]
     assert [comments.packet_count(p) for p in files] == numbers(counts)
+
+
+# ---------------------------------------------------------------------- AI tools
+
+
+@when(parsers.re(r'I count the packets matching "(?P<expr>[^"]*)"$'))
+def count_matching(world: World, expr: str) -> None:
+    world.found = world.call(world.service.count_matches, {"filter": expr})
+
+
+@then(parsers.re(r"(?P<count>\d+) of (?P<total>\d+) packets match$"))
+def counted(world: World, count: str, total: str) -> None:
+    assert world.error is None, world.error
+    assert world.found is not None
+    assert (world.found["count"], world.found["total"]) == (int(count), int(total))

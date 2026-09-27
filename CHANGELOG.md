@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- Capture summary with Copilot: _PCAP: Summarize Capture with Copilot_ or
+  `@pcap /summary` describes the capture from its statistics (properties,
+  protocol hierarchy, top conversations and endpoints, expert counts, traffic
+  over time), never from packet contents, with _Apply filter_ buttons for the
+  filters it suggests.
+- Anomaly explanations: _Ask Copilot…_ in the Expert Information panel and in
+  the TCP Stream Graph panel (`@pcap /anomaly`) explains expert entries with
+  their conversation, or a TCP stream from its sequence numbers, windows,
+  round-trip times and retransmissions (never its payload).
+- `@pcap` answers questions with read-only tools on the open capture (packet
+  counts for display filters, statistics, capture properties, field search,
+  packet rows) where VS Code has language model tools; the tools never change
+  the viewer's filter, and at most 8 calls are made per question.
+- New setting `pcapViewer.ai.allowCaptureStatistics` (off; asked once; user
+  settings only) for the features above; `pcapViewer.ai.allowPacketData`
+  implies it and is still needed for packet rows. The README lists what each
+  AI feature sends.
+- Backend: `count_matches` counts a display filter's packets without changing
+  the view.
+
 - Live capture: _PCAP: Start Capture…_ captures on one or more interfaces,
   with a capture filter checked as you type, into a new capture that fills as
   packets arrive (the list follows them). _Stop_ in the status bar or the
