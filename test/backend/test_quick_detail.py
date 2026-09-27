@@ -1,12 +1,14 @@
 """Quick (approximate) packet detail: dissect only a window of packets before
 the one asked for (cut out with editcap) and renumber the tree."""
 
+import subprocess
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from pcap_backend import pcap_service, pdml
+from pcap_backend import tshark as ts
 from pcap_backend.cancellation import CancelledError
 from pcap_backend.pcap_service import PcapService
 from pcap_backend.protocol import InvalidParamsError, RequestContext
@@ -155,4 +157,38 @@ def test_quick_detail_params_and_cancel(opened: PcapService) -> None:
     ctx.token.cancel()
     with pytest.raises(CancelledError):
         opened.packet_detail({"number": 11, "mode": "quick", "window": 4}, ctx)
+    assert opened._work_dir is not None and not list(opened._work_dir.glob("quick-*"))
+
+
+@pytest.mark.tshark
+@pytest.mark.parametrize(
+    ("mode", "cancel_at"), [("quick", "editcap"), ("quick", "tshark"), ("exact", "tshark")]
+)
+def test_cancel_race_leaves_no_pipe_open(
+    opened: PcapService, monkeypatch: pytest.MonkeyPatch, mode: str, cancel_at: str
+) -> None:
+    """The request is cancelled as a child starts (before editcap, or between
+    the two parallel tshark runs), and every child has already exited and
+    been reaped when its runner looks, which is the race that leaked pipes.
+    When the request fails, every child is reaped with its pipes closed."""
+    ctx = RequestContext()
+    started: list[subprocess.Popen[bytes]] = []
+    real_popen = ts._popen
+
+    def popen(argv: Any, env: Any = None, stdin: Any = None) -> subprocess.Popen[bytes]:
+        proc = real_popen(argv, env, stdin)
+        started.append(proc)
+        if cancel_at in Path(argv[0]).name:
+            proc.wait()
+            ctx.token.cancel()
+        return proc
+
+    monkeypatch.setattr(ts, "_popen", popen)
+    with pytest.raises(CancelledError):
+        opened.packet_detail({"number": 11, "mode": mode, "window": 4}, ctx)
+    assert started
+    for proc in started:
+        assert proc.returncode is not None
+        assert all(p is None or p.closed for p in (proc.stdin, proc.stdout, proc.stderr))
+    assert len(ts.PROCESSES) == 0
     assert opened._work_dir is not None and not list(opened._work_dir.glob("quick-*"))
