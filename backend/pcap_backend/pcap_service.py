@@ -1045,6 +1045,10 @@ class PcapService:
             if time.monotonic() >= deadline or len(live.frames) >= FIRST_BATCH:
                 break
         with self._lock:
+            if self._view is not view:
+                # A newer filter replaced it meanwhile (and stopped its pass): a
+                # success reply would come after the newer one's and name a gone view.
+                raise CancelledError("superseded by a newer filter")
             if live.running:
                 self._snapshot(live)
         return self._filter_result(view)

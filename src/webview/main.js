@@ -2144,6 +2144,9 @@
     setBusy(req.id, true);
     try {
       const res = await req.promise;
+      if (state.filterRequest !== req.id) {
+        return; // a newer filter was applied meanwhile: its reply decides
+      }
       state.appliedFilter = res.expr;
       state.filterId = res.filterId;
       state.total = res.matchCount;

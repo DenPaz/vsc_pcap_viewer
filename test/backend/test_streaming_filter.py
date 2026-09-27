@@ -185,6 +185,39 @@ def test_cancelling_the_request_keeps_the_previous_view(
 
 @pytest.mark.tshark
 @pytest.mark.usefixtures("slow_filter")
+def test_a_request_superseded_during_its_first_wait_fails(
+    service: PcapService, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A newer filter installed while an older request waits for its first
+    matches: the older request must not report success (its reply would come
+    after the newer one's, and the client would show a view that is gone)."""
+    monkeypatch.setattr(pcap_service, "FIRST_BATCH", 100)  # wait for the whole pass
+    service.open({"path": MIXED}, RequestContext())
+    outcome: list[object] = []
+
+    def older() -> None:
+        try:
+            outcome.append(service.set_filter({"expr": "udp", "stream": True}, RequestContext()))
+        except CancelledError as exc:
+            outcome.append(exc)
+
+    thread = threading.Thread(target=older)
+    thread.start()
+    deadline = time.monotonic() + 10
+    while (view := service._view) is None or view.expr != "udp":  # its view is installed
+        assert time.monotonic() < deadline
+        time.sleep(0.01)
+    newer = service.set_filter({"expr": "", "stream": True}, RequestContext())
+    thread.join(10)
+    assert isinstance(outcome[0], CancelledError), outcome
+    ok = RequestContext()
+    page = service.list_packets({"limit": 1}, ok)
+    assert (page["filterId"], page["total"]) == (newer["filterId"], 26)
+    _wait_idle()
+
+
+@pytest.mark.tshark
+@pytest.mark.usefixtures("slow_filter")
 def test_closing_stops_a_streaming_filter(service: PcapService, ctx: RequestContext) -> None:
     events = _recorder(service)
     service.open({"path": MIXED}, ctx)

@@ -74,6 +74,8 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
       }
     });
 
+    /** Webview rpc id → backend request id, for "cancel". */
+    const inflight = new Map();
     // Minimal extension-host emulation (see src/pcapEditor.ts).
     await page.exposeFunction("__toHost", async (raw) => {
       const msg = JSON.parse(raw);
@@ -148,6 +150,12 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
         ].includes(msg.type)
       ) {
         hostLog.push(msg);
+      } else if (msg.type === "cancel") {
+        // Like PcapEditorSession: cancel the backend request behind a webview rpc.
+        const backendId = inflight.get(msg.id);
+        if (backendId !== undefined) {
+          client.cancel(backendId);
+        }
       } else if (msg.type === "rpc") {
         if (msg.method === "packet_detail") {
           detailRequests.push(msg.params);
@@ -167,6 +175,8 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
               matched: p.matched,
             }),
         });
+        inflight.set(msg.id, pending.id);
+        pending.promise.catch(() => undefined).then(() => inflight.delete(msg.id));
         pending.promise.then(
           (result) => post({ type: "rpcResult", id: msg.id, result }),
           (err) =>
