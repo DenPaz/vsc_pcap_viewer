@@ -9,6 +9,10 @@
  *   rows and dissection trees, so callers first get the user's consent
  *   (`pcapViewer.ai.allowPacketData`, see commands/ai.ts). Raw bytes only
  *   with `pcapViewer.ai.allowPacketBytes`.
+ * - Capture summary (aiSummary.ts, `@pcap /summary`), anomaly explanations
+ *   (aiAnomaly.ts, `@pcap /anomaly`) and @pcap's tools (aiTools.ts): send
+ *   statistics computed by tshark, never packet contents; callers first get
+ *   the consent of `pcapViewer.ai.allowCaptureStatistics` (aiConsent.ts).
  */
 import * as vscode from "vscode";
 import type { BackendClient } from "./backendClient";
@@ -20,6 +24,20 @@ import {
   buildExplainPrompt,
   extractFilters,
 } from "./aiExplain";
+import {
+  AnomalyTarget,
+  ExpertRow,
+  TcpPoint,
+  buildExpertPrompt,
+  buildTcpPrompt,
+  expertRowsFromTable,
+  framesFilter,
+  notableExpertRows,
+  ANOMALY_LIMITS,
+} from "./aiAnomaly";
+import { CaptureFacts, StatsTable, buildSummaryPrompt } from "./aiSummary";
+import { ToolConsent, TOOL_LIMITS, buildToolPrompt, runTool, runToolLoop } from "./aiTools";
+import { toolsRuntime } from "./lmTools";
 import type { QuickDetail } from "./settingsModel";
 import {
   ChatTurn,
@@ -44,6 +62,12 @@ const JUSTIFICATION =
   "PCAP Viewer turns your description into a Wireshark display filter. Only your request, the current filter and protocol/field names are sent.";
 const EXPLAIN_JUSTIFICATION =
   "PCAP Viewer explains the packets you picked. Their packet-list rows and dissection trees are sent.";
+const SUMMARY_JUSTIFICATION =
+  "PCAP Viewer summarizes the open capture from statistics computed by tshark (no packet contents).";
+const ANOMALY_JUSTIFICATION =
+  "PCAP Viewer explains expert information or a TCP stream from statistics computed by tshark (no packet contents).";
+const TOOLS_JUSTIFICATION =
+  "PCAP Viewer answers questions about the open capture with read-only tools (counts and statistics).";
 
 /** What to explain (the caller has the user's consent to send packet data). */
 export interface ExplainRequest {
@@ -65,7 +89,7 @@ export interface ExplainSink {
 }
 
 export interface ExplainOutcome {
-  /** The packets that were explained. */
+  /** The packets that were explained (Go to packet buttons). */
   frames: number[];
   /** Display filters from the answer that tshark accepts. */
   filters: string[];
@@ -73,6 +97,17 @@ export interface ExplainOutcome {
   message?: string;
   /** AI help can't be used right now (off, no model, no permission). */
   unavailable?: boolean;
+  /** Tools that weren't allowed to answer (the settings that would allow them). */
+  refused?: ("statistics" | "packetData")[];
+}
+
+/** An anomaly to explain: expert rows (given, or the capture's errors and warnings) or a TCP stream. */
+export interface AnomalyRequest {
+  target: AnomalyTarget;
+  /** The expert rows the panel sent (else the capture's notable ones). */
+  rows?: ExpertRow[];
+  question: string;
+  currentFilter: string;
 }
 const FIELDS_PER_KEYWORD = 12;
 
@@ -102,6 +137,26 @@ function untilCancelled<T>(promise: Promise<T>, token: vscode.CancellationToken)
       },
     );
   });
+}
+
+/** What a tool call shows while it runs ("Counting dns…"). */
+export function describeToolCall(name: string, input: unknown): string {
+  const args = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
+  const filter = typeof args.filter === "string" && args.filter ? ` ${args.filter}` : "";
+  switch (name) {
+    case "pcap_count":
+      return `Counting${filter || " all packets"}…`;
+    case "pcap_stats":
+      return `Reading ${String(args.kind ?? "")} statistics${filter ? ` for${filter}` : ""}…`;
+    case "pcap_capture_info":
+      return "Reading the capture's properties…";
+    case "pcap_field_search":
+      return `Looking up fields ${String(args.prefix ?? "")}…`;
+    case "pcap_list_packets":
+      return `Listing packets${filter}…`;
+    default:
+      return `Running ${name}…`;
+  }
 }
 
 export function aiEnabled(): boolean {
@@ -358,28 +413,8 @@ export class FilterAssistant implements vscode.Disposable {
         omitted: req.frames.length - packets.length,
         includeBytes: req.includeBytes,
       });
-      sink.progress("Asking the language model…");
-      const response = await model.sendRequest(
-        [vscode.LanguageModelChatMessage.User(prompt)],
-        { justification: EXPLAIN_JUSTIFICATION },
-        token,
-      );
-      let answer = "";
-      for await (const part of response.text) {
-        answer += part;
-        sink.markdown(part);
-      }
-      const filters: string[] = [];
-      for (const filter of extractFilters(answer)) {
-        const res = await backend
-          .request<{ valid: boolean }>("validate_filter", { expr: filter })
-          .catch(() => ({ valid: false }));
-        if (res.valid) {
-          filters.push(filter);
-        } else {
-          this.log.info(`AI explain: filter rejected by tshark: ${filter}`);
-        }
-      }
+      const answer = await this.streamAnswer(model, prompt, EXPLAIN_JUSTIFICATION, sink, token);
+      const filters = await this.validFilters(backend, extractFilters(answer), "explain");
       const skipped = req.frames.length - packets.length;
       return {
         frames: packets.map((p) => p.number),
@@ -391,6 +426,339 @@ export class FilterAssistant implements vscode.Disposable {
     } catch (err) {
       const failed = this.failure(err, token);
       return { ...none, message: failed.message, unavailable: failed.unavailable };
+    }
+  }
+
+  /** The model, or the outcome that says why AI help can't answer now. */
+  private async readyModel(): Promise<vscode.LanguageModelChat | ExplainOutcome> {
+    const none = { frames: [], filters: [] };
+    if (!aiEnabled()) {
+      return {
+        ...none,
+        unavailable: true,
+        message: "AI help is turned off (pcapViewer.ai.enabled).",
+      };
+    }
+    const model = await this.model();
+    return (
+      model ?? {
+        ...none,
+        unavailable: true,
+        message: this.blocked
+          ? "AI help was not allowed to use the language model."
+          : "No language model is available. Install and sign in to GitHub Copilot to use AI help.",
+      }
+    );
+  }
+
+  /** Send one prompt and stream the answer into `sink`; returns the whole answer. */
+  private async streamAnswer(
+    model: vscode.LanguageModelChat,
+    prompt: string,
+    justification: string,
+    sink: ExplainSink,
+    token: vscode.CancellationToken,
+  ): Promise<string> {
+    sink.progress("Asking the language model…");
+    const response = await model.sendRequest(
+      [vscode.LanguageModelChatMessage.User(prompt)],
+      { justification },
+      token,
+    );
+    let answer = "";
+    for await (const part of response.text) {
+      answer += part;
+      sink.markdown(part);
+    }
+    return answer;
+  }
+
+  /** The filters tshark accepts (the others are logged). */
+  private async validFilters(
+    backend: BackendClient,
+    filters: string[],
+    what: string,
+  ): Promise<string[]> {
+    const out: string[] = [];
+    for (const filter of filters) {
+      const res = await backend
+        .request<{ valid: boolean }>("validate_filter", { expr: filter })
+        .catch(() => ({ valid: false }));
+      if (res.valid) {
+        out.push(filter);
+      } else {
+        this.log.info(`AI ${what}: filter rejected by tshark: ${filter}`);
+      }
+    }
+    return out;
+  }
+
+  /** A failure as an outcome (cancelled, not allowed, model gone, error). */
+  private failed(err: unknown, token: vscode.CancellationToken): ExplainOutcome {
+    const f = this.failure(err, token);
+    return { frames: [], filters: [], message: f.message, unavailable: f.unavailable };
+  }
+
+  /**
+   * Summarize the capture from its statistics (aiSummary.ts): properties,
+   * protocol hierarchy, top conversations and endpoints, expert information
+   * and traffic over time. The caller has the statistics consent.
+   */
+  async summarize(
+    backend: BackendClient,
+    req: { question: string; currentFilter: string },
+    sink: ExplainSink,
+    token: vscode.CancellationToken,
+  ): Promise<ExplainOutcome> {
+    const model = await this.readyModel();
+    if (!("sendRequest" in model)) {
+      return model;
+    }
+    try {
+      sink.progress("Computing statistics with tshark…");
+      const stats = (params: Record<string, unknown>) =>
+        backend.request<StatsTable>("stats", params, { timeoutMs: 0 }).catch((err: unknown) => {
+          this.log.info(
+            `AI summary: ${String(params.kind)} statistics failed: ${(err as Error).message}`,
+          );
+          return undefined;
+        });
+      const [info, protocols, tcp, udp, endpoints, expert, io] = await untilCancelled(
+        Promise.all([
+          backend.request<CaptureFacts>("capture_info", {}),
+          stats({ kind: "phs" }),
+          stats({ kind: "conversations", type: "tcp" }),
+          stats({ kind: "conversations", type: "udp" }),
+          stats({ kind: "endpoints", type: "ip" }),
+          stats({ kind: "expert" }),
+          stats({ kind: "io" }),
+        ]),
+        token,
+      );
+      const missing = Object.entries({
+        "protocol hierarchy": protocols,
+        "TCP conversations": tcp,
+        "UDP conversations": udp,
+        endpoints,
+        "expert information": expert,
+        "traffic over time": io,
+      })
+        .filter(([, t]) => !t)
+        .map(([name]) => name);
+      const prompt = buildSummaryPrompt({
+        question: req.question,
+        currentFilter: req.currentFilter,
+        info,
+        protocols,
+        conversations: [tcp, udp].filter((t): t is StatsTable => !!t),
+        endpoints: endpoints ? [endpoints] : [],
+        expert,
+        io,
+        missing,
+      });
+      const answer = await this.streamAnswer(model, prompt, SUMMARY_JUSTIFICATION, sink, token);
+      return {
+        frames: [],
+        filters: await this.validFilters(backend, extractFilters(answer), "summary"),
+      };
+    } catch (err) {
+      return this.failed(err, token);
+    }
+  }
+
+  /**
+   * Explain expert information rows or a TCP stream (aiAnomaly.ts): the rows
+   * and their conversation's statistics, or the stream's derived facts and a
+   * sample of its points (never payloads). The caller has the statistics consent.
+   */
+  async explainAnomaly(
+    backend: BackendClient,
+    req: AnomalyRequest,
+    sink: ExplainSink,
+    token: vscode.CancellationToken,
+  ): Promise<ExplainOutcome> {
+    const model = await this.readyModel();
+    if (!("sendRequest" in model)) {
+      return model;
+    }
+    try {
+      let prompt: string;
+      let frames: number[] = [];
+      if (req.target.kind === "stream") {
+        sink.progress(`Reading TCP stream ${req.target.stream}…`);
+        const graph = await untilCancelled(
+          backend.request<{ stream: number; endpoints: string[]; points: TcpPoint[] }>(
+            "tcp_graph",
+            { stream: req.target.stream },
+            { timeoutMs: 0 },
+          ),
+          token,
+        );
+        if (!graph.points.length) {
+          return {
+            frames: [],
+            filters: [],
+            message: `The capture has no TCP stream ${req.target.stream}.`,
+          };
+        }
+        prompt = buildTcpPrompt({
+          question: req.question,
+          stream: graph.stream,
+          endpoints: graph.endpoints,
+          points: graph.points,
+        });
+      } else {
+        const overview = !req.rows?.length;
+        let rows = req.rows ?? [];
+        if (overview) {
+          sink.progress("Reading the expert information…");
+          const table = await untilCancelled(
+            backend.request<StatsTable>("stats", { kind: "expert" }, { timeoutMs: 0 }),
+            token,
+          );
+          rows = notableExpertRows(expertRowsFromTable(table), ANOMALY_LIMITS.maxExpertRows);
+        }
+        if (!rows.length) {
+          return {
+            frames: [],
+            filters: [],
+            message: "This capture has no expert information entries.",
+          };
+        }
+        sink.progress("Reading the conversations of these packets…");
+        const conversations = await untilCancelled(this.expertConversations(backend, rows), token);
+        prompt = buildExpertPrompt({
+          question: req.question,
+          currentFilter: req.currentFilter,
+          rows,
+          conversations,
+          overview,
+        });
+        frames = [...new Set(rows.flatMap((r) => r.frames.slice(0, 1)))].slice(0, 3);
+      }
+      const answer = await this.streamAnswer(model, prompt, ANOMALY_JUSTIFICATION, sink, token);
+      return {
+        frames,
+        filters: await this.validFilters(backend, extractFilters(answer), "anomaly"),
+      };
+    } catch (err) {
+      return this.failed(err, token);
+    }
+  }
+
+  /**
+   * The whole conversations that expert rows' packets belong to: which
+   * conversations those packets are in (a pass limited to them), then those
+   * conversations' full statistics (a pass limited to their filters).
+   */
+  private async expertConversations(
+    backend: BackendClient,
+    rows: ExpertRow[],
+  ): Promise<StatsTable | undefined> {
+    const protocols = rows.map((r) => r.protocol.toLowerCase());
+    const type = protocols.includes("tcp")
+      ? "tcp"
+      : protocols.some((p) => /udp|dns|quic/.test(p))
+        ? "udp"
+        : "ip";
+    const flagged = framesFilter(rows, ANOMALY_LIMITS.maxFramesPerRow);
+    if (!flagged) {
+      return undefined;
+    }
+    try {
+      const involved = await backend.request<StatsTable>(
+        "stats",
+        { kind: "conversations", type, filter: flagged },
+        { timeoutMs: 0 },
+      );
+      const filters = involved.rows
+        .map((r) => r.filter)
+        .filter((f): f is string => !!f)
+        .slice(0, ANOMALY_LIMITS.maxConversations);
+      if (!filters.length) {
+        return involved;
+      }
+      return await backend.request<StatsTable>(
+        "stats",
+        { kind: "conversations", type, filter: filters.map((f) => `(${f})`).join(" || ") },
+        { timeoutMs: 0 },
+      );
+    } catch (err) {
+      this.log.info(`AI anomaly: conversation statistics failed: ${(err as Error).message}`);
+      return undefined;
+    }
+  }
+
+  /** Whether this VS Code has the language model tools API (@pcap then answers with tools). */
+  toolsAvailable(): boolean {
+    return !!toolsRuntime();
+  }
+
+  /**
+   * Answer a question about the capture with read-only tools (aiTools.ts):
+   * the model calls them (at most TOOL_LIMITS.maxCalls, within
+   * TOOL_LIMITS.timeLimitMs), each checking `consent`, and the answer streams
+   * into `sink`. Filters the tools ran or the answer suggests become buttons.
+   */
+  async answerWithTools(
+    backend: BackendClient,
+    req: { question: string; currentFilter: string; consent: ToolConsent },
+    sink: ExplainSink,
+    token: vscode.CancellationToken,
+  ): Promise<ExplainOutcome> {
+    const runtime = toolsRuntime();
+    if (!runtime) {
+      return {
+        frames: [],
+        filters: [],
+        unavailable: true,
+        message: "This VS Code has no language model tools.",
+      };
+    }
+    const model = await this.readyModel();
+    if (!("sendRequest" in model)) {
+      return model;
+    }
+    // A hard stop a little after the loop's own time limit (a model round can't be interrupted otherwise).
+    const deadline = new vscode.CancellationTokenSource();
+    const timer = setTimeout(() => deadline.cancel(), TOOL_LIMITS.timeLimitMs + 30_000);
+    const sub = token.onCancellationRequested(() => deadline.cancel());
+    try {
+      sink.progress("Looking into the capture…");
+      const outcome = await runToolLoop(
+        runtime.loopModel(model, TOOLS_JUSTIFICATION, deadline.token),
+        buildToolPrompt(req.question, req.currentFilter),
+        {
+          cancelled: () => deadline.token.isCancellationRequested,
+          onText: (t) => sink.markdown(t),
+          onToolCall: (name, input) => sink.progress(describeToolCall(name, input)),
+          runTool: (name, input) => runTool(name, input, backend, req.consent),
+        },
+      );
+      for (const call of outcome.calls) {
+        this.log.info(
+          `AI tool ${call.name} ${JSON.stringify(call.input)}: ${call.result.text.split("\n")[0]}`,
+        );
+      }
+      return {
+        frames: [],
+        filters: await this.validFilters(backend, outcome.filters, "tools"),
+        refused: outcome.refused,
+        message:
+          outcome.stopped === "calls"
+            ? `Stopped after ${TOOL_LIMITS.maxCalls} tool calls.`
+            : outcome.stopped === "time"
+              ? "Stopped at the time limit."
+              : outcome.stopped === "cancelled" && !token.isCancellationRequested
+                ? "Stopped at the time limit."
+                : undefined,
+      };
+    } catch (err) {
+      return this.failed(err, token);
+    } finally {
+      clearTimeout(timer);
+      sub.dispose();
+      deadline.dispose();
     }
   }
 

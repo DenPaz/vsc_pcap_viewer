@@ -36,6 +36,8 @@
     /** @type {any} */ selected: null,
     queryId: 0,
     /** @type {number | null} */ pending: null,
+    /** AI help is available (the host said so): offer "Ask Copilot…" on expert information. */
+    ai: false,
   };
 
   const app = /** @type {HTMLElement} */ (document.getElementById("app"));
@@ -83,6 +85,18 @@
     ["Go to Packet"],
   );
   const copyBtn = h("button", { type: "button", class: "secondary" }, ["Copy as CSV"]);
+  const askBtn = h(
+    "button",
+    {
+      type: "button",
+      class: "secondary",
+      id: "ask-copilot",
+      title:
+        "Ask Copilot why the selected entry happens (no selection: the capture's errors and warnings). Sends expert information and conversation statistics, never packet contents.",
+    },
+    ["Ask Copilot…"],
+  );
+  askBtn.addEventListener("click", () => askCopilot());
   applyBtn.addEventListener("click", () => rowFilter(true));
   prepareBtn.addEventListener("click", () => rowFilter(false));
   gotoBtn.addEventListener("click", () => rowGoto());
@@ -152,7 +166,7 @@
     toolbar.append(h("span", { class: "spacer" }), refresh);
     actions.replaceChildren(
       ...(state.kind === "expert"
-        ? [gotoBtn, applyBtn, prepareBtn]
+        ? [gotoBtn, applyBtn, prepareBtn, ...(state.ai ? [askBtn] : [])]
         : state.kind === "properties" || state.kind === "io"
           ? []
           : [applyBtn, prepareBtn]),
@@ -187,6 +201,7 @@
     if (msg.type === "init") {
       state.kind = msg.kind;
       state.filter = msg.filter || "";
+      state.ai = !!msg.ai;
       title.textContent = msg.title;
       buildToolbar();
       query();
@@ -323,6 +338,29 @@
     if (expr) {
       vscode.postMessage({ type: "filter", expr, apply });
     }
+  }
+
+  /** The expert row as the host's anomaly explanation takes it. */
+  function expertRow(/** @type {any} */ row) {
+    const cols = state.table.columns;
+    const cell = (/** @type {string} */ id) =>
+      row.cells[cols.findIndex((/** @type {any} */ c) => c.id === id)];
+    return {
+      severity: String(cell("severity") ?? ""),
+      group: String(cell("group") ?? ""),
+      protocol: String(cell("protocol") ?? ""),
+      summary: String(cell("summary") ?? ""),
+      count: Number(cell("count")) || 1,
+      frames: (row.frames || (row.frame ? [row.frame] : [])).slice(0, 20),
+    };
+  }
+
+  function askCopilot() {
+    if (state.kind !== "expert" || !state.table) {
+      return;
+    }
+    const rows = state.selected ? [expertRow(state.selected)] : [];
+    vscode.postMessage({ type: "askCopilot", rows });
   }
 
   function rowGoto() {

@@ -52,14 +52,14 @@ maybe("statistics and follow panels (Chromium + real backend)", function () {
   });
 
   /** Open stats.js with a stand-in for StatsPanel (src/panels/statsPanel.ts). */
-  async function openStats(kind, captureFilter = "") {
+  async function openStats(kind, captureFilter = "", ai = false) {
     const { page, problems, post } = await newPage(browser);
     const log = [];
     await page.exposeFunction("__toHost", async (raw) => {
       const msg = JSON.parse(raw);
       log.push(msg);
       if (msg.type === "ready") {
-        await post({ type: "init", kind, title: TITLES[kind], filter: captureFilter });
+        await post({ type: "init", kind, title: TITLES[kind], filter: captureFilter, ai });
       } else if (msg.type === "query") {
         const params = {
           kind,
@@ -208,6 +208,40 @@ maybe("statistics and follow panels (Chromium + real backend)", function () {
       log.find((m) => m.type === "filter"),
       { type: "filter", expr: '_ws.expert.message == "Connection finish (FIN)"', apply: false },
     );
+  });
+
+  test("expert information: Ask Copilot… sends the selected row (or none) to the host", async () => {
+    const hidden = await openStats("expert");
+    await hidden.page.waitForSelector("table.stats tbody tr");
+    assert.equal(await hidden.page.$("#ask-copilot"), null, "no AI help: no button");
+
+    const { page, log } = await openStats("expert", "", true);
+    await page.waitForSelector("table.stats tbody tr");
+    await page.click("#ask-copilot");
+    for (let i = 0; i < 50 && !log.some((m) => m.type === "askCopilot"); i++) {
+      await page.waitForTimeout(20);
+    }
+    assert.deepEqual(
+      log.find((m) => m.type === "askCopilot"),
+      { type: "askCopilot", rows: [] },
+      "nothing selected: the capture's errors and warnings",
+    );
+    await page.click("table.stats tbody tr:has-text('Connection finish (FIN)')");
+    await page.click("#ask-copilot");
+    for (let i = 0; i < 50 && log.filter((m) => m.type === "askCopilot").length < 2; i++) {
+      await page.waitForTimeout(20);
+    }
+    const ask = log.filter((m) => m.type === "askCopilot")[1];
+    assert.equal(ask.rows.length, 1);
+    assert.deepEqual(ask.rows[0], {
+      severity: "Chat",
+      group: "Sequence",
+      protocol: "TCP",
+      summary: "Connection finish (FIN)",
+      count: ask.rows[0].count,
+      frames: ask.rows[0].frames,
+    });
+    assert.ok(ask.rows[0].count >= 1 && ask.rows[0].frames.includes(18));
   });
 
   test("capture file properties", async () => {
@@ -578,7 +612,7 @@ maybe("statistics and follow panels (Chromium + real backend)", function () {
     const { page, log } = await openGraphPanel("tcpgraph.js", async (msg, reply) => {
       // A stand-in for TcpGraphPanel (src/panels/tcpGraphPanel.ts).
       if (msg.type === "ready") {
-        await reply({ type: "init", frame: 14 });
+        await reply({ type: "init", frame: 14, ai: true });
       } else if (msg.type === "query") {
         const params = msg.stream !== undefined ? { stream: msg.stream } : { frame: msg.frame };
         client.request("tcp_graph", params, { timeoutMs: 0 }).then(
@@ -632,6 +666,13 @@ maybe("statistics and follow panels (Chromium + real backend)", function () {
       await page.waitForTimeout(20); // (the message reaches the stand-in host asynchronously)
     }
     assert.equal(log.at(-1).type, "goto");
+
+    // Ask Copilot… posts the stream shown; the host runs the request.
+    await page.click("#tcp-ask");
+    for (let i = 0; i < 50 && log.at(-1).type !== "askCopilot"; i++) {
+      await page.waitForTimeout(20);
+    }
+    assert.deepEqual(log.at(-1), { type: "askCopilot", stream: 0 });
 
     await page.click("button[title='Next stream']");
     await page.waitForFunction(() =>

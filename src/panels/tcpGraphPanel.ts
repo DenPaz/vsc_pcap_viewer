@@ -7,7 +7,9 @@ import { panelHtml, webviewRoot } from "./panelHtml";
 type FromPanel =
   | { type: "ready" }
   | { type: "query"; id: number; stream?: number; frame?: number }
-  | { type: "goto"; frame: number };
+  | { type: "goto"; frame: number }
+  /** "Ask Copilot…" about the stream shown. */
+  | { type: "askCopilot"; stream: number };
 
 /**
  * TCP stream graphs of one capture (Stevens, throughput, round-trip time,
@@ -72,7 +74,16 @@ export class TcpGraphPanel {
   private async onMessage(msg: FromPanel): Promise<void> {
     switch (msg.type) {
       case "ready":
-        this.post({ type: "init", frame: this.frame });
+        this.post({ type: "init", frame: this.frame, ai: await this.session.aiAvailable() });
+        return;
+      case "askCopilot":
+        if (Number.isInteger(msg.stream) && msg.stream >= 0) {
+          await vscode.commands.executeCommand("pcapViewer.askAboutAnomaly", {
+            kind: "stream",
+            stream: msg.stream,
+            sessionId: this.session.id,
+          });
+        }
         return;
       case "query":
         return this.query(msg.id, msg.stream, msg.frame);

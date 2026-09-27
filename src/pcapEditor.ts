@@ -7,7 +7,14 @@ import { BackendClient, ErrorCodes, RpcError, findPython } from "./backendClient
 import type { CaptureLimits } from "./captureModel";
 import { discardTemporaryCapture, isTemporaryCapture } from "./tempCaptures";
 import { Settings, getSetting, readQuickDetail, readSettings, updateSetting } from "./config";
-import type { ExplainOutcome, ExplainSink, FilterAssistant, SuggestOutcome } from "./ai";
+import type {
+  AnomalyRequest,
+  ExplainOutcome,
+  ExplainSink,
+  FilterAssistant,
+  SuggestOutcome,
+} from "./ai";
+import type { ToolConsent } from "./aiTools";
 import {
   CaptureEvent,
   ColoringResult,
@@ -1386,6 +1393,70 @@ export class PcapEditorSession {
         includeBytes,
         quickDetail: readQuickDetail(this.uri),
       },
+      sink,
+      token,
+    );
+  }
+
+  /** Whether AI help can be used now (a language model is available and allowed). */
+  async aiAvailable(): Promise<boolean> {
+    return !!this.info && (await this.assistant.isAvailable());
+  }
+
+  /** Whether @pcap can answer with language model tools in this VS Code. */
+  get toolsAvailable(): boolean {
+    return this.assistant.toolsAvailable();
+  }
+
+  private notLoaded(): ExplainOutcome {
+    return { frames: [], filters: [], message: "Wait for the capture to finish loading." };
+  }
+
+  /** Summarize the capture from its statistics (ai.ts; the caller has the statistics consent). */
+  async summarize(
+    question: string,
+    sink: ExplainSink,
+    token: vscode.CancellationToken,
+  ): Promise<ExplainOutcome> {
+    const client = this.client;
+    if (!client?.running || !this.info || this.info.indexing || this.capturing) {
+      return this.notLoaded();
+    }
+    return this.assistant.summarize(client, { question, currentFilter: this.filter }, sink, token);
+  }
+
+  /** Explain expert information or a TCP stream (ai.ts; the caller has the statistics consent). */
+  async explainAnomaly(
+    req: Omit<AnomalyRequest, "currentFilter">,
+    sink: ExplainSink,
+    token: vscode.CancellationToken,
+  ): Promise<ExplainOutcome> {
+    const client = this.client;
+    if (!client?.running || !this.info) {
+      return this.notLoaded();
+    }
+    return this.assistant.explainAnomaly(
+      client,
+      { ...req, currentFilter: this.filter },
+      sink,
+      token,
+    );
+  }
+
+  /** Answer a question with read-only language model tools (ai.ts, aiTools.ts). */
+  async answerWithTools(
+    question: string,
+    consent: ToolConsent,
+    sink: ExplainSink,
+    token: vscode.CancellationToken,
+  ): Promise<ExplainOutcome> {
+    const client = this.client;
+    if (!client?.running || !this.info) {
+      return this.notLoaded();
+    }
+    return this.assistant.answerWithTools(
+      client,
+      { question, currentFilter: this.filter, consent },
       sink,
       token,
     );

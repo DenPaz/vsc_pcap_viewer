@@ -74,6 +74,11 @@ wireshark`, `C:\Program Files\Wireshark` added to PATH): lint, backend and
   pure settings helpers. `src/commands/` command implementations
   (`export.ts`, `coloring.ts`, `dissectors.ts`, `tls.ts`, `merge.ts`, …).
   `src/rotation.ts` recognises rotated capture pieces (pure).
+  AI: `src/aiFilter.ts`, `aiExplain.ts`, `aiSummary.ts`, `aiAnomaly.ts`,
+  `aiTools.ts` (tool specs, `runTool`, `runToolLoop`) and `aiConsent.ts` are
+  pure prompt builders/parsers; `src/ai.ts` (`FilterAssistant`) and
+  `src/lmTools.ts` (the tools API, declared locally) talk to `vscode.lm`;
+  `src/commands/ai.ts` holds commands, consent and the `@pcap` participant.
   `src/captureModel.ts` pure capture/editing helpers (file names, durations,
   date-times as bigint ns); `src/tempCaptures.ts` unsaved captures;
   `src/commands/capture.ts` and `editCapture.ts` (start/stop, editing),
@@ -686,6 +691,60 @@ N`/`-i S` into a scratch folder inside `dir`, then each piece moved out
   data is untrusted. The answer streams as Markdown; ```filter blocks
   (`extractFilters`) are validated with tshark and become _Apply filter_
   buttons, plus _Go to packet N_ for each packet explained.
+- **Capture summary** (`src/aiSummary.ts` pure, `FilterAssistant.summarize`,
+  `@pcap /summary`, _PCAP: Summarize Capture with Copilot_): seven backend
+  requests in parallel (`capture_info`, `stats` phs, conv tcp/udp, endpoints
+  ip, expert, io; a failed one is listed as "not available") feed
+  `buildSummaryPrompt`, capped by `SUMMARY_LIMITS` (top 15 rows by bytes, 40
+  protocol rows, 20 expert groups, IO merged into 12 buckets, 80 chars per
+  cell, 24k chars: row counts halve until it fits, then a hard cut). **Never
+  packet contents**, but conversations/endpoints hold addresses and names, so
+  it is gated by `pcapViewer.ai.allowCaptureStatistics` (application scope,
+  default false; `allowPacketData` implies it) with a one-time modal
+  (`STATISTICS_CONSENT` in `aiConsent.ts`, unit-tested against
+  `SUMMARY_LIMITS`, `ANOMALY_LIMITS` and `TOOL_LIMITS`). The prompt says the
+  data is untrusted, to answer only from it and to say what can't be
+  determined. Refused while indexing or capturing. The answer streams
+  (`streamAnswer`); ```filter blocks go through `validate_filter`
+  (`validFilters`) and become _Apply filter_ buttons. The command opens the
+  chat with `summaryQuery()`, else streams into a Markdown editor
+  (`answerInEditor`). A refused consent answers in chat with an _Open Setting_ button.
+- **Anomaly explanations** (`src/aiAnomaly.ts` pure, `explainAnomaly`,
+  `@pcap /anomaly`): panels never call the model; they post `askCopilot` to
+  their panel host, which runs `pcapViewer.askAboutAnomaly {kind, rows |
+stream, sessionId}`. The query stays short: expert rows (sanitized by
+  `statsPanel.expertRows`) are kept host-side in `expertSelections` (20) and
+  referenced as `expert #N`; streams go by number (`stream N`), and the
+  participant fetches `tcp_graph` itself (`parseAnomalyArgs`; plain text =
+  overview of the errors and warnings, `notableExpertRows`). Expert: up to 10
+  rows with 5 frames each, plus conversation rows (type from the rows'
+  protocols; a `frame.number in {…}` pass (`framesFilter`) finds the
+  conversations, whose own filters, OR'd, give their whole rows). TCP:
+  `tcpFacts` over every point (bytes/data packets/retransmission rate/zero
+  windows (not SYNs)/window range per direction, RTT ms min/median/max) plus
+  `downsamplePoints` (≤ 200: notable points first, both ends, evenly spread,
+  capture order) as CSV. Same consent, streaming, filters and editor fallback
+  as the summary. The panels show the button only when `ai` is in their init
+  (`aiAvailable()`).
+- **Language model tools** (`src/aiTools.ts` pure, `src/lmTools.ts`,
+  package.json `languageModelTools` generated from `PCAP_TOOLS`, checked by a
+  unit test): `pcap_count`, `pcap_stats` (phs/conv/endpoints/expert/io, 25
+  rows), `pcap_capture_info`, `pcap_field_search` (20 fields, no consent) and
+  `pcap_list_packets` (≤ 20 rows, `allowPacketData`); the others need
+  `allowCaptureStatistics`, else they answer `notAllowed(need)` ("Not allowed:
+  ask the user to enable …"). Every filter is validated first; counting uses
+  backend `count_matches {filter, limit}` (filter LRU and saved index, never
+  `_install_view`), so tools never change the view; rows come from
+  `list_packets {frames, inView: false}`. `engines.vscode` stays 1.90:
+  `toolsRuntime()` detects `lm.registerTool` and the part classes and declares
+  their types locally; without them `@pcap` suggests filters as before.
+  `runToolLoop` (fake-model unit tests) sends messages as parts, runs each
+  call, stops at `TOOL_LIMITS.maxCalls` (8) or `timeLimitMs` (90 s) with a
+  final round without tools, and is cancellable (the host adds a hard
+  deadline 30 s later). Cited filters (validated, ≤ 5) become buttons. The
+  default `@pcap` route uses the loop when tools exist and statistics are
+  allowed (asking once); tools invoked by other participants use the active
+  capture's backend.
 - **Navigation and customisation** (Wireshark-like; all over the _current view_,
   i.e. the filter and sort order, which only the backend knows in full):
   - _Find Packet_ is backend `find_packet`. It turns the search into a display
@@ -793,4 +852,5 @@ filters and explaining packets, a quick view for late packets in huge files,
 streaming open and filters with saved indexes, TLS decryption with a key log,
 export of packet dissections, merging captures, a coloring rules editor,
 Export Objects, name resolution, packet comments, the flow graph and TCP
-stream graphs, live capture and capture editing.
+stream graphs, live capture and capture editing, and AI capture summaries,
+anomaly explanations and `@pcap` tools.

@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { ErrorCodes, RpcError } from "../backendClient";
+import { ANOMALY_LIMITS, ExpertRow } from "../aiAnomaly";
 import type { PcapEditorSession } from "../pcapEditor";
 import { panelHtml, webviewRoot } from "./panelHtml";
 
@@ -15,13 +16,42 @@ export const STATS_TITLES: Record<StatsKind, string> = {
   properties: "Capture File Properties",
 };
 
+/** Expert rows as the panel sent them, checked (the webview is ours, but its data came from the capture). */
+export function expertRows(raw: unknown): ExpertRow[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const text = (v: unknown) => (typeof v === "string" ? v.slice(0, 1000) : "");
+  return raw.slice(0, ANOMALY_LIMITS.maxExpertRows).flatMap((r: unknown) => {
+    if (!r || typeof r !== "object") {
+      return [];
+    }
+    const o = r as Record<string, unknown>;
+    const frames = Array.isArray(o.frames)
+      ? o.frames.filter((n): n is number => Number.isInteger(n) && (n as number) > 0).slice(0, 1000)
+      : [];
+    return [
+      {
+        severity: text(o.severity),
+        group: text(o.group),
+        protocol: text(o.protocol),
+        summary: text(o.summary),
+        count: typeof o.count === "number" && Number.isFinite(o.count) ? o.count : 1,
+        frames,
+      },
+    ];
+  });
+}
+
 type FromPanel =
   | { type: "ready" }
   | { type: "query"; id: number; params: { type?: string; interval?: number; limit?: boolean } }
   | { type: "cancel"; id: number }
   | { type: "filter"; expr: string; apply: boolean }
   | { type: "goto"; frame: number }
-  | { type: "copy"; text: string };
+  | { type: "copy"; text: string }
+  /** "Ask Copilot…" about expert rows (none: the capture's errors and warnings). */
+  | { type: "askCopilot"; rows: unknown[] };
 
 /**
  * A statistics report for one capture, in a webview panel beside the editor.
@@ -95,6 +125,14 @@ export class StatsPanel {
           kind: this.kind,
           title: STATS_TITLES[this.kind],
           filter: this.session.currentFilter,
+          ai: this.kind === "expert" && (await this.session.aiAvailable()),
+        });
+        return;
+      case "askCopilot":
+        await vscode.commands.executeCommand("pcapViewer.askAboutAnomaly", {
+          kind: "expert",
+          rows: expertRows(msg.rows),
+          sessionId: this.session.id,
         });
         return;
       case "query":
