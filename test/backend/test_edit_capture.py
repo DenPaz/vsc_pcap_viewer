@@ -1,6 +1,7 @@
 """Capture editing with editcap (editing.py, edit_capture)."""
 
 import subprocess
+import threading
 from decimal import Decimal
 from pathlib import Path
 
@@ -147,8 +148,10 @@ def test_inject_tls_secrets(
 
 
 @pytest.mark.tshark
-@pytest.mark.usefixtures("slow_index")
-def test_refused_while_indexing(service: PcapService, tmp_path: Path) -> None:
+def test_refused_while_indexing(
+    service: PcapService, tmp_path: Path, slow_index: threading.Event
+) -> None:
     service.open({"path": str(MIXED), "stream": True}, RequestContext())
     with pytest.raises(IndexingError):
         _edit(service, tmp_path, operation="dedup")
+    slow_index.set()
