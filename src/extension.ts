@@ -14,8 +14,10 @@ import { registerIndexCacheCommands } from "./commands/indexCache";
 import { registerTlsCommands } from "./commands/tls";
 import { registerMergeCommands } from "./commands/merge";
 import { PcapEditorProvider } from "./pcapEditor";
+import { sameNameResolution } from "./settingsModel";
 
 let provider: PcapEditorProvider | undefined;
+let namesTimer: ReturnType<typeof setTimeout> | undefined;
 
 export interface PcapViewerApi {
   /** Exposed for integration tests. */
@@ -48,7 +50,10 @@ export function activate(context: vscode.ExtensionContext): PcapViewerApi {
       if (!e.affectsConfiguration(SECTION)) {
         return;
       }
-      if (e.affectsConfiguration(`${SECTION}.columns`) || e.affectsConfiguration(`${SECTION}.columnLayout`)) {
+      if (
+        e.affectsConfiguration(`${SECTION}.columns`) ||
+        e.affectsConfiguration(`${SECTION}.columnLayout`)
+      ) {
         for (const s of p.allSessions) {
           const settings = readSettings(s.uri); // folder-scoped: each capture its own
           s.setColumns(settings.columns, settings.columnLayout);
@@ -76,9 +81,25 @@ export function activate(context: vscode.ExtensionContext): PcapViewerApi {
           void s.applyColoring();
         }
       }
+      if (e.affectsConfiguration(`${SECTION}.nameResolution`)) {
+        // Usually PCAP: Name Resolution…, which can change several keys: reload
+        // once they are all written (saved indexes make switching back instant).
+        clearTimeout(namesTimer);
+        namesTimer = setTimeout(() => {
+          for (const s of p.allSessions.filter(
+            (s) => !sameNameResolution(readSettings(s.uri).nameResolution, s.names),
+          )) {
+            void s.load();
+          }
+        }, 300);
+      }
       if (e.affectsConfiguration(`${SECTION}.tlsKeyLogFile`)) {
         // Usually PCAP: Set TLS Key Log File…: reload the captures whose key log changed.
-        await Promise.all(p.allSessions.filter((s) => readSettings(s.uri).tlsKeyLogFile !== s.keyLogFile).map((s) => s.load()));
+        await Promise.all(
+          p.allSessions
+            .filter((s) => readSettings(s.uri).tlsKeyLogFile !== s.keyLogFile)
+            .map((s) => s.load()),
+        );
       }
       if (RELOAD_KEYS.some((k) => e.affectsConfiguration(k)) && p.allSessions.length) {
         const choice = await vscode.window.showInformationMessage(

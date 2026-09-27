@@ -1,0 +1,5 @@
+# Mechanical reformatting commits, skipped by `git blame` (GitHub reads this file;
+# locally: git config blame.ignoreRevsFile .git-blame-ignore-revs).
+
+# Apply Prettier to the TypeScript, JavaScript and Markdown files
+1826287eb733bbb1d5c1d39bece9e15032d67b03

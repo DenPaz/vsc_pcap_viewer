@@ -258,7 +258,7 @@ def test_superseded_filter(opened: PcapService, ctx: RequestContext) -> None:
     def first() -> None:
         try:
             opened.set_filter({"expr": "tcp"}, RequestContext())
-        except BaseException as exc:
+        except BaseException as exc:  # noqa: BLE001 - the thread hands it to the test
             errors.append(exc)
 
     t = threading.Thread(target=first)

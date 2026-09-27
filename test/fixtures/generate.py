@@ -116,6 +116,95 @@ def http_packets() -> list[Packet]:
     return _stamp(s.packets)
 
 
+def _http_response(body: bytes, content_type: str, extra: bytes = b"") -> bytes:
+    return (
+        f"HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\n".encode()
+        + extra
+        + (b"" if b"chunked" in extra else f"Content-Length: {len(body)}\r\n".encode())
+        + b"\r\n"
+        + body
+    )
+
+
+def _chunked(data: bytes, size: int) -> bytes:
+    out = b""
+    for i in range(0, len(data), size):
+        part = data[i : i + size]
+        out += f"{len(part):x}\r\n".encode() + part + b"\r\n"
+    return out + b"0\r\n\r\n"
+
+
+# Bodies of objects.pcap, also used by the export-objects tests.
+OBJECT_PNG = b"\x89PNG\r\n\x1a\n" + bytes(range(256)) * 3
+OBJECT_REPORT = b"".join(f"report line {i}\n".encode() for i in range(60))
+OBJECT_UPLOAD = b'{"name": "pcap-viewer", "size": 3}'
+OBJECT_DUP = b"same body twice\n"
+OBJECT_TFTP = bytes((i * 7) % 256 for i in range(612))
+OBJECT_MAIL = (
+    b"From: alice@example.com\r\nTo: bob@example.com\r\nSubject: Test report\r\n\r\n"
+    b"Hello Bob,\r\nthe report is attached.\r\n"
+)
+
+
+def objects_packets() -> list[Packet]:
+    """HTTP, TFTP and SMTP (IMF) transfers for Export Objects."""
+    web = _TcpSession("192.168.1.10", "93.184.216.34", 50100, 80)
+    web.handshake()
+    get = "GET {} HTTP/1.1\r\nHost: example.com\r\n\r\n"
+    web.client_send(get.format("/images/logo.png").encode())
+    web.server_send(_http_response(OBJECT_PNG, "image/png"))
+    web.client_send(get.format("/report").encode())
+    report = gzip.compress(OBJECT_REPORT, mtime=0)
+    chunked = b"Transfer-Encoding: chunked\r\nContent-Encoding: gzip\r\n"
+    web.server_send(_http_response(_chunked(report, 200), "text/plain", chunked))
+    web.client_send(
+        b"POST /upload HTTP/1.1\r\nHost: example.com\r\nContent-Type: application/json\r\n"
+        + f"Content-Length: {len(OBJECT_UPLOAD)}\r\n\r\n".encode()
+        + OBJECT_UPLOAD
+    )
+    web.server_send(b"HTTP/1.1 204 No Content\r\n\r\n")
+    for _ in range(2):
+        web.client_send(get.format("/files/dup.txt").encode())
+        web.server_send(_http_response(OBJECT_DUP, "text/plain"))
+    web.close()
+
+    tftp: list[Packet] = []
+    client, server = (
+        ("02:00:00:00:00:01", "192.168.1.20", 40000),
+        ("02:00:00:00:00:02", "192.168.1.1"),
+    )
+
+    def udp(src: tuple[str, str, int], dst: tuple[str, str, int], data: bytes) -> Packet:
+        return (
+            Ether(src=src[0], dst=dst[0])
+            / IP(src=src[1], dst=dst[1])
+            / UDP(sport=src[2], dport=dst[2])
+            / Raw(data)
+        )
+
+    srv = (*server, 50001)
+    tftp.append(udp(client, (*server, 69), b"\x00\x01boot/config.bin\x00octet\x00"))
+    for block, i in enumerate(range(0, len(OBJECT_TFTP), 512), start=1):
+        tftp.append(udp(srv, client, struct.pack("!HH", 3, block) + OBJECT_TFTP[i : i + 512]))
+        tftp.append(udp(client, srv, struct.pack("!HH", 4, block)))
+
+    mail = _TcpSession("192.168.1.10", "192.168.1.25", 50200, 25)
+    mail.handshake()
+    mail.server_send(b"220 mail.example.com ESMTP\r\n")
+    for command, reply in (
+        (b"HELO client\r\n", b"250 mail.example.com\r\n"),
+        (b"MAIL FROM:<alice@example.com>\r\n", b"250 OK\r\n"),
+        (b"RCPT TO:<bob@example.com>\r\n", b"250 OK\r\n"),
+        (b"DATA\r\n", b"354 End data with <CR><LF>.<CR><LF>\r\n"),
+        (OBJECT_MAIL + b".\r\n", b"250 OK: queued\r\n"),
+        (b"QUIT\r\n", b"221 Bye\r\n"),
+    ):
+        mail.client_send(command)
+        mail.server_send(reply)
+    mail.close()
+    return _stamp(web.packets + tftp + mail.packets)
+
+
 def dns_packets() -> list[Packet]:
     pkts: list[Packet] = []
     names = ["example.com", "wireshark.org", "nonexistent.invalid"]
@@ -482,6 +571,7 @@ def main() -> None:
     wrpcap(str(HERE / "udp_custom.pcap"), udp_custom_packets())
     wrpcap(str(HERE / "tls.pcap"), tls_packets())
     wrpcapng(str(HERE / "mixed.pcapng"), mixed_packets())
+    wrpcap(str(HERE / "objects.pcap"), objects_packets())
     # A truncated file to exercise malformed-capture handling.
     data = (HERE / "http.pcap").read_bytes()
     (HERE / "truncated.pcap").write_bytes(data[: len(data) - 30])

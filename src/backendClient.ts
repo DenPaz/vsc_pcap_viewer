@@ -38,7 +38,10 @@ export interface RequestOptions {
   timeoutMs?: number;
   onProgress?: (p: Progress) => void;
   /** Anything with VS Code's CancellationToken shape. */
-  cancellation?: { isCancellationRequested: boolean; onCancellationRequested(cb: () => void): { dispose(): void } };
+  cancellation?: {
+    isCancellationRequested: boolean;
+    onCancellationRequested(cb: () => void): { dispose(): void };
+  };
 }
 
 /** Error codes shared with backend/pcap_backend/protocol.py. */
@@ -111,7 +114,13 @@ export class BackendClient {
   }
 
   /** Fires when the backend process exits (expectedly or not). */
-  onExit(listener: (info: { code: number | null; signal: NodeJS.Signals | null; expected: boolean }) => void): () => void {
+  onExit(
+    listener: (info: {
+      code: number | null;
+      signal: NodeJS.Signals | null;
+      expected: boolean;
+    }) => void,
+  ): () => void {
     this.events.on("exit", listener);
     return () => this.events.off("exit", listener);
   }
@@ -139,7 +148,11 @@ export class BackendClient {
     if (this.opts.maxCachedFrames) {
       args.push("--max-cached-frames", String(this.opts.maxCachedFrames));
     }
-    const env = { ...process.env, PYTHONPATH: joinPath(this.opts.backendDir, process.env.PYTHONPATH), PYTHONIOENCODING: "utf-8" };
+    const env = {
+      ...process.env,
+      PYTHONPATH: joinPath(this.opts.backendDir, process.env.PYTHONPATH),
+      PYTHONIOENCODING: "utf-8",
+    };
     this.opts.logger.info(`starting backend: ${[cmd, ...args].join(" ")}`);
     const proc = spawn(cmd, args, {
       cwd: this.opts.backendDir,
@@ -173,7 +186,12 @@ export class BackendClient {
         );
         if (this.proc === proc) {
           this.proc = undefined;
-          this.rejectAll(new RpcError("The PCAP backend process exited", ErrorCodes.BackendExited, { code, signal }));
+          this.rejectAll(
+            new RpcError("The PCAP backend process exited", ErrorCodes.BackendExited, {
+              code,
+              signal,
+            }),
+          );
         }
         this.events.emit("exit", { code, signal, expected });
         resolve();
@@ -198,12 +216,24 @@ export class BackendClient {
         reject(new RpcError("The PCAP backend is not running", ErrorCodes.BackendExited));
         return;
       }
-      const pending: Pending = { method, resolve: resolve as (v: unknown) => void, reject, onProgress: options.onProgress };
+      const pending: Pending = {
+        method,
+        resolve: resolve as (v: unknown) => void,
+        reject,
+        onProgress: options.onProgress,
+      };
       const timeoutMs = options.timeoutMs ?? this.opts.defaultTimeoutMs ?? 0;
       if (timeoutMs > 0) {
         pending.timer = setTimeout(() => {
           this.cancel(id);
-          this.settle(id, undefined, new RpcError(`${method} timed out after ${Math.round(timeoutMs / 1000)}s`, ErrorCodes.Timeout));
+          this.settle(
+            id,
+            undefined,
+            new RpcError(
+              `${method} timed out after ${Math.round(timeoutMs / 1000)}s`,
+              ErrorCodes.Timeout,
+            ),
+          );
         }, timeoutMs);
       }
       if (options.cancellation) {
@@ -246,7 +276,10 @@ export class BackendClient {
     }
     if (process.platform === "win32" && proc.pid) {
       // Kill the whole tree (python + tshark children).
-      spawnSync("taskkill", ["/PID", String(proc.pid), "/T", "/F"], { windowsHide: true, shell: false });
+      spawnSync("taskkill", ["/PID", String(proc.pid), "/T", "/F"], {
+        windowsHide: true,
+        shell: false,
+      });
     } else {
       proc.kill("SIGTERM");
     }
@@ -296,7 +329,13 @@ export class BackendClient {
   }
 
   private onLine(line: string): void {
-    let msg: { id?: number | string | null; method?: string; params?: unknown; result?: unknown; error?: { code: number; message: string; data?: unknown } };
+    let msg: {
+      id?: number | string | null;
+      method?: string;
+      params?: unknown;
+      result?: unknown;
+      error?: { code: number; message: string; data?: unknown };
+    };
     try {
       msg = JSON.parse(line);
     } catch {
@@ -319,7 +358,11 @@ export class BackendClient {
       return;
     }
     if (msg.error) {
-      this.settle(msg.id, undefined, new RpcError(msg.error.message, msg.error.code, msg.error.data));
+      this.settle(
+        msg.id,
+        undefined,
+        new RpcError(msg.error.message, msg.error.code, msg.error.data),
+      );
     } else {
       this.settle(msg.id, msg.result);
     }
@@ -374,7 +417,9 @@ export const MIN_PYTHON: readonly [number, number] = [3, 14];
  * `python3` next to `python3.14`), then the generic names. Returns the argv
  * prefix to use.
  */
-export function findPython(configured: string | undefined): { python: string[]; version: string } | { error: string } {
+export function findPython(
+  configured: string | undefined,
+): { python: string[]; version: string } | { error: string } {
   const [minMajor, minMinor] = MIN_PYTHON;
   const want = `${minMajor}.${minMinor}`;
   const candidates: string[][] = configured
@@ -385,12 +430,16 @@ export function findPython(configured: string | undefined): { python: string[]; 
   const tried: string[] = [];
   for (const [cmd, ...pre] of candidates) {
     tried.push([cmd, ...pre].join(" "));
-    const res = spawnSync(cmd, [...pre, "-c", "import sys; print('%d.%d' % sys.version_info[:2])"], {
-      encoding: "utf8",
-      timeout: 10000,
-      windowsHide: true,
-      shell: false,
-    });
+    const res = spawnSync(
+      cmd,
+      [...pre, "-c", "import sys; print('%d.%d' % sys.version_info[:2])"],
+      {
+        encoding: "utf8",
+        timeout: 10000,
+        windowsHide: true,
+        shell: false,
+      },
+    );
     if (res.status !== 0 || !res.stdout) {
       continue;
     }
@@ -401,5 +450,7 @@ export function findPython(configured: string | undefined): { python: string[]; 
     }
     tried[tried.length - 1] += ` (found ${version}, need >= ${want})`;
   }
-  return { error: `No Python ${want}+ interpreter found. Tried: ${tried.join(", ")}. Install Python ${want} or set 'pcapViewer.pythonPath'.` };
+  return {
+    error: `No Python ${want}+ interpreter found. Tried: ${tried.join(", ")}. Install Python ${want} or set 'pcapViewer.pythonPath'.`,
+  };
 }

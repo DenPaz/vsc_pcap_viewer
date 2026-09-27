@@ -64,6 +64,9 @@ class World:
     tls: tuple[Path, Path] | None = None  # a TLS capture and its key log file
     events: list[dict[str, Any]] = field(default_factory=list)  # backend notifications
     coloring: dict[str, Any] | None = None
+    names: dict[str, bool] | None = None  # name resolution switches (None: tshark's own)
+    objects: list[dict[str, Any]] | None = None
+    save_dir: Path | None = None
     error: Exception | None = None
 
     def call(self, fn: Any, params: dict[str, Any]) -> Any:
@@ -221,6 +224,8 @@ def open_capture(
     }
     if prefs:
         params["prefs"] = prefs
+    if world.names is not None:
+        params["names"] = world.names
     if world.cache_dir is not None:
         params["cache"] = {"dir": str(world.cache_dir)}
     params.update(extra)
@@ -801,7 +806,7 @@ def property_is(world: World, key: str, value: str) -> None:
 
 
 @given("a Lua dissector with a syntax error")
-def given_bad_lua(world: World, tmp_path: Path, request: pytest.FixtureRequest) -> None:
+def given_bad_lua(world: World, tmp_path: Path) -> None:
     if hasattr(os, "geteuid") and os.geteuid() == 0:
         pytest.skip("tshark disables Lua dissectors when running as root")
     script = tmp_path / "broken.lua"
@@ -1107,3 +1112,127 @@ def packets_marked(world: World, frames: str) -> None:
 @when(parsers.re(r"I export the marked packets as (?P<fmt>pcapng|pcap)$"))
 def export_marked(world: World, tmp_path: Path, fmt: str) -> None:
     _export(world, tmp_path, fmt, f"marked.{fmt}", marked=True)
+
+
+# ---------------------------------------------------------------------- name resolution
+
+_NAME_SWITCHES = {
+    "MAC addresses": "mac",
+    "network addresses": "network",
+    "the capture's DNS answers": "capturedDns",
+    "transport ports": "transport",
+}
+
+
+@given(parsers.re(r"name resolution of (?P<kinds>.+)$"))
+def given_names(world: World, kinds: str) -> None:
+    world.names = {_NAME_SWITCHES[k]: True for k in items(kinds)}
+
+
+@given("no name resolution")
+def given_no_names(world: World) -> None:
+    world.names = {}
+
+
+@then(
+    parsers.re(
+        r'the address behind the "(?P<title>Source|Destination)" column '
+        r'of row (?P<row>\d+) is "(?P<value>[^"]+)"$'
+    )
+)
+def address_behind(world: World, title: str, row: str, value: str) -> None:
+    page = world.page or world.rows()
+    r = page["rows"][int(row) - 1]
+    assert r["addresses"][0 if title == "Source" else 1] == value
+
+
+@then(parsers.re(r"no address is sent for row (?P<row>\d+)$"))
+def no_address(world: World, row: str) -> None:
+    page = world.page or world.rows()
+    assert "addresses" not in page["rows"][int(row) - 1]
+
+
+@then(parsers.re(r'the details of packet (?P<number>\d+) mention "(?P<text>[^"]+)"$'))
+def details_mention(world: World, number: str, text: str) -> None:
+    tree = world.service.packet_detail({"number": int(number)}, world.ctx)["tree"]
+
+    def labels(nodes: list[dict[str, Any]]) -> list[str]:
+        return [n["label"] for n in nodes] + [
+            x for n in nodes for x in labels(n.get("children", []))
+        ]
+
+    assert any(text in label for label in labels(tree)), text
+
+
+@then(
+    parsers.re(
+        r'the statistics column "(?P<label>[^"]+)" includes "(?P<value>[^"]+)" '
+        r'but not "(?P<other>[^"]+)"$'
+    )
+)
+def stats_column_includes(world: World, label: str, value: str, other: str) -> None:
+    column = [_stats_cell(world, row, label) for row in _table(world)["rows"]]
+    assert value in column and other not in column, column
+
+
+# ---------------------------------------------------------------------- export objects
+
+
+@given(parsers.re(r'the folder for saved objects already has a file "(?P<name>[^"]+)"$'))
+def save_dir_has(world: World, name: str, tmp_path: Path) -> None:
+    world.save_dir = tmp_path / "objects"
+    world.save_dir.mkdir(exist_ok=True)
+    (world.save_dir / name).write_text("already here")
+
+
+@when("I list the exported objects")
+def list_objects(world: World) -> None:
+    result = world.call(world.service.export_objects, {})
+    world.objects = result["objects"] if result else None
+
+
+@when("I save every object into the folder")
+def save_all_objects(world: World) -> None:
+    assert world.objects is not None and world.save_dir is not None
+    ids = [o["id"] for o in world.objects]
+    world.call(world.service.save_objects, {"ids": ids, "dir": str(world.save_dir)})
+    assert world.error is None, world.error
+
+
+def _object(world: World, name: str) -> dict[str, Any]:
+    assert world.error is None, world.error
+    assert world.objects is not None
+    return next(o for o in world.objects if o["name"] == name)
+
+
+@then(parsers.re(r"the objects are (?P<names>.+)$"))
+def objects_are(world: World, names: str) -> None:
+    assert world.error is None, world.error
+    assert [o["name"] for o in world.objects or []] == items(names)
+
+
+@then("there are no objects")
+def no_objects(world: World) -> None:
+    assert world.error is None, world.error
+    assert world.objects == []
+
+
+@then(
+    parsers.re(
+        r'the object "(?P<name>[^"]+)" came in packet (?P<frame>\d+)'
+        r'(?: from "(?P<host>[^"]+)" as "(?P<ctype>[^"]+)")?$'
+    )
+)
+def object_came_in(
+    world: World, name: str, frame: str, host: str | None, ctype: str | None
+) -> None:
+    obj = _object(world, name)
+    assert obj["frame"] == int(frame)
+    if host is not None:
+        assert (obj["host"], obj["contentType"]) == (host, ctype)
+
+
+@then(parsers.re(r"the folder has (?P<names>.+)$"))
+def folder_has(world: World, names: str) -> None:
+    assert world.save_dir is not None
+    assert sorted(p.name for p in world.save_dir.iterdir()) == sorted(items(names))

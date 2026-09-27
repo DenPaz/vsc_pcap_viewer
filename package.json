@@ -120,7 +120,7 @@
       },
       {
         "command": "pcapViewer.find",
-        "title": "Find Packet\u2026",
+        "title": "Find Packet…",
         "category": "PCAP"
       },
       {
@@ -190,12 +190,12 @@
       },
       {
         "command": "pcapViewer.exportMarked",
-        "title": "Export Marked Packets\u2026",
+        "title": "Export Marked Packets…",
         "category": "PCAP"
       },
       {
         "command": "pcapViewer.exportSelected",
-        "title": "Export Selected Packets\u2026",
+        "title": "Export Selected Packets…",
         "category": "PCAP"
       },
       {
@@ -205,12 +205,17 @@
       },
       {
         "command": "pcapViewer.timeFormat",
-        "title": "Time Display Format\u2026",
+        "title": "Time Display Format…",
+        "category": "PCAP"
+      },
+      {
+        "command": "pcapViewer.nameResolution",
+        "title": "Name Resolution…",
         "category": "PCAP"
       },
       {
         "command": "pcapViewer.saveFilter",
-        "title": "Save Display Filter\u2026",
+        "title": "Save Display Filter…",
         "category": "PCAP"
       },
       {
@@ -220,12 +225,12 @@
       },
       {
         "command": "pcapViewer.suggestFilter",
-        "title": "Suggest Display Filter\u2026",
+        "title": "Suggest Display Filter…",
         "category": "PCAP"
       },
       {
         "command": "pcapViewer.askAboutPackets",
-        "title": "Ask Copilot About Selected Packets\u2026",
+        "title": "Ask Copilot About Selected Packets…",
         "category": "PCAP"
       },
       {
@@ -240,7 +245,7 @@
       },
       {
         "command": "pcapViewer.followStream",
-        "title": "Follow Stream\u2026",
+        "title": "Follow Stream…",
         "category": "PCAP"
       },
       {
@@ -300,7 +305,7 @@
       },
       {
         "command": "pcapViewer.newLuaDissector",
-        "title": "New Lua Dissector\u2026",
+        "title": "New Lua Dissector…",
         "category": "PCAP"
       },
       {
@@ -310,7 +315,7 @@
       },
       {
         "command": "pcapViewer.decodeAs",
-        "title": "Decode As\u2026",
+        "title": "Decode As…",
         "category": "PCAP"
       },
       {
@@ -325,32 +330,37 @@
       },
       {
         "command": "pcapViewer.exportFiltered",
-        "title": "Export Specified Packets\u2026",
+        "title": "Export Specified Packets…",
         "category": "PCAP"
       },
       {
         "command": "pcapViewer.exportPacketList",
-        "title": "Export Packet List as CSV/JSON\u2026",
+        "title": "Export Packet List as CSV/JSON…",
         "category": "PCAP"
       },
       {
         "command": "pcapViewer.exportDissections",
-        "title": "Export Packet Dissections\u2026",
+        "title": "Export Packet Dissections…",
+        "category": "PCAP"
+      },
+      {
+        "command": "pcapViewer.exportObjects",
+        "title": "Export Objects…",
         "category": "PCAP"
       },
       {
         "command": "pcapViewer.mergeCaptures",
-        "title": "Merge Captures\u2026",
+        "title": "Merge Captures…",
         "category": "PCAP"
       },
       {
         "command": "pcapViewer.exportPacketBytes",
-        "title": "Export Packet Bytes\u2026",
+        "title": "Export Packet Bytes…",
         "category": "PCAP"
       },
       {
         "command": "pcapViewer.colorizeWithFilter",
-        "title": "Colorize with Filter\u2026",
+        "title": "Colorize with Filter…",
         "category": "PCAP"
       },
       {
@@ -455,6 +465,10 @@
         {
           "command": "pcapViewer.exportDissections",
           "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
+        },
+        {
+          "command": "pcapViewer.exportObjects",
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow || activeWebviewPanelId == pcapViewer.objects"
         },
         {
           "command": "pcapViewer.exportPacketBytes",
@@ -666,6 +680,36 @@
           "default": {},
           "markdownDescription": "Wireshark preference overrides passed as `-o <name>:<value>`, e.g. `{ \"tcp.desegment_tcp_streams\": false }`."
         },
+        "pcapViewer.nameResolution.mac": {
+          "type": "boolean",
+          "scope": "resource",
+          "default": true,
+          "markdownDescription": "Show names for MAC addresses in the packet list and details: vendor prefixes and well-known addresses (`Broadcast`, `Dell_12:34:56`). Set with **PCAP: Name Resolution…** or the *Names* link in the viewer's status bar; a change re-indexes the captures it applies to (saved indexes make switching back instant)."
+        },
+        "pcapViewer.nameResolution.network": {
+          "type": "boolean",
+          "scope": "resource",
+          "default": false,
+          "markdownDescription": "Show host names for IP addresses. Names come from the capture's own DNS answers (`#pcapViewer.nameResolution.capturedDns#`), the system's hosts file and a `hosts` file in Wireshark's personal configuration folder; nothing is looked up unless `#pcapViewer.nameResolution.external#` is on. Cell filters and statistics keep using the addresses."
+        },
+        "pcapViewer.nameResolution.capturedDns": {
+          "type": "boolean",
+          "scope": "resource",
+          "default": true,
+          "markdownDescription": "With `#pcapViewer.nameResolution.network#`, use the names learned from DNS responses in the capture (packets after the response show the name)."
+        },
+        "pcapViewer.nameResolution.transport": {
+          "type": "boolean",
+          "scope": "resource",
+          "default": false,
+          "markdownDescription": "Show service names for TCP/UDP/SCTP ports, e.g. `http(80)` in the Info column and the details."
+        },
+        "pcapViewer.nameResolution.external": {
+          "type": "boolean",
+          "scope": "application",
+          "default": false,
+          "markdownDescription": "With `#pcapViewer.nameResolution.network#`, also ask your DNS server for the names of the capture's addresses. It sends a query per address (the server sees them) and makes opening and filtering slower. A workspace can't turn this on."
+        },
         "pcapViewer.tlsKeyLogFile": {
           "type": "string",
           "scope": "resource",
@@ -741,7 +785,7 @@
             "Date and time of day, UTC",
             "Seconds since 1970-01-01"
           ],
-          "markdownDescription": "How the packet list shows the Time column (*PCAP: Time Display Format\u2026*, or click the time format in the status bar)."
+          "markdownDescription": "How the packet list shows the Time column (*PCAP: Time Display Format…*, or click the time format in the status bar)."
         },
         "pcapViewer.savedFilters": {
           "type": "array",
@@ -761,7 +805,7 @@
             ]
           },
           "default": [],
-          "markdownDescription": "Named display filters, e.g. `{ \"name\": \"Web\", \"filter\": \"http || tls\" }`. Shown in the filter bar's \u2605 menu and *PCAP: Saved Display Filters*. Set in user settings for all captures or in workspace settings to share with a project."
+          "markdownDescription": "Named display filters, e.g. `{ \"name\": \"Web\", \"filter\": \"http || tls\" }`. Shown in the filter bar's ★ menu and *PCAP: Saved Display Filters*. Set in user settings for all captures or in workspace settings to share with a project."
         },
         "pcapViewer.colorize": {
           "type": "boolean",
@@ -890,7 +934,7 @@
               "background": "#ffffff"
             }
           ],
-          "markdownDescription": "Packet list coloring rules, like Wireshark's *View \u203a Coloring Rules*: the **first** rule whose display filter matches colors the packet. Colors are `#rrggbb`; set `\"enabled\": false` to keep a rule without using it. *Colorize with Filter\u2026* in the detail tree's context menu adds a rule at the top."
+          "markdownDescription": "Packet list coloring rules, like Wireshark's *View › Coloring Rules*: the **first** rule whose display filter matches colors the packet. Colors are `#rrggbb`; set `\"enabled\": false` to keep a rule without using it. *Colorize with Filter…* in the detail tree's context menu adds a rule at the top."
         },
         "pcapViewer.maxCachedFrames": {
           "type": "integer",
@@ -931,13 +975,13 @@
         "pcapViewer.ai.enabled": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "Offer AI help through VS Code's Language Model API (GitHub Copilot): display filters (the filter bar's \u2728 action, *PCAP: Suggest Display Filter\u2026* and `@pcap` in chat), where only your request, the current filter and protocol/field names are sent and suggestions are checked with tshark; and explaining packets (*Ask Copilot About This Packet\u2026*, `@pcap /explain`), which sends packet data only if `#pcapViewer.ai.allowPacketData#` allows it."
+          "markdownDescription": "Offer AI help through VS Code's Language Model API (GitHub Copilot): display filters (the filter bar's ✨ action, *PCAP: Suggest Display Filter…* and `@pcap` in chat), where only your request, the current filter and protocol/field names are sent and suggestions are checked with tshark; and explaining packets (*Ask Copilot About This Packet…*, `@pcap /explain`), which sends packet data only if `#pcapViewer.ai.allowPacketData#` allows it."
         },
         "pcapViewer.ai.allowPacketData": {
           "type": "boolean",
           "default": false,
           "scope": "application",
-          "markdownDescription": "Allow *Ask Copilot About This Packet\u2026* and `@pcap /explain` to send packet data to the language model: for at most 8 packets at a time, their packet-list row and dissection tree (field names and values, at most 250 lines each), plus your question and the current display filter. Raw bytes are not sent unless `#pcapViewer.ai.allowPacketBytes#` is also on. You are asked once when this is off. User settings only."
+          "markdownDescription": "Allow *Ask Copilot About This Packet…* and `@pcap /explain` to send packet data to the language model: for at most 8 packets at a time, their packet-list row and dissection tree (field names and values, at most 250 lines each), plus your question and the current display filter. Raw bytes are not sent unless `#pcapViewer.ai.allowPacketBytes#` is also on. You are asked once when this is off. User settings only."
         },
         "pcapViewer.ai.allowPacketBytes": {
           "type": "boolean",
@@ -974,6 +1018,8 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "lint": "eslint src test && tsc -p tsconfig.webview.json",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "test": "pnpm run test:unit && pnpm run test:backend",
     "test:unit": "pnpm run compile && mocha --ui tdd \"out/test/extension/unit/**/*.test.js\" \"test/webview/**/*.test.js\"",
     "test:backend": "uv run pytest",
@@ -988,8 +1034,10 @@
     "@vscode/test-electron": "^3.1.0",
     "@vscode/vsce": "^4.0.0",
     "eslint": "^10.11.0",
+    "eslint-config-prettier": "^10.1.8",
     "mocha": "^12.0.2",
     "playwright-core": "^1.63.0",
+    "prettier": "^3.9.9",
     "typescript": "~6.0.3",
     "typescript-eslint": "^8.70.1"
   },

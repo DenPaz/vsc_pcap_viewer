@@ -10,7 +10,12 @@ export function webviewRoot(context: vscode.ExtensionContext): vscode.Uri {
  * HTML shell for an auxiliary panel (statistics, follow stream): the same
  * strict CSP as the editor, the shared stylesheet, `lib.js`, and one script.
  */
-export function panelHtml(webview: vscode.Webview, root: vscode.Uri, script: string, title: string): string {
+export function panelHtml(
+  webview: vscode.Webview,
+  root: vscode.Uri,
+  script: string,
+  title: string,
+): string {
   const nonce = crypto.randomBytes(16).toString("base64");
   const uri = (name: string) => webview.asWebviewUri(vscode.Uri.joinPath(root, name)).toString();
   const csp = [

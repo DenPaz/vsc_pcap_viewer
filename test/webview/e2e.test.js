@@ -11,7 +11,14 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
-const { ROOT, HAVE_TSHARK, loadDeps, serveWebview, renderEditorHtml, startBackend } = require("./harness");
+const {
+  ROOT,
+  HAVE_TSHARK,
+  loadDeps,
+  serveWebview,
+  renderEditorHtml,
+  startBackend,
+} = require("./harness");
 
 const deps = loadDeps();
 const maybe = deps && HAVE_TSHARK ? suite : suite.skip;
@@ -67,6 +74,8 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
       }
     });
 
+    /** Webview rpc id → backend request id, for "cancel". */
+    const inflight = new Map();
     // Minimal extension-host emulation (see src/pcapEditor.ts).
     await page.exposeFunction("__toHost", async (raw) => {
       const msg = JSON.parse(raw);
@@ -87,11 +96,15 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
           history: ["tcp.port == 80"],
           savedFilters,
           elapsedMs: 12,
+          names: "Names: MAC",
         });
       } else if (msg.type === "saveFilter") {
         // The real host asks for a name; the stand-in uses "Saved <n>".
         hostLog.push(msg);
-        savedFilters = [...savedFilters, { name: `Saved ${savedFilters.length}`, filter: msg.expr }];
+        savedFilters = [
+          ...savedFilters,
+          { name: `Saved ${savedFilters.length}`, filter: msg.expr },
+        ];
         await post({ type: "savedFilters", savedFilters });
       } else if (msg.type === "aiSuggest") {
         hostLog.push(msg);
@@ -113,10 +126,36 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
       } else if (msg.type === "columnLayout") {
         hostLog.push(msg);
         layout = msg.layout;
-      } else if (["marks", "pickTimeFormat", "renameColumn", "exportSelected", "copy", "askAboutPackets"].includes(msg.type)) {
+      } else if (
+        [
+          "marks",
+          "pickTimeFormat",
+          "pickNameResolution",
+          "renameColumn",
+          "exportSelected",
+          "copy",
+          "askAboutPackets",
+        ].includes(msg.type)
+      ) {
         hostLog.push(msg);
-      } else if (["manageSavedFilters", "filterApplied", "selection", "follow", "decodeAs", "colorize", "exportBytes"].includes(msg.type)) {
+      } else if (
+        [
+          "manageSavedFilters",
+          "filterApplied",
+          "selection",
+          "follow",
+          "decodeAs",
+          "colorize",
+          "exportBytes",
+        ].includes(msg.type)
+      ) {
         hostLog.push(msg);
+      } else if (msg.type === "cancel") {
+        // Like PcapEditorSession: cancel the backend request behind a webview rpc.
+        const backendId = inflight.get(msg.id);
+        if (backendId !== undefined) {
+          client.cancel(backendId);
+        }
       } else if (msg.type === "rpc") {
         if (msg.method === "packet_detail") {
           detailRequests.push(msg.params);
@@ -126,11 +165,22 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
         }
         const pending = client.send(msg.method, msg.params, {
           timeoutMs: 0,
-          onProgress: (p) => void post({ type: "progress", id: msg.id, phase: p.phase, fraction: p.fraction, frames: p.frames, matched: p.matched }),
+          onProgress: (p) =>
+            void post({
+              type: "progress",
+              id: msg.id,
+              phase: p.phase,
+              fraction: p.fraction,
+              frames: p.frames,
+              matched: p.matched,
+            }),
         });
+        inflight.set(msg.id, pending.id);
+        pending.promise.catch(() => undefined).then(() => inflight.delete(msg.id));
         pending.promise.then(
           (result) => post({ type: "rpcResult", id: msg.id, result }),
-          (err) => post({ type: "rpcError", id: msg.id, error: { code: err.code, message: err.message } }),
+          (err) =>
+            post({ type: "rpcError", id: msg.id, error: { code: err.code, message: err.message } }),
         );
       }
     });
@@ -146,15 +196,33 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     server?.close();
   });
 
-  const rowNumbers = () => page.$$eval("#list-rows .list-row:not(.loading)", (rows) => rows.map((r) => Number(r.children[0].textContent)));
+  const rowNumbers = () =>
+    page.$$eval("#list-rows .list-row:not(.loading)", (rows) =>
+      rows.map((r) => Number(r.children[0].textContent)),
+    );
 
   test("renders the packet list with base and custom columns", async () => {
     await page.waitForSelector("#overlay.hidden", { state: "attached" });
-    await page.waitForFunction(() => document.querySelectorAll("#list-rows .list-row:not(.loading)").length === 11);
+    await page.waitForFunction(
+      () => document.querySelectorAll("#list-rows .list-row:not(.loading)").length === 11,
+    );
     assert.deepEqual(await rowNumbers(), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
-    const headers = await page.$$eval("#list-header > div", (cells) => cells.map((c) => c.firstChild.textContent));
-    assert.deepEqual(headers, ["No.", "Time", "Source", "Destination", "Protocol", "Length", "Info", "Stream"]);
-    const fourth = await page.$$eval("#list-rows .list-row", (rows) => [...rows[3].children].map((c) => c.textContent));
+    const headers = await page.$$eval("#list-header > div", (cells) =>
+      cells.map((c) => c.firstChild.textContent),
+    );
+    assert.deepEqual(headers, [
+      "No.",
+      "Time",
+      "Source",
+      "Destination",
+      "Protocol",
+      "Length",
+      "Info",
+      "Stream",
+    ]);
+    const fourth = await page.$$eval("#list-rows .list-row", (rows) =>
+      [...rows[3].children].map((c) => c.textContent),
+    );
     assert.equal(fourth[1], "0.003000");
     assert.equal(fourth[4], "HTTP");
     assert.equal(fourth[7], "0");
@@ -173,7 +241,9 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     await page.fill("#filter-input", "http");
     await page.waitForSelector("#filter-input.valid");
     await page.press("#filter-input", "Enter");
-    await page.waitForFunction(() => document.querySelectorAll("#list-rows .list-row:not(.loading)").length === 2);
+    await page.waitForFunction(
+      () => document.querySelectorAll("#list-rows .list-row:not(.loading)").length === 2,
+    );
     assert.deepEqual(await rowNumbers(), [4, 7]);
     assert.match(await page.textContent("#status-left"), /Displayed: 2/);
   });
@@ -181,7 +251,9 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
   test("selecting a packet shows the tree and bytes, with two-way highlighting", async () => {
     await page.click("#list-rows .list-row >> nth=1"); // frame 7 (reassembled HTTP)
     await page.waitForSelector("#detail-tree .node-row");
-    const protos = await page.$$eval("#detail-tree > div > .node-row .label", (ls) => ls.map((l) => l.textContent));
+    const protos = await page.$$eval("#detail-tree > div > .node-row .label", (ls) =>
+      ls.map((l) => l.textContent),
+    );
     assert.ok(protos[0].startsWith("Frame 7"));
     assert.ok(protos.some((p) => p.startsWith("Hypertext Transfer Protocol")));
     // Two byte sources: frame and reassembled TCP.
@@ -190,7 +262,9 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     // Tree -> bytes: expand IPv4 and select the source address.
     await page.click("#detail-tree .node-row:has-text('Internet Protocol Version 4') .twisty");
     await page.click("#detail-tree .node-row:has-text('Source Address')");
-    const marked = await page.$$eval("#bytes-view .b.hl", (bs) => bs.map((b) => b.textContent).join(" "));
+    const marked = await page.$$eval("#bytes-view .b.hl", (bs) =>
+      bs.map((b) => b.textContent).join(" "),
+    );
     assert.equal(marked, "5d b8 d8 22"); // 93.184.216.34
 
     // Bytes -> tree: clicking an HTTP byte in the reassembled source selects an HTTP field.
@@ -203,17 +277,27 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
   test("apply-as-filter from the tree context menu", async () => {
     await page.click("#detail-tree .node-row:has-text('Source Address')", { button: "right" });
     await page.click("#context-menu .item:has-text('Apply as Filter')");
-    await page.waitForFunction(() => document.querySelector("#filter-input").value === "ip.src == 93.184.216.34");
-    await page.waitForFunction(() => /Displayed: 5/.test(document.querySelector("#status-left").textContent));
+    await page.waitForFunction(
+      () => document.querySelector("#filter-input").value === "ip.src == 93.184.216.34",
+    );
+    await page.waitForFunction(() =>
+      /Displayed: 5/.test(document.querySelector("#status-left").textContent),
+    );
   });
 
   test("sorting by a column header", async () => {
     await page.click("#filter-clear");
-    await page.waitForFunction(() => document.querySelectorAll("#list-rows .list-row:not(.loading)").length === 11);
+    await page.waitForFunction(
+      () => document.querySelectorAll("#list-rows .list-row:not(.loading)").length === 11,
+    );
     await page.click("#list-header > div:has-text('Length')");
     await page.click("#list-header > div:has-text('Length')"); // descending
-    await page.waitForFunction(() => document.querySelector("#list-rows .list-row").children[5].textContent === "345");
-    const lengths = await page.$$eval("#list-rows .list-row", (rows) => rows.slice(0, 3).map((r) => r.children[5].textContent));
+    await page.waitForFunction(
+      () => document.querySelector("#list-rows .list-row").children[5].textContent === "345",
+    );
+    const lengths = await page.$$eval("#list-rows .list-row", (rows) =>
+      rows.slice(0, 3).map((r) => r.children[5].textContent),
+    );
     assert.deepEqual(lengths, ["345", "254", "144"]);
   });
 
@@ -221,7 +305,9 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     await page.focus("#list-viewport");
     await page.keyboard.press("Home");
     await page.keyboard.press("ArrowDown");
-    await page.waitForFunction(() => document.querySelector("#list-rows .list-row.selected")?.dataset.index === "1");
+    await page.waitForFunction(
+      () => document.querySelector("#list-rows .list-row.selected")?.dataset.index === "1",
+    );
   });
 
   const suggestions = () =>
@@ -263,8 +349,12 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     await page.keyboard.type("93.184.216.34");
     await page.waitForSelector("#suggest.hidden", { state: "attached" }); // no suggestions for values
     await page.keyboard.press("Enter");
-    await page.waitForFunction(() => /Displayed: 5/.test(document.querySelector("#status-left").textContent));
-    assert.ok(hostLog.some((m) => m.type === "filterApplied" && m.expr === "ip.src == 93.184.216.34"));
+    await page.waitForFunction(() =>
+      /Displayed: 5/.test(document.querySelector("#status-left").textContent),
+    );
+    assert.ok(
+      hostLog.some((m) => m.type === "filterApplied" && m.expr === "ip.src == 93.184.216.34"),
+    );
   });
 
   test("arrow keys, Tab and Escape drive the dropdown", async () => {
@@ -288,9 +378,14 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     await page.fill("#filter-input", "");
     await page.click("#filter-saved");
     let items = await suggestions();
-    assert.deepEqual(items.map((i) => i.label), ["Web", "tcp.port == 80", "Manage saved filters…"]);
+    assert.deepEqual(
+      items.map((i) => i.label),
+      ["Web", "tcp.port == 80", "Manage saved filters…"],
+    );
     await page.click("#suggest .suggest-item:has-text('Web')");
-    await page.waitForFunction(() => /Displayed: 2/.test(document.querySelector("#status-left").textContent));
+    await page.waitForFunction(() =>
+      /Displayed: 2/.test(document.querySelector("#status-left").textContent),
+    );
     assert.equal(await page.inputValue("#filter-input"), "http");
 
     // Save the current filter; the host answers with the updated list.
@@ -302,9 +397,15 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     await page.keyboard.press("ArrowDown"); // also opens the menu on an empty input
     // The host answers asynchronously; the open menu refreshes when it does.
     await page.waitForSelector("#suggest .suggest-item:has-text('Saved 1')");
-    assert.deepEqual(hostLog.filter((m) => m.type === "saveFilter").pop(), { type: "saveFilter", expr: "tcp.len == 0" });
+    assert.deepEqual(hostLog.filter((m) => m.type === "saveFilter").pop(), {
+      type: "saveFilter",
+      expr: "tcp.len == 0",
+    });
     items = await suggestions();
-    assert.ok(items.some((i) => i.label === "Saved 1" && i.desc === "tcp.len == 0"), JSON.stringify(items));
+    assert.ok(
+      items.some((i) => i.label === "Saved 1" && i.desc === "tcp.len == 0"),
+      JSON.stringify(items),
+    );
     await page.click("#suggest .suggest-item:has-text('Manage saved filters')");
     assert.equal(hostLog.at(-1).type, "manageSavedFilters");
   });
@@ -317,15 +418,23 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
         { field: "no.such.field", title: "Typo" },
       ],
     });
-    await page.waitForFunction(() => /no\.such\.field/.test(document.querySelector("#filter-error").textContent));
-    await page.waitForFunction(() => document.querySelectorAll("#list-rows .list-row:not(.loading)").length > 0);
-    const headers = await page.$$eval("#list-header > div", (cells) => cells.map((c) => c.firstChild.textContent));
+    await page.waitForFunction(() =>
+      /no\.such\.field/.test(document.querySelector("#filter-error").textContent),
+    );
+    await page.waitForFunction(
+      () => document.querySelectorAll("#list-rows .list-row:not(.loading)").length > 0,
+    );
+    const headers = await page.$$eval("#list-header > div", (cells) =>
+      cells.map((c) => c.firstChild.textContent),
+    );
     assert.deepEqual(headers.slice(-2), ["Info", "Stream"]);
   });
 
   test("the selection is reported and the packet list offers Follow Stream", async () => {
     await page.click("#filter-clear");
-    await page.waitForFunction(() => document.querySelectorAll("#list-rows .list-row:not(.loading)").length === 11);
+    await page.waitForFunction(
+      () => document.querySelectorAll("#list-rows .list-row:not(.loading)").length === 11,
+    );
     await page.click("#list-header > div:has-text('No.')"); // back to frame order
     await page.waitForFunction(() => {
       const row = document.querySelectorAll("#list-rows .list-row")[3];
@@ -333,9 +442,14 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     });
     await page.click("#list-rows .list-row >> nth=3", { button: "right" }); // frame 4 (HTTP GET)
     assert.ok(hostLog.some((m) => m.type === "selection" && m.frame === 4));
-    const items = await page.$$eval("#context-menu .item", (els) => els.map((e) => [e.textContent, !e.classList.contains("disabled")]));
+    const items = await page.$$eval("#context-menu .item", (els) =>
+      els.map((e) => [e.textContent, !e.classList.contains("disabled")]),
+    );
     // The clicked cell's Apply as Filter entries come first, then Follow.
-    assert.deepEqual(items.slice(0, 2).map((i) => i[0]), ["Apply as Filter", "Prepare as Filter"]);
+    assert.deepEqual(
+      items.slice(0, 2).map((i) => i[0]),
+      ["Apply as Filter", "Prepare as Filter"],
+    );
     assert.deepEqual(items.slice(5, 9), [
       ["Follow TCP Stream", true],
       ["Follow UDP Stream", true],
@@ -357,15 +471,41 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     ];
     // A separate coloring pass shows its progress until the colors arrive.
     await post({ type: "coloringProgress", fraction: null });
-    await page.waitForFunction(() => / · Coloring…$/.test(document.querySelector("#status-left")?.textContent ?? ""));
+    await page.waitForFunction(() =>
+      / · Coloring…$/.test(document.querySelector("#status-left")?.textContent ?? ""),
+    );
     await post({ type: "coloringProgress", fraction: 0.4 });
-    await page.waitForFunction(() => / · Coloring… 40%$/.test(document.querySelector("#status-left")?.textContent ?? ""));
-    const res = await client.request("set_coloring", { rules: rules.map(({ filter, foreground, background }) => ({ filter, foreground, background })) }, { timeoutMs: 0 });
-    await post({ type: "coloring", coloringId: res.coloringId, rules: rules.map(({ name, foreground, background }) => ({ name, foreground, background })) });
-    await page.waitForFunction(() => !/Coloring/.test(document.querySelector("#status-left")?.textContent ?? ""));
-    await page.waitForFunction(() => document.querySelector("#list-rows .list-row")?.classList.contains("colored"));
+    await page.waitForFunction(() =>
+      / · Coloring… 40%$/.test(document.querySelector("#status-left")?.textContent ?? ""),
+    );
+    const res = await client.request(
+      "set_coloring",
+      {
+        rules: rules.map(({ filter, foreground, background }) => ({
+          filter,
+          foreground,
+          background,
+        })),
+      },
+      { timeoutMs: 0 },
+    );
+    await post({
+      type: "coloring",
+      coloringId: res.coloringId,
+      rules: rules.map(({ name, foreground, background }) => ({ name, foreground, background })),
+    });
+    await page.waitForFunction(
+      () => !/Coloring/.test(document.querySelector("#status-left")?.textContent ?? ""),
+    );
+    await page.waitForFunction(() =>
+      document.querySelector("#list-rows .list-row")?.classList.contains("colored"),
+    );
     const rows = await page.$$eval("#list-rows .list-row", (els) =>
-      els.map((r) => ({ frame: r.children[0].textContent, selected: r.classList.contains("selected"), bg: r.style.backgroundColor })),
+      els.map((r) => ({
+        frame: r.children[0].textContent,
+        selected: r.classList.contains("selected"),
+        bg: r.style.backgroundColor,
+      })),
     );
     assert.equal(rows[0].bg, "rgb(231, 230, 255)"); // TCP handshake: rule 2
     assert.equal(rows[6].bg, "rgb(228, 255, 199)"); // frame 7, HTTP response: rule 1
@@ -382,22 +522,32 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     await page.waitForFunction(() => !document.querySelector("#list-rows .list-row.colored"));
     await post({ type: "coloringProgress", fraction: 0.1 });
     await post({ type: "coloringProgress", fraction: null, done: true }); // failed or cancelled
-    await page.waitForFunction(() => !/Coloring/.test(document.querySelector("#status-left")?.textContent ?? ""));
+    await page.waitForFunction(
+      () => !/Coloring/.test(document.querySelector("#status-left")?.textContent ?? ""),
+    );
   });
 
   const statusText = () => page.textContent("#status-left");
 
   test("✨ Ask AI: describe the packets, pick a suggestion, Enter applies it", async () => {
     await page.click("#filter-clear");
-    await page.waitForFunction(() => !/Displayed/.test(document.querySelector("#status-left").textContent));
-    assert.ok(await page.$eval("#filter-ai", (b) => b.classList.contains("hidden")), "hidden until the host says a model is available");
+    await page.waitForFunction(
+      () => !/Displayed/.test(document.querySelector("#status-left").textContent),
+    );
+    assert.ok(
+      await page.$eval("#filter-ai", (b) => b.classList.contains("hidden")),
+      "hidden until the host says a model is available",
+    );
     await post({ type: "aiAvailable", available: true });
     await page.waitForSelector("#filter-ai:not(.hidden)");
 
     await page.fill("#filter-input", "tcp"); // typed, not applied (its completions close in ask mode)
     aiReply = {
       suggestions: [
-        { filter: "tcp.flags.syn == 1", explanation: "Connection attempts: packets with the SYN flag set" },
+        {
+          filter: "tcp.flags.syn == 1",
+          explanation: "Connection attempts: packets with the SYN flag set",
+        },
         { filter: "tcp.flags.reset == 1", explanation: "Connections that were reset" },
       ],
     };
@@ -406,22 +556,39 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     assert.match(await page.getAttribute("#filter-input", "placeholder"), /Describe the packets/);
     await page.type("#filter-input", "tcp connection attempts");
     await new Promise((r) => setTimeout(r, 150));
-    assert.ok(await page.$eval("#suggest", (s) => s.classList.contains("hidden")), "no field completions while describing");
+    assert.ok(
+      await page.$eval("#suggest", (s) => s.classList.contains("hidden")),
+      "no field completions while describing",
+    );
     await page.press("#filter-input", "Enter");
     await page.waitForSelector("#suggest .suggest-item.kind-ai");
-    assert.equal(hostLog.filter((m) => m.type === "aiSuggest").at(-1).request, "tcp connection attempts");
-    const items = await page.$$eval("#suggest .suggest-item", (els) => els.map((e) => [e.querySelector(".suggest-label").textContent, e.querySelector(".suggest-desc").textContent]));
+    assert.equal(
+      hostLog.filter((m) => m.type === "aiSuggest").at(-1).request,
+      "tcp connection attempts",
+    );
+    const items = await page.$$eval("#suggest .suggest-item", (els) =>
+      els.map((e) => [
+        e.querySelector(".suggest-label").textContent,
+        e.querySelector(".suggest-desc").textContent,
+      ]),
+    );
     assert.deepEqual(items, [
       ["tcp.flags.syn == 1", "Connection attempts: packets with the SYN flag set"],
       ["tcp.flags.reset == 1", "Connections that were reset"],
     ]);
-    assert.equal(await page.inputValue("#filter-input"), "tcp", "the filter text is back while choosing");
+    assert.equal(
+      await page.inputValue("#filter-input"),
+      "tcp",
+      "the filter text is back while choosing",
+    );
 
     await page.click("#suggest .suggest-item >> nth=0");
     assert.equal(await page.inputValue("#filter-input"), "tcp.flags.syn == 1");
     assert.doesNotMatch(await statusText(), /Displayed/, "picking a suggestion doesn't apply it");
     await page.press("#filter-input", "Enter");
-    await page.waitForFunction(() => /Displayed: 2/.test(document.querySelector("#status-left").textContent)); // SYN and SYN/ACK
+    await page.waitForFunction(() =>
+      /Displayed: 2/.test(document.querySelector("#status-left").textContent),
+    ); // SYN and SYN/ACK
   });
 
   test("✨ Ask AI: Esc cancels, no suggestions show a message, the action hides when unavailable", async () => {
@@ -429,18 +596,31 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     await page.click("#filter-ai");
     await page.type("#filter-input", "something slow");
     await page.press("#filter-input", "Enter");
-    await page.waitForFunction(() => /Asking the language model/.test(document.querySelector("#filter-error").textContent));
+    await page.waitForFunction(() =>
+      /Asking the language model/.test(document.querySelector("#filter-error").textContent),
+    );
     await page.press("#filter-input", "Escape");
     const asked = hostLog.filter((m) => m.type === "aiSuggest").at(-1);
     await waitForHost((m) => m.type === "aiCancel" && m.id === asked.id); // host messages arrive asynchronously
-    assert.equal(await page.inputValue("#filter-input"), "tcp.flags.syn == 1", "Esc restores the filter");
+    assert.equal(
+      await page.inputValue("#filter-input"),
+      "tcp.flags.syn == 1",
+      "Esc restores the filter",
+    );
     assert.ok(await page.$eval("#filter-error", (e) => e.classList.contains("hidden")));
 
-    aiReply = { suggestions: [], message: "The language model didn't come up with a valid display filter." };
+    aiReply = {
+      suggestions: [],
+      message: "The language model didn't come up with a valid display filter.",
+    };
     await page.click("#filter-ai");
     await page.type("#filter-input", "gibberish");
     await page.press("#filter-input", "Enter");
-    await page.waitForFunction(() => /didn't come up with a valid display filter/.test(document.querySelector("#filter-error").textContent));
+    await page.waitForFunction(() =>
+      /didn't come up with a valid display filter/.test(
+        document.querySelector("#filter-error").textContent,
+      ),
+    );
     assert.equal(await page.inputValue("#filter-input"), "tcp.flags.syn == 1");
 
     await post({ type: "aiAvailable", available: false });
@@ -454,16 +634,28 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
   // ---------------------------------------------------------------- navigation & customisation
 
   const status = () => page.textContent("#status-left");
-  const waitSelected = (n) => page.waitForFunction((f) => new RegExp(`Selected: ${f}(\\D|$)`).test(document.querySelector("#status-left").textContent), n);
+  const waitSelected = (n) =>
+    page.waitForFunction(
+      (f) =>
+        new RegExp(`Selected: ${f}(\\D|$)`).test(
+          document.querySelector("#status-left").textContent,
+        ),
+      n,
+    );
   const rowEl = (frame) => page.locator("#list-rows .list-row").nth(frame - 1); // unfiltered, unsorted view
   const command = (name) => post({ type: "command", command: name });
-  const headerIds = () => page.$$eval("#list-header > div", (cells) => cells.map((c) => c.dataset.id));
+  const headerIds = () =>
+    page.$$eval("#list-header > div", (cells) => cells.map((c) => c.dataset.id));
 
   async function cleanView() {
     await post({ type: "aiAvailable", available: false });
     await page.click("#filter-clear");
-    await page.waitForFunction(() => !/Displayed/.test(document.querySelector("#status-left").textContent));
-    await page.waitForFunction(() => document.querySelectorAll("#list-rows .list-row:not(.loading)").length === 11);
+    await page.waitForFunction(
+      () => !/Displayed/.test(document.querySelector("#status-left").textContent),
+    );
+    await page.waitForFunction(
+      () => document.querySelectorAll("#list-rows .list-row:not(.loading)").length === 11,
+    );
     const sorted = await page.$("#list-header .sort-indicator");
     if (sorted) {
       await page.click("#list-header > div:has(.sort-indicator)"); // cycle the sort off
@@ -486,7 +678,9 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     await waitSelected(4);
     assert.equal(await page.textContent("#find-status"), "Packet 4");
     await page.press("#find-input", "Enter"); // the only match: wraps to itself
-    await page.waitForFunction(() => /wrapped/.test(document.querySelector("#find-status").textContent));
+    await page.waitForFunction(() =>
+      /wrapped/.test(document.querySelector("#find-status").textContent),
+    );
 
     await page.selectOption("#find-mode", "hex");
     await page.fill("#find-input", "xyz");
@@ -494,7 +688,9 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     assert.ok(await page.$eval("#find-input", (i) => i.classList.contains("invalid")));
     await page.fill("#find-input", "47 45 54"); // "GET"
     await page.press("#find-input", "Enter");
-    await page.waitForFunction(() => /Packet 4/.test(document.querySelector("#find-status").textContent));
+    await page.waitForFunction(() =>
+      /Packet 4/.test(document.querySelector("#find-status").textContent),
+    );
 
     await page.selectOption("#find-mode", "filter");
     await page.fill("#find-input", "tcp.flags.fin == 1");
@@ -507,11 +703,15 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
 
     await page.fill("#find-input", "tcp.port ==");
     await page.press("#find-input", "Enter");
-    await page.waitForFunction(() => document.querySelector("#find-status").classList.contains("error"));
+    await page.waitForFunction(() =>
+      document.querySelector("#find-status").classList.contains("error"),
+    );
     await page.selectOption("#find-mode", "string");
     await page.fill("#find-input", "no such text anywhere");
     await page.press("#find-input", "Enter");
-    await page.waitForFunction(() => document.querySelector("#find-status").textContent === "Not found");
+    await page.waitForFunction(
+      () => document.querySelector("#find-status").textContent === "Not found",
+    );
 
     await page.press("#find-input", "Escape");
     assert.ok(await page.$eval("#find-bar", (b) => b.classList.contains("hidden")));
@@ -521,7 +721,9 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     await cleanView();
     await rowEl(7).click(); // HTTP response: "[Request in frame: 4]"
     await waitSelected(7);
-    const http = page.locator("#detail-tree .node-row:has-text('Hypertext Transfer Protocol')").first();
+    const http = page
+      .locator("#detail-tree .node-row:has-text('Hypertext Transfer Protocol')")
+      .first();
     if ((await http.getAttribute("aria-expanded")) !== "true") {
       await http.locator(".twisty").click();
     }
@@ -538,11 +740,17 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     // A link to a packet the filter hides offers to clear the filter.
     await page.fill("#filter-input", "http.response");
     await page.press("#filter-input", "Enter");
-    await page.waitForFunction(() => /Displayed: 1/.test(document.querySelector("#status-left").textContent));
+    await page.waitForFunction(() =>
+      /Displayed: 1/.test(document.querySelector("#status-left").textContent),
+    );
     await page.locator("#list-rows .list-row").first().click();
     await waitSelected(7);
-    await page.locator("#detail-tree .node-row.frame-link:has-text('Request in frame') .label").click();
-    await page.waitForFunction(() => /Packet 4 is not displayed/.test(document.querySelector("#filter-error").textContent));
+    await page
+      .locator("#detail-tree .node-row.frame-link:has-text('Request in frame') .label")
+      .click();
+    await page.waitForFunction(() =>
+      /Packet 4 is not displayed/.test(document.querySelector("#filter-error").textContent),
+    );
     await page.click("#filter-error button:has-text('Clear filter and go')");
     await waitSelected(4);
     assert.doesNotMatch(await status(), /Displayed/);
@@ -552,19 +760,34 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     await cleanView();
     const rules = [{ filter: "tcp", foreground: "#000000", background: "#e7e6ff" }];
     const res = await client.request("set_coloring", { rules }, { timeoutMs: 0 });
-    await post({ type: "coloring", coloringId: res.coloringId, rules: [{ name: "TCP", foreground: "#000000", background: "#e7e6ff" }] });
-    await page.waitForFunction(() => document.querySelector("#list-rows .list-row")?.classList.contains("colored"));
+    await post({
+      type: "coloring",
+      coloringId: res.coloringId,
+      rules: [{ name: "TCP", foreground: "#000000", background: "#e7e6ff" }],
+    });
+    await page.waitForFunction(() =>
+      document.querySelector("#list-rows .list-row")?.classList.contains("colored"),
+    );
 
     for (const frame of [2, 9]) {
       await rowEl(frame).click();
       await waitSelected(frame);
       await command("toggleMark"); // Ctrl+M
-      await page.waitForFunction((f) => document.querySelectorAll("#list-rows .list-row")[f - 1]?.classList.contains("marked"), frame);
+      await page.waitForFunction(
+        (f) =>
+          document.querySelectorAll("#list-rows .list-row")[f - 1]?.classList.contains("marked"),
+        frame,
+      );
     }
-    await page.waitForFunction(() => /Marked: 2/.test(document.querySelector("#status-left").textContent));
+    await page.waitForFunction(() =>
+      /Marked: 2/.test(document.querySelector("#status-left").textContent),
+    );
     assert.deepEqual(hostLog.filter((m) => m.type === "marks").at(-1), { type: "marks", count: 2 });
     await rowEl(1).click(); // select another row so row 2 isn't drawn as selected
-    const marked = await rowEl(2).evaluate((r) => ({ marked: r.classList.contains("marked"), inline: r.style.backgroundColor }));
+    const marked = await rowEl(2).evaluate((r) => ({
+      marked: r.classList.contains("marked"),
+      inline: r.style.backgroundColor,
+    }));
     assert.deepEqual(marked, { marked: true, inline: "" }, "marked rows ignore coloring rules");
 
     await command("nextMark"); // Shift+Ctrl+N
@@ -592,8 +815,16 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     await src.waitFor();
     await src.click({ button: "right" });
     await page.click("#context-menu .item:has-text('Apply as Column')");
-    assert.deepEqual(hostLog.filter((m) => m.type === "applyColumn").at(-1), { type: "applyColumn", field: "ip.src", title: "Source Address" });
-    await page.waitForFunction(() => [...document.querySelectorAll("#list-header > div")].some((c) => c.dataset.id === "custom:ip.src"));
+    assert.deepEqual(hostLog.filter((m) => m.type === "applyColumn").at(-1), {
+      type: "applyColumn",
+      field: "ip.src",
+      title: "Source Address",
+    });
+    await page.waitForFunction(() =>
+      [...document.querySelectorAll("#list-header > div")].some(
+        (c) => c.dataset.id === "custom:ip.src",
+      ),
+    );
 
     await page.click("#list-header > div[data-id='time']", { button: "right" });
     await page.click("#context-menu .item:has-text('Hide “Time”')");
@@ -601,17 +832,31 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     assert.deepEqual(layout.hidden, ["time"]);
     await page.click("#list-header > div[data-id='number']", { button: "right" });
     // The unchecked "Time" entry shows it again.
-    await page.$$eval("#context-menu .item", (items) => items.find((i) => i.textContent.trim() === "Time" && !i.textContent.startsWith("✓")).click());
+    await page.$$eval("#context-menu .item", (items) =>
+      items.find((i) => i.textContent.trim() === "Time" && !i.textContent.startsWith("✓")).click(),
+    );
     assert.ok((await headerIds()).includes("time"));
 
-    await page.dragAndDrop("#list-header > div[data-id='protocol']", "#list-header > div[data-id='number']");
+    await page.dragAndDrop(
+      "#list-header > div[data-id='protocol']",
+      "#list-header > div[data-id='number']",
+    );
     assert.deepEqual((await headerIds()).slice(0, 2), ["protocol", "number"]);
     assert.equal(layout.order[0], "protocol");
-    await page.waitForFunction(() => document.querySelector("#list-rows .list-row:not(.loading)")?.children[0]?.textContent === "TCP");
+    await page.waitForFunction(
+      () =>
+        document.querySelector("#list-rows .list-row:not(.loading)")?.children[0]?.textContent ===
+        "TCP",
+    );
 
     await page.click("#list-header > div[data-id='custom:ip.src']", { button: "right" });
     await page.click("#context-menu .item:has-text('Remove Column')");
-    await page.waitForFunction(() => ![...document.querySelectorAll("#list-header > div")].some((c) => c.dataset.id === "custom:ip.src"));
+    await page.waitForFunction(
+      () =>
+        ![...document.querySelectorAll("#list-header > div")].some(
+          (c) => c.dataset.id === "custom:ip.src",
+        ),
+    );
     await page.click("#list-header > div[data-id='number']", { button: "right" });
     await page.click("#context-menu .item:has-text('Reset Column Order and Visibility')");
     assert.deepEqual((await headerIds()).slice(0, 2), ["number", "time"]);
@@ -622,15 +867,28 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     const srcCell = rowEl(1).locator("div").nth(2); // Source of frame 1: 192.168.1.10
     await srcCell.click({ button: "right" });
     await page.click("#context-menu .item:text-is('Apply as Filter')");
-    await page.waitForFunction(() => document.querySelector("#filter-input").value === "ip.src == 192.168.1.10");
-    await page.waitForFunction(() => /Displayed: 6/.test(document.querySelector("#status-left").textContent));
+    await page.waitForFunction(
+      () => document.querySelector("#filter-input").value === "ip.src == 192.168.1.10",
+    );
+    await page.waitForFunction(() =>
+      /Displayed: 6/.test(document.querySelector("#status-left").textContent),
+    );
 
     // Displayed now: 1, 3, 4, 8, 9, 11; the third row is frame 4, Protocol "HTTP".
-    await page.locator("#list-rows .list-row").nth(2).locator("div").nth(4).click({ button: "right" });
+    await page
+      .locator("#list-rows .list-row")
+      .nth(2)
+      .locator("div")
+      .nth(4)
+      .click({ button: "right" });
     await page.click("#context-menu .item:text-is('Prepare as Filter')");
     assert.equal(await page.inputValue("#filter-input"), "http");
     await rowEl(1).locator("div").nth(6).click({ button: "right" }); // Info: no filter
-    assert.ok(await page.$eval("#context-menu .item:text-is('Apply as Filter')", (i) => i.classList.contains("disabled")));
+    assert.ok(
+      await page.$eval("#context-menu .item:text-is('Apply as Filter')", (i) =>
+        i.classList.contains("disabled"),
+      ),
+    );
     await page.keyboard.press("Escape");
   });
 
@@ -640,21 +898,36 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     await page.click("#status-time");
     assert.deepEqual(hostLog.at(-1), { type: "pickTimeFormat" });
     await post({ type: "timeFormat", format: "utc" }); // the host saved pcapViewer.timeFormat
-    await page.waitForFunction(() => document.querySelectorAll("#list-rows .list-row")[0]?.children[1]?.textContent === "2023-11-14 22:13:20.000000");
+    await page.waitForFunction(
+      () =>
+        document.querySelectorAll("#list-rows .list-row")[0]?.children[1]?.textContent ===
+        "2023-11-14 22:13:20.000000",
+    );
     assert.equal(await page.textContent("#status-time"), "Time: UTC date and time");
     await post({ type: "timeFormat", format: "delta_captured" });
-    await page.waitForFunction(() => document.querySelectorAll("#list-rows .list-row")[4]?.children[1]?.textContent === "0.001000");
+    await page.waitForFunction(
+      () =>
+        document.querySelectorAll("#list-rows .list-row")[4]?.children[1]?.textContent ===
+        "0.001000",
+    );
     await post({ type: "timeFormat", format: "relative" });
 
     await rowEl(4).click();
     await waitSelected(4);
     await command("toggleTimeReference"); // Ctrl+T
-    await page.waitForFunction(() => document.querySelectorAll("#list-rows .list-row")[3]?.children[1]?.textContent === "*REF*");
+    await page.waitForFunction(
+      () =>
+        document.querySelectorAll("#list-rows .list-row")[3]?.children[1]?.textContent === "*REF*",
+    );
     assert.equal(await timeCell(5), "0.001000");
     assert.equal(await timeCell(1), "-0.003000");
     assert.match(await status(), /Time reference: 4/);
     await command("toggleTimeReference");
-    await page.waitForFunction(() => document.querySelectorAll("#list-rows .list-row")[3]?.children[1]?.textContent === "0.003000");
+    await page.waitForFunction(
+      () =>
+        document.querySelectorAll("#list-rows .list-row")[3]?.children[1]?.textContent ===
+        "0.003000",
+    );
   });
 
   test("Ctrl+Home / Ctrl+End and conversation stepping", async () => {
@@ -669,13 +942,27 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     await command("previousInConversation"); // Ctrl+,
     await waitSelected(1);
     await command("previousInConversation");
-    await page.waitForFunction(() => /No previous packet in this conversation/.test(document.querySelector("#filter-error").textContent));
+    await page.waitForFunction(() =>
+      /No previous packet in this conversation/.test(
+        document.querySelector("#filter-error").textContent,
+      ),
+    );
   });
 
   test("multi-select: Shift/Ctrl+click, Shift+arrows, Esc, Ctrl+A; mark, copy and export the selection", async () => {
     await cleanView();
-    const selectedNumbers = () => page.$$eval("#list-rows .list-row.selected", (rows) => rows.map((r) => Number(r.children[0].textContent)));
-    const waitSelection = (frames) => page.waitForFunction((want) => [...document.querySelectorAll("#list-rows .list-row.selected")].map((r) => r.children[0].textContent).join() === want.join(), frames);
+    const selectedNumbers = () =>
+      page.$$eval("#list-rows .list-row.selected", (rows) =>
+        rows.map((r) => Number(r.children[0].textContent)),
+      );
+    const waitSelection = (frames) =>
+      page.waitForFunction(
+        (want) =>
+          [...document.querySelectorAll("#list-rows .list-row.selected")]
+            .map((r) => r.children[0].textContent)
+            .join() === want.join(),
+        frames,
+      );
     const lastSelection = () => hostLog.filter((m) => m.type === "selection").at(-1);
 
     await rowEl(2).click();
@@ -684,7 +971,10 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     await waitSelection([2, 3, 4, 5]);
     assert.match(await status(), /Selected: 5 \(4 packets\)/);
     await waitForHost((m) => m.type === "selection" && m.frames?.length === 4);
-    assert.deepEqual([...lastSelection().frames].sort((a, b) => a - b), [2, 3, 4, 5]);
+    assert.deepEqual(
+      [...lastSelection().frames].sort((a, b) => a - b),
+      [2, 3, 4, 5],
+    );
     assert.equal(lastSelection().frame, 5, "the clicked row is focused (detail pane)");
     assert.ok(await rowEl(5).evaluate((r) => r.classList.contains("focused")));
 
@@ -698,7 +988,10 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     assert.deepEqual(await selectedNumbers(), [2, 4, 5, 8]);
     await page.click("#context-menu .item:has-text('Copy 4 Rows')");
     await waitForHost((m) => m.type === "copy" && m.text.startsWith("No.\t"));
-    const copied = hostLog.filter((m) => m.type === "copy").at(-1).text.split("\n");
+    const copied = hostLog
+      .filter((m) => m.type === "copy")
+      .at(-1)
+      .text.split("\n");
     assert.equal(copied.length, 5, "a header line plus one line per row");
     assert.deepEqual(
       copied.slice(1).map((l) => l.split("\t")[0]),
@@ -709,14 +1002,20 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
       const viewport = /** @type {HTMLElement} */ (document.getElementById("list-viewport"));
       viewport.focus();
       const data = new window.DataTransfer();
-      viewport.dispatchEvent(new window.ClipboardEvent("copy", { clipboardData: data, bubbles: true, cancelable: true }));
+      viewport.dispatchEvent(
+        new window.ClipboardEvent("copy", { clipboardData: data, bubbles: true, cancelable: true }),
+      );
       return data.getData("text/plain");
     });
     assert.equal(clip.split("\n").length, 5);
 
     await command("toggleMark"); // Ctrl+M marks the whole selection
-    await page.waitForFunction(() => document.querySelectorAll("#list-rows .list-row.marked").length === 4);
-    await page.waitForFunction(() => /Marked: 4/.test(document.querySelector("#status-left").textContent));
+    await page.waitForFunction(
+      () => document.querySelectorAll("#list-rows .list-row.marked").length === 4,
+    );
+    await page.waitForFunction(() =>
+      /Marked: 4/.test(document.querySelector("#status-left").textContent),
+    );
     await command("toggleMark"); // all marked: unmark them
     await page.waitForFunction(() => !document.querySelector("#list-rows .list-row.marked"));
 
@@ -738,7 +1037,11 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     // A new sort keeps the selection (same packets, new rows)...
     await page.click("#list-header > div[data-id='number']");
     await page.click("#list-header > div[data-id='number']"); // No. descending
-    await page.waitForFunction(() => document.querySelector("#list-rows .list-row:not(.loading)")?.children[0]?.textContent === "11");
+    await page.waitForFunction(
+      () =>
+        document.querySelector("#list-rows .list-row:not(.loading)")?.children[0]?.textContent ===
+        "11",
+    );
     await waitSelection([7, 6]);
     await page.click("#list-header > div[data-id='number']"); // sort off
 
@@ -746,48 +1049,82 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     // execCommand("selectAll") in the webview) selects every packet, not the page's text.
     await page.focus("#list-viewport");
     await page.keyboard.press("ControlOrMeta+a");
-    await page.waitForFunction(() => document.querySelectorAll("#list-rows .list-row.selected").length === 11);
+    await page.waitForFunction(
+      () => document.querySelectorAll("#list-rows .list-row.selected").length === 11,
+    );
     assert.match(await status(), /\(11 packets\)/);
     assert.equal(await page.evaluate(() => String(window.getSelection())), "", "no text selected");
     await page.keyboard.press("Escape");
-    await page.waitForFunction(() => document.querySelectorAll("#list-rows .list-row.selected").length === 1);
+    await page.waitForFunction(
+      () => document.querySelectorAll("#list-rows .list-row.selected").length === 1,
+    );
     await page.evaluate(() => document.execCommand("selectAll"));
-    await page.waitForFunction(() => document.querySelectorAll("#list-rows .list-row.selected").length === 11);
+    await page.waitForFunction(
+      () => document.querySelectorAll("#list-rows .list-row.selected").length === 11,
+    );
     assert.equal(await page.evaluate(() => String(window.getSelection())), "");
     // ...a new filter drops it.
     await page.fill("#filter-input", "http");
     await page.press("#filter-input", "Enter");
-    await page.waitForFunction(() => /Displayed: 2/.test(document.querySelector("#status-left").textContent));
-    await page.waitForFunction(() => document.querySelectorAll("#list-rows .list-row.selected").length <= 1);
+    await page.waitForFunction(() =>
+      /Displayed: 2/.test(document.querySelector("#status-left").textContent),
+    );
+    await page.waitForFunction(
+      () => document.querySelectorAll("#list-rows .list-row.selected").length <= 1,
+    );
     assert.doesNotMatch(await status(), /packets\)/);
     // Ctrl+A in the filter bar selects its text, not packets (also via the palette command).
     await page.focus("#filter-input");
     await page.keyboard.press("ControlOrMeta+a");
-    assert.equal(await page.evaluate(() => { const i = /** @type {HTMLInputElement} */ (document.getElementById("filter-input")); return i.value.slice(i.selectionStart ?? 0, i.selectionEnd ?? 0); }), "http");
-    await page.evaluate(() => /** @type {HTMLInputElement} */ (document.getElementById("filter-input")).setSelectionRange(0, 0));
+    assert.equal(
+      await page.evaluate(() => {
+        const i = /** @type {HTMLInputElement} */ (document.getElementById("filter-input"));
+        return i.value.slice(i.selectionStart ?? 0, i.selectionEnd ?? 0);
+      }),
+      "http",
+    );
+    await page.evaluate(() =>
+      /** @type {HTMLInputElement} */ (document.getElementById("filter-input")).setSelectionRange(
+        0,
+        0,
+      ),
+    );
     await command("selectAll");
-    await page.waitForFunction(() => { const i = /** @type {HTMLInputElement} */ (document.getElementById("filter-input")); return i.value.slice(i.selectionStart ?? 0, i.selectionEnd ?? 0) === "http"; });
+    await page.waitForFunction(() => {
+      const i = /** @type {HTMLInputElement} */ (document.getElementById("filter-input"));
+      return i.value.slice(i.selectionStart ?? 0, i.selectionEnd ?? 0) === "http";
+    });
     assert.ok((await page.$$("#list-rows .list-row.selected")).length <= 1);
   });
 
   test("Ask Copilot About This Packet / N Selected Packets (only when AI help is available)", async () => {
     await cleanView(); // AI unavailable
     await rowEl(4).click({ button: "right" });
-    assert.ok(!(await page.isVisible("#context-menu .item:has-text('Ask Copilot')")), "hidden without a language model");
+    assert.ok(
+      !(await page.isVisible("#context-menu .item:has-text('Ask Copilot')")),
+      "hidden without a language model",
+    );
     await page.keyboard.press("Escape");
 
     await post({ type: "aiAvailable", available: true });
     await rowEl(4).click({ button: "right" });
     await page.click("#context-menu .item:text-is('Ask Copilot About This Packet…')");
     await waitForHost((m) => m.type === "askAboutPackets");
-    assert.deepEqual(hostLog.filter((m) => m.type === "askAboutPackets").at(-1), { type: "askAboutPackets", frames: [4] });
+    assert.deepEqual(hostLog.filter((m) => m.type === "askAboutPackets").at(-1), {
+      type: "askAboutPackets",
+      frames: [4],
+    });
 
     await rowEl(7).click({ modifiers: ["ControlOrMeta"] });
     await rowEl(2).click({ modifiers: ["ControlOrMeta"] });
     await rowEl(7).click({ button: "right" }); // inside the selection: keeps it
     await page.click("#context-menu .item:text-is('Ask Copilot About 3 Selected Packets…')");
     await waitForHost((m) => m.type === "askAboutPackets" && m.frames.length === 3);
-    assert.deepEqual(hostLog.filter((m) => m.type === "askAboutPackets").at(-1).frames, [2, 4, 7], "frame order");
+    assert.deepEqual(
+      hostLog.filter((m) => m.type === "askAboutPackets").at(-1).frames,
+      [2, 4, 7],
+      "frame order",
+    );
     await post({ type: "aiAvailable", available: false });
   });
 
@@ -799,8 +1136,11 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     await page.fill("#filter-input", "tcp");
     await page.press("#filter-input", "Enter");
     await command("nextMark"); // nothing is marked: a notice, right away
-    const notice = () => page.evaluate(() => document.getElementById("filter-error")?.textContent ?? "");
-    await page.waitForFunction(() => /No packets are marked/.test(document.getElementById("filter-error")?.textContent ?? ""));
+    const notice = () =>
+      page.evaluate(() => document.getElementById("filter-error")?.textContent ?? "");
+    await page.waitForFunction(() =>
+      /No packets are marked/.test(document.getElementById("filter-error")?.textContent ?? ""),
+    );
     await page.waitForTimeout(700); // past the stale validation
     assert.match(await notice(), /No packets are marked/);
   });
@@ -809,45 +1149,93 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     await cleanView();
     // First sort by Info: the backend builds the order and reports progress.
     await page.click("#list-header > div[data-id='info']");
-    await page.waitForFunction(() => document.querySelector("#list-header > div[data-id='info'] .sort-indicator"));
-    await page.waitForFunction(() => document.querySelectorAll("#list-rows .list-row:not(.loading)").length === 11);
-    await page.waitForFunction(() => document.getElementById("busy-bar")?.classList.contains("hidden"), null, { timeout: 5000 });
+    await page.waitForFunction(() =>
+      document.querySelector("#list-header > div[data-id='info'] .sort-indicator"),
+    );
+    await page.waitForFunction(
+      () => document.querySelectorAll("#list-rows .list-row:not(.loading)").length === 11,
+    );
+    await page.waitForFunction(
+      () => document.getElementById("busy-bar")?.classList.contains("hidden"),
+      null,
+      { timeout: 5000 },
+    );
     await page.click("#list-header > div[data-id='info']");
     await page.click("#list-header > div[data-id='info']"); // sort off
-    await page.waitForFunction(() => document.getElementById("busy-bar")?.classList.contains("hidden"));
+    await page.waitForFunction(() =>
+      document.getElementById("busy-bar")?.classList.contains("hidden"),
+    );
   });
 
   test("late packets: a quick view first, marked approximate, then the exact view replaces it", async () => {
     // Reload the capture (as the host does): the backend's detail cache starts empty.
     const reopen = async (quickDetail) => {
-      const info = await client.request("open", { path: path.join(ROOT, "test", "fixtures", "http.pcap"), columns: ["tcp.stream"] }, { timeoutMs: 0 });
-      await post({ type: "init", info, columns: customCols, layout, timeFormat: "relative", quickDetail, filter: "", history: [], savedFilters, elapsedMs: 1 });
-      await page.waitForFunction(() => document.querySelectorAll("#list-rows .list-row:not(.loading)").length === 11);
+      const info = await client.request(
+        "open",
+        { path: path.join(ROOT, "test", "fixtures", "http.pcap"), columns: ["tcp.stream"] },
+        { timeoutMs: 0 },
+      );
+      await post({
+        type: "init",
+        info,
+        columns: customCols,
+        layout,
+        timeFormat: "relative",
+        quickDetail,
+        filter: "",
+        history: [],
+        savedFilters,
+        elapsedMs: 1,
+        names: "Names: MAC",
+      });
+      await page.waitForFunction(
+        () => document.querySelectorAll("#list-rows .list-row:not(.loading)").length === 11,
+      );
     };
-    const note = () => page.evaluate(() => { const n = document.getElementById("detail-note"); return n?.classList.contains("hidden") ? "" : (n?.textContent ?? ""); });
-    const firstLabel = () => page.evaluate(() => document.querySelector("#detail-tree .node-row .label")?.textContent ?? "");
+    const note = () =>
+      page.evaluate(() => {
+        const n = document.getElementById("detail-note");
+        return n?.classList.contains("hidden") ? "" : (n?.textContent ?? "");
+      });
+    const firstLabel = () =>
+      page.evaluate(
+        () => document.querySelector("#detail-tree .node-row .label")?.textContent ?? "",
+      );
     await reopen({ after: 5, window: 3 });
     exactDetailDelayMs = 1500;
     detailRequests.length = 0;
     await rowEl(9).click();
-    await page.waitForFunction(() => !document.getElementById("detail-note")?.classList.contains("hidden"));
-    assert.match(await note(), /^Quick view: only packets 7–9 were dissected, so reassembly, TCP analysis .* Loading the exact view$/);
+    await page.waitForFunction(
+      () => !document.getElementById("detail-note")?.classList.contains("hidden"),
+    );
+    assert.match(
+      await note(),
+      /^Quick view: only packets 7–9 were dissected, so reassembly, TCP analysis .* Loading the exact view$/,
+    );
     assert.match(await firstLabel(), /^Frame 9:/);
     assert.deepEqual(detailRequests, [{ number: 9 }, { number: 9, mode: "quick", window: 3 }]);
-    await page.waitForFunction(() => document.getElementById("detail-note")?.classList.contains("hidden"), null, { timeout: 5000 });
+    await page.waitForFunction(
+      () => document.getElementById("detail-note")?.classList.contains("hidden"),
+      null,
+      { timeout: 5000 },
+    );
     assert.match(await firstLabel(), /^Frame 9:/, "the exact view replaced it");
 
     // Early packets (up to pcapViewer.quickDetail.after) only get the exact view.
     exactDetailDelayMs = 0;
     detailRequests.length = 0;
     await rowEl(4).click();
-    await page.waitForFunction(() => /^Frame 4:/.test(document.querySelector("#detail-tree .node-row .label")?.textContent ?? ""));
+    await page.waitForFunction(() =>
+      /^Frame 4:/.test(document.querySelector("#detail-tree .node-row .label")?.textContent ?? ""),
+    );
     assert.deepEqual(detailRequests, [{ number: 4 }]);
     // after = 0 turns quick views off.
     await post({ type: "quickDetail", quickDetail: { after: 0, window: 3 } });
     detailRequests.length = 0;
     await rowEl(10).click();
-    await page.waitForFunction(() => /^Frame 10:/.test(document.querySelector("#detail-tree .node-row .label")?.textContent ?? ""));
+    await page.waitForFunction(() =>
+      /^Frame 10:/.test(document.querySelector("#detail-tree .node-row .label")?.textContent ?? ""),
+    );
     assert.deepEqual(detailRequests, [{ number: 10 }]);
     assert.equal(await note(), "");
     await reopen({ after: 20000, window: 300 });
@@ -855,20 +1243,31 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
 
   test("streaming open and streaming filters on a big capture", async function () {
     this.timeout(180_000);
-    const venv = path.join(ROOT, ".venv", process.platform === "win32" ? "Scripts/python.exe" : "bin/python");
+    const venv = path.join(
+      ROOT,
+      ".venv",
+      process.platform === "win32" ? "Scripts/python.exe" : "bin/python",
+    );
     const py = process.env.PCAP_VIEWER_PYTHON ?? venv;
     const big = path.join(os.tmpdir(), `pcapviewer-e2e-${process.pid}.pcap`);
     // Big enough that indexing and filtering take a few seconds (the small fixtures finish before the first batch).
-    const gen = spawnSync(py, [path.join(ROOT, "test", "fixtures", "generate.py"), "--large", "150000", big], { encoding: "utf8" });
+    const gen = spawnSync(
+      py,
+      [path.join(ROOT, "test", "fixtures", "generate.py"), "--large", "150000", big],
+      { encoding: "utf8" },
+    );
     if (gen.status !== 0) {
-      console.warn(`skipping streaming e2e: could not generate a capture (${gen.stderr || gen.error})`);
+      console.warn(
+        `skipping streaming e2e: could not generate a capture (${gen.stderr || gen.error})`,
+      );
       this.skip();
     }
     const status = () => page.textContent("#status-left");
     const notice = () => page.textContent("#filter-error");
     const stopButton = () => page.$eval("#filter-cancel", (b) => !b.classList.contains("hidden"));
     /** The first number after `label` in the status bar. */
-    const count = async (label) => Number(new RegExp(`${label}([\\d,]+)`).exec(await status())?.[1].replace(/,/g, "") ?? NaN);
+    const count = async (label) =>
+      Number(new RegExp(`${label}([\\d,]+)`).exec(await status())?.[1].replace(/,/g, "") ?? NaN);
     /** Scroll to the end, so the last (short) page is cached, then wait for the list to grow past it. */
     const growsAtTheEnd = async (label) => {
       const before = await count(label);
@@ -878,7 +1277,9 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
       });
       await page.waitForFunction(
         ([label, before]) => {
-          const m = new RegExp(`${label}([\\d,]+)`).exec(document.querySelector("#status-left")?.textContent ?? "");
+          const m = new RegExp(`${label}([\\d,]+)`).exec(
+            document.querySelector("#status-left")?.textContent ?? "",
+          );
           return !!m && Number(m[1].replace(/,/g, "")) > before;
         },
         [label, before],
@@ -888,8 +1289,12 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     const column = (id, n = 5) =>
       page.evaluate(
         ([id, n]) => {
-          const at = [...document.querySelectorAll("#list-header > div")].findIndex((h) => /** @type {HTMLElement} */ (h).dataset.id === id);
-          return [...document.querySelectorAll("#list-rows .list-row:not(.loading)")].slice(0, n).map((r) => r.children[at]?.textContent ?? "");
+          const at = [...document.querySelectorAll("#list-header > div")].findIndex(
+            (h) => /** @type {HTMLElement} */ (h).dataset.id === id,
+          );
+          return [...document.querySelectorAll("#list-rows .list-row:not(.loading)")]
+            .slice(0, n)
+            .map((r) => r.children[at]?.textContent ?? "");
         },
         [id, n],
       );
@@ -897,7 +1302,12 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
       void post(
         p.event === "progress"
           ? { type: "indexProgress", frames: p.frames, fraction: p.fraction ?? null, view: p.view }
-          : { type: "indexDone", info: p.info, error: p.event === "failed" ? p.message : undefined, view: p.view },
+          : {
+              type: "indexDone",
+              info: p.info,
+              error: p.event === "failed" ? p.message : undefined,
+              view: p.view,
+            },
       );
     });
     try {
@@ -906,16 +1316,58 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
         { name: "DNS", filter: "dns", foreground: "#12272e", background: "#c8e2ff" },
         { name: "TCP", filter: "tcp", foreground: "#000000", background: "#e7e6ff" },
       ];
-      const coloring = { rules: colorRules.map(({ filter, foreground, background }) => ({ filter, foreground, background })) };
-      const info = await client.request("open", { path: big, stream: true, coloring, prefs: { "tcp.analyze_sequence_numbers": false } }, { timeoutMs: 0 });
+      const coloring = {
+        rules: colorRules.map(({ filter, foreground, background }) => ({
+          filter,
+          foreground,
+          background,
+        })),
+      };
+      const info = await client.request(
+        "open",
+        { path: big, stream: true, coloring, prefs: { "tcp.analyze_sequence_numbers": false } },
+        { timeoutMs: 0 },
+      );
       assert.equal(info.indexing, true);
       assert.ok(info.frames > 0 && info.frames < 150_000);
       assert.ok(info.coloring?.coloringId > 0, "colored by the index pass");
-      await post({ type: "init", info, columns: customCols, layout, timeFormat: "relative", quickDetail: { after: 20000, window: 300 }, filter: "", history: [], savedFilters, elapsedMs: 1 });
-      await post({ type: "coloring", coloringId: info.coloring.coloringId, rules: colorRules.map(({ name, foreground, background }) => ({ name, foreground, background })) });
-      await page.waitForFunction(() => /^Indexing… [\d,]+ packets so far/.test(document.querySelector("#status-left")?.textContent ?? ""));
-      await page.waitForFunction(() => document.querySelector("#list-rows .list-row:not(.loading)")?.children[0]?.textContent === "1");
-      await page.waitForFunction(() => document.querySelector("#list-rows .list-row:not(.loading)")?.style.backgroundColor === "rgb(200, 226, 255)");
+      await post({
+        type: "init",
+        info,
+        columns: customCols,
+        layout,
+        timeFormat: "relative",
+        quickDetail: { after: 20000, window: 300 },
+        filter: "",
+        history: [],
+        savedFilters,
+        elapsedMs: 1,
+        names: "Names: MAC",
+      });
+      await post({
+        type: "coloring",
+        coloringId: info.coloring.coloringId,
+        rules: colorRules.map(({ name, foreground, background }) => ({
+          name,
+          foreground,
+          background,
+        })),
+      });
+      await page.waitForFunction(() =>
+        /^Indexing… [\d,]+ packets so far/.test(
+          document.querySelector("#status-left")?.textContent ?? "",
+        ),
+      );
+      await page.waitForFunction(
+        () =>
+          document.querySelector("#list-rows .list-row:not(.loading)")?.children[0]?.textContent ===
+          "1",
+      );
+      await page.waitForFunction(
+        () =>
+          document.querySelector("#list-rows .list-row:not(.loading)")?.style.backgroundColor ===
+          "rgb(200, 226, 255)",
+      );
       assert.match(await status(), /^Indexing…/, "colored while still indexing");
       assert.doesNotMatch(await status(), /Coloring/, "no separate coloring pass");
       await growsAtTheEnd("Indexing… ");
@@ -926,24 +1378,49 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
       // A filter starts at once, over the packets indexed so far.
       await page.fill("#filter-input", "dns");
       await page.press("#filter-input", "Enter");
-      await page.waitForFunction(() => /^Indexing… .* · (Filtering… [\d,]+ matches so far|Displayed: [\d,]+)/.test(document.querySelector("#status-left")?.textContent ?? ""));
-      await page.waitForFunction(() => document.querySelectorAll("#list-rows .list-row:not(.loading)").length > 0);
+      await page.waitForFunction(() =>
+        /^Indexing… .* · (Filtering… [\d,]+ matches so far|Displayed: [\d,]+)/.test(
+          document.querySelector("#status-left")?.textContent ?? "",
+        ),
+      );
+      await page.waitForFunction(
+        () => document.querySelectorAll("#list-rows .list-row:not(.loading)").length > 0,
+      );
       assert.deepEqual([...new Set(await column("protocol"))], ["DNS"]);
       await page.click("#list-header > div[data-id='length']");
-      await page.waitForFunction(() => /Sorting is available when indexing finishes/.test(document.getElementById("filter-error")?.textContent ?? ""));
+      await page.waitForFunction(() =>
+        /Sorting is available when indexing finishes/.test(
+          document.getElementById("filter-error")?.textContent ?? "",
+        ),
+      );
       assert.equal(await page.$("#list-header .sort-indicator"), null, "not sorted");
       // When indexing is done, every match is shown.
-      await page.waitForFunction(() => /^Packets: 150,000 · Displayed: [\d,]+ \(33\.\d%\)/.test(document.querySelector("#status-left")?.textContent ?? ""), null, { timeout: 120_000 });
+      await page.waitForFunction(
+        () =>
+          /^Packets: 150,000 · Displayed: [\d,]+ \(33\.\d%\)/.test(
+            document.querySelector("#status-left")?.textContent ?? "",
+          ),
+        null,
+        { timeout: 120_000 },
+      );
       assert.doesNotMatch(await status(), /Indexing|Filtering/);
 
       // A new filter streams its matches; ■ stops it and keeps what was found.
       await page.fill("#filter-input", "tcp");
       await page.press("#filter-input", "Enter");
-      await page.waitForFunction(() => /Filtering… [\d,]+ matches so far/.test(document.querySelector("#status-left")?.textContent ?? ""));
+      await page.waitForFunction(() =>
+        /Filtering… [\d,]+ matches so far/.test(
+          document.querySelector("#status-left")?.textContent ?? "",
+        ),
+      );
       await growsAtTheEnd("Filtering… ");
       assert.equal(await stopButton(), true);
       await page.click("#filter-cancel");
-      await page.waitForFunction(() => /^Filter stopped: showing the [\d,]+ matches found so far\.$/.test(document.getElementById("filter-error")?.textContent ?? ""));
+      await page.waitForFunction(() =>
+        /^Filter stopped: showing the [\d,]+ matches found so far\.$/.test(
+          document.getElementById("filter-error")?.textContent ?? "",
+        ),
+      );
       assert.match(await status(), /Displayed: [\d,]+ \([\d.]+%, filter stopped early\)/);
       assert.equal(await stopButton(), false);
       const stoppedAt = Number(/Displayed: ([\d,]+)/.exec(await status())?.[1].replace(/,/g, ""));
@@ -952,13 +1429,30 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
       // Sorting while a filter runs applies when it's done.
       await page.fill("#filter-input", "tcp");
       await page.press("#filter-input", "Enter");
-      await page.waitForFunction(() => /Filtering…/.test(document.querySelector("#status-left")?.textContent ?? ""));
+      await page.waitForFunction(() =>
+        /Filtering…/.test(document.querySelector("#status-left")?.textContent ?? ""),
+      );
       await page.click("#list-header > div[data-id='length']");
       assert.match(await notice(), /The list is sorted when the filter finishes/);
-      await page.waitForFunction(() => /^Packets: 150,000 · Displayed: [\d,]+ \(66\.\d%\)/.test(document.querySelector("#status-left")?.textContent ?? ""), null, { timeout: 60_000 });
-      await page.waitForFunction(() => document.querySelector("#list-rows .list-row:not(.loading)")?.children[0]?.textContent !== "2");
+      await page.waitForFunction(
+        () =>
+          /^Packets: 150,000 · Displayed: [\d,]+ \(66\.\d%\)/.test(
+            document.querySelector("#status-left")?.textContent ?? "",
+          ),
+        null,
+        { timeout: 60_000 },
+      );
+      await page.waitForFunction(
+        () =>
+          document.querySelector("#list-rows .list-row:not(.loading)")?.children[0]?.textContent !==
+          "2",
+      );
       const lengths = (await column("length")).map(Number);
-      assert.deepEqual(lengths, [...lengths].sort((a, b) => a - b), `sorted by length: ${lengths}`);
+      assert.deepEqual(
+        lengths,
+        [...lengths].sort((a, b) => a - b),
+        `sorted by length: ${lengths}`,
+      );
       await page.click("#list-header > div[data-id='length']");
       await page.click("#list-header > div[data-id='length']"); // back to capture order
     } finally {
@@ -966,10 +1460,85 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
       fs.rmSync(big, { force: true });
     }
     // Back to the small capture for the other tests.
-    const info = await client.request("open", { path: path.join(ROOT, "test", "fixtures", "http.pcap"), columns: ["tcp.stream"] }, { timeoutMs: 0 });
-    await post({ type: "init", info, columns: customCols, layout, timeFormat: "relative", quickDetail: { after: 20000, window: 300 }, filter: "", history: [], savedFilters, elapsedMs: 1 });
+    const info = await client.request(
+      "open",
+      { path: path.join(ROOT, "test", "fixtures", "http.pcap"), columns: ["tcp.stream"] },
+      { timeoutMs: 0 },
+    );
+    await post({
+      type: "init",
+      info,
+      columns: customCols,
+      layout,
+      timeFormat: "relative",
+      quickDetail: { after: 20000, window: 300 },
+      filter: "",
+      history: [],
+      savedFilters,
+      elapsedMs: 1,
+      names: "Names: MAC",
+    });
     await page.fill("#filter-input", "");
-    await page.waitForFunction(() => document.querySelectorAll("#list-rows .list-row:not(.loading)").length === 11);
+    await page.waitForFunction(
+      () => document.querySelectorAll("#list-rows .list-row:not(.loading)").length === 11,
+    );
+  });
+
+  test("name resolution: status link, addresses as tooltips and in cell filters", async () => {
+    await cleanView();
+    assert.equal(await page.textContent("#status-names"), "Names: MAC");
+    await page.click("#status-names");
+    assert.deepEqual(hostLog.at(-1), { type: "pickNameResolution" });
+    const names = { mac: true, network: true, capturedDns: true, transport: true };
+    const reopen = async (file, extra, label) => {
+      const info = await client.request(
+        "open",
+        { path: path.join(ROOT, "test", "fixtures", file), columns: ["tcp.stream"], ...extra },
+        { timeoutMs: 0 },
+      );
+      await post({
+        type: "init",
+        info,
+        columns: customCols,
+        layout,
+        timeFormat: "relative",
+        quickDetail: { after: 20000, window: 300 },
+        filter: "",
+        history: [],
+        savedFilters,
+        elapsedMs: 1,
+        names: label,
+      });
+      await page.waitForFunction(
+        (n) => document.querySelector("#status-left").textContent.includes(`Packets: ${n}`),
+        info.frames,
+      );
+      await page.waitForFunction(
+        () => document.querySelectorAll("#list-rows .list-row:not(.loading)").length >= 11,
+      );
+    };
+    try {
+      await reopen("mixed.pcapng", { names }, "Names: MAC, network (capture), ports");
+      assert.equal(await page.textContent("#status-names"), "Names: MAC, network (capture), ports");
+      const source = rowEl(11).locator("div").nth(2);
+      assert.equal(await source.textContent(), "example.com");
+      assert.equal(await source.getAttribute("title"), "93.184.216.34");
+      assert.ok(
+        !(await rowEl(12).locator("div").nth(2).getAttribute("title")),
+        "an address: no tooltip",
+      );
+      await source.click({ button: "right" });
+      await page.click("#context-menu .item:text-is('Prepare as Filter')");
+      assert.equal(await page.inputValue("#filter-input"), "ip.src == 93.184.216.34");
+      const broadcast = rowEl(1).locator("div").nth(3);
+      assert.equal(await broadcast.textContent(), "Broadcast");
+      await broadcast.click({ button: "right" });
+      await page.click("#context-menu .item:text-is('Prepare as Filter')");
+      assert.equal(await page.inputValue("#filter-input"), "eth.dst == ff:ff:ff:ff:ff:ff");
+    } finally {
+      await page.fill("#filter-input", "");
+      await reopen("http.pcap", {}, "Names: MAC");
+    }
   });
 
   test("no script errors or CSP violations", () => {

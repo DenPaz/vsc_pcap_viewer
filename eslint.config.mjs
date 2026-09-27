@@ -1,5 +1,6 @@
 // @ts-check
 import js from "@eslint/js";
+import prettier from "eslint-config-prettier";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
@@ -52,7 +53,10 @@ export default tseslint.config(
       ],
       "no-restricted-syntax": [
         "error",
-        { selector: "CallExpression[callee.property.name='insertAdjacentHTML']", message: "No HTML injection." },
+        {
+          selector: "CallExpression[callee.property.name='insertAdjacentHTML']",
+          message: "No HTML injection.",
+        },
       ],
     },
   },
@@ -74,4 +78,6 @@ export default tseslint.config(
       },
     },
   },
+  // Last: turn off the style rules Prettier owns.
+  prettier,
 );

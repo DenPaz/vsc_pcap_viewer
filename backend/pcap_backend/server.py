@@ -19,7 +19,6 @@ import logging
 import signal
 import sys
 import threading
-import traceback
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from typing import IO, Any
@@ -188,8 +187,8 @@ class JsonRpcServer:
         except ConfigError as exc:
             if req_id is not None:
                 self._error(req_id, INVALID_PARAMS, str(exc))
-        except Exception as exc:
-            log.error("unhandled error in %s:\n%s", method, traceback.format_exc())
+        except Exception as exc:  # any bug becomes an error response
+            log.exception("unhandled error in %s", method)
             if req_id is not None:
                 self._error(req_id, INTERNAL_ERROR, f"{type(exc).__name__}: {exc}")
         finally:

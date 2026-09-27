@@ -2,7 +2,7 @@
 
 import json
 import subprocess
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -45,8 +45,13 @@ def test_find_expression() -> None:
     assert fe("string", "a.b", False) == 'frame matches "(?i)a\\\\.b"'
     assert fe("hex", "47 45 54", False) == "frame contains 47:45:54"
     assert fe("hex", "ff", False) == 'frame contains "\\xff"'
-    for mode, value in (("filter", " "), ("string", ""), ("string", "a\nb"), ("bogus", "x")):
-        with pytest.raises(ValueError):
+    for mode, value, error in (
+        ("filter", " ", "Enter a display filter"),
+        ("string", "", "Enter text"),
+        ("string", "a\nb", "single line"),
+        ("bogus", "x", "unknown find mode"),
+    ):
+        with pytest.raises(ValueError, match=error):
             fe(mode, value, False)
 
 
@@ -229,7 +234,7 @@ def test_time_formats(opened: PcapService, ctx: RequestContext) -> None:
     assert rel[1] == "0.000000" and rel[11] == "0.010000"
     assert _times(opened, ctx, "epoch")[2] == "1700000000.001000"
     assert _times(opened, ctx, "utc")[1] == "2023-11-14 22:13:20.000000"
-    local = datetime.fromtimestamp(1_700_000_000).strftime("%Y-%m-%d %H:%M:%S")
+    local = datetime.fromtimestamp(1_700_000_000, UTC).astimezone().strftime("%Y-%m-%d %H:%M:%S")
     assert _times(opened, ctx, "absolute")[1] == f"{local}.000000"
     captured = _times(opened, ctx, "delta_captured")
     assert captured[1] == "0.000000" and captured[5] == "0.001000"

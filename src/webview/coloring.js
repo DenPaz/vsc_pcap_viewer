@@ -58,7 +58,13 @@
 
   /** @returns {Rule[]} */
   function currentRules() {
-    return state.rows.map(({ name, filter, foreground, background, enabled }) => ({ name, filter, foreground, background, enabled }));
+    return state.rows.map(({ name, filter, foreground, background, enabled }) => ({
+      name,
+      filter,
+      foreground,
+      background,
+      enabled,
+    }));
   }
 
   const isDirty = () => JSON.stringify(currentRules()) !== state.saved;
@@ -120,13 +126,21 @@
 
   const tbody = h("tbody");
   const saveButton = /** @type {HTMLButtonElement} */ (h("button", { type: "button" }, ["Save"]));
-  const revertButton = /** @type {HTMLButtonElement} */ (h("button", { type: "button", class: "secondary" }, ["Revert"]));
+  const revertButton = /** @type {HTMLButtonElement} */ (
+    h("button", { type: "button", class: "secondary" }, ["Revert"])
+  );
   const statusLine = h("span", { class: "status", role: "status" });
 
   function render() {
     tbody.replaceChildren(...state.rows.map((row, i) => renderRow(row, i)));
     if (!state.rows.length) {
-      tbody.append(h("tr", {}, [h("td", { colspan: "7", class: "empty-rules" }, ["No coloring rules. Add one, or restore the defaults."])]));
+      tbody.append(
+        h("tr", {}, [
+          h("td", { colspan: "7", class: "empty-rules" }, [
+            "No coloring rules. Add one, or restore the defaults.",
+          ]),
+        ]),
+      );
     }
     updateStatus();
   }
@@ -136,7 +150,9 @@
     const tr = h("tr", { "data-id": String(row.id) });
     tr.classList.toggle("disabled", !row.enabled);
 
-    const enabled = /** @type {HTMLInputElement} */ (h("input", { type: "checkbox", "aria-label": `Enable rule ${index + 1}` }));
+    const enabled = /** @type {HTMLInputElement} */ (
+      h("input", { type: "checkbox", "aria-label": `Enable rule ${index + 1}` })
+    );
     enabled.checked = row.enabled;
     enabled.addEventListener("change", () => {
       row.enabled = enabled.checked;
@@ -144,7 +160,9 @@
       updateStatus();
     });
 
-    const name = /** @type {HTMLInputElement} */ (h("input", { type: "text", class: "rule-name", "aria-label": "Name", placeholder: "Name" }));
+    const name = /** @type {HTMLInputElement} */ (
+      h("input", { type: "text", class: "rule-name", "aria-label": "Name", placeholder: "Name" })
+    );
     name.value = row.name;
     name.addEventListener("input", () => {
       row.name = name.value;
@@ -152,7 +170,15 @@
       updateStatus();
     });
 
-    const filter = /** @type {HTMLInputElement} */ (h("input", { type: "text", class: "rule-filter", "aria-label": "Display filter", placeholder: "Display filter", spellcheck: "false" }));
+    const filter = /** @type {HTMLInputElement} */ (
+      h("input", {
+        type: "text",
+        class: "rule-filter",
+        "aria-label": "Display filter",
+        placeholder: "Display filter",
+        spellcheck: "false",
+      })
+    );
     filter.value = row.filter;
     const problem = h("div", { class: "rule-problem" });
     filter.addEventListener("input", () => {
@@ -165,7 +191,9 @@
       updateStatus();
     });
 
-    const sample = h("div", { class: "rule-sample" }, [row.name.trim() || row.filter.trim() || "Sample packet"]);
+    const sample = h("div", { class: "rule-sample" }, [
+      row.name.trim() || row.filter.trim() || "Sample packet",
+    ]);
     const paint = () => {
       sample.style.color = row.foreground;
       sample.style.backgroundColor = row.background;
@@ -173,7 +201,9 @@
     paint();
     /** @param {"foreground" | "background"} key @param {string} label */
     const colorInput = (key, label) => {
-      const input = /** @type {HTMLInputElement} */ (h("input", { type: "color", "aria-label": label, title: label }));
+      const input = /** @type {HTMLInputElement} */ (
+        h("input", { type: "color", "aria-label": label, title: label })
+      );
       input.value = row[key];
       input.addEventListener("input", () => {
         row[key] = input.value;
@@ -183,8 +213,15 @@
       return input;
     };
 
-    const button = (/** @type {string} */ text, /** @type {string} */ label, /** @type {() => void} */ action, disabled = false) => {
-      const b = /** @type {HTMLButtonElement} */ (h("button", { type: "button", class: "icon", "aria-label": label, title: label }, [text]));
+    const button = (
+      /** @type {string} */ text,
+      /** @type {string} */ label,
+      /** @type {() => void} */ action,
+      disabled = false,
+    ) => {
+      const b = /** @type {HTMLButtonElement} */ (
+        h("button", { type: "button", class: "icon", "aria-label": label, title: label }, [text])
+      );
       b.disabled = disabled;
       b.addEventListener("click", action);
       return b;
@@ -194,7 +231,10 @@
       h("td", { class: "rule-enabled" }, [enabled]),
       h("td", {}, [name]),
       h("td", { class: "rule-filter-cell" }, [filter, problem]),
-      h("td", { class: "rule-colors" }, [colorInput("foreground", "Text color"), colorInput("background", "Row color")]),
+      h("td", { class: "rule-colors" }, [
+        colorInput("foreground", "Text color"),
+        colorInput("background", "Row color"),
+      ]),
       h("td", {}, [sample]),
       h("td", { class: "rule-actions" }, [
         button("↑", "Move up (Alt+↑)", () => move(index, -1), index === 0),
@@ -225,7 +265,9 @@
     const blocked = state.rows.some((r) => blocking(r));
     saveButton.disabled = !dirty || blocked;
     revertButton.disabled = !dirty;
-    const parts = [`${state.rows.length} rule${state.rows.length === 1 ? "" : "s"}, ${state.rows.filter((r) => r.enabled).length} enabled`];
+    const parts = [
+      `${state.rows.length} rule${state.rows.length === 1 ? "" : "s"}, ${state.rows.filter((r) => r.enabled).length} enabled`,
+    ];
     if (state.changedElsewhere) {
       parts.push("the rules changed in settings: Revert loads them");
     } else if (blocked) {
@@ -252,7 +294,9 @@
     render();
     // Keep focus on the same control of the moved row (keyboard reordering).
     const cls = focus?.className.split(" ").find((c) => c.startsWith("rule-"));
-    const target = /** @type {HTMLElement | null} */ (tbody.querySelector(`tr[data-id="${row.id}"] ${cls ? `.${cls}` : "input"}`));
+    const target = /** @type {HTMLElement | null} */ (
+      tbody.querySelector(`tr[data-id="${row.id}"] ${cls ? `.${cls}` : "input"}`)
+    );
     target?.focus();
   }
 
@@ -265,17 +309,28 @@
   }
 
   function add() {
-    const row = { name: "", filter: "", foreground: "#000000", background: "#fff3b0", enabled: true, id: state.nextId++ };
+    const row = {
+      name: "",
+      filter: "",
+      foreground: "#000000",
+      background: "#fff3b0",
+      enabled: true,
+      id: state.nextId++,
+    };
     state.rows.unshift(row); // on top: it wins
     render();
-    /** @type {HTMLElement | null} */ (tbody.querySelector(`tr[data-id="${row.id}"] .rule-filter`))?.focus();
+    /** @type {HTMLElement | null} */ (
+      tbody.querySelector(`tr[data-id="${row.id}"] .rule-filter`)
+    )?.focus();
   }
 
   // ------------------------------------------------------------------ layout
 
   const addButton = h("button", { type: "button" }, ["Add Rule"]);
   addButton.addEventListener("click", add);
-  saveButton.addEventListener("click", () => vscode.postMessage({ type: "save", rules: currentRules() }));
+  saveButton.addEventListener("click", () =>
+    vscode.postMessage({ type: "save", rules: currentRules() }),
+  );
   revertButton.addEventListener("click", () => vscode.postMessage({ type: "ready" }));
   const defaultsButton = h("button", { type: "button", class: "secondary" }, ["Restore Defaults"]);
   defaultsButton.addEventListener("click", () => {
@@ -284,17 +339,35 @@
     render();
     state.rows.forEach((row) => validate(row, 0));
   });
-  const settingsButton = h("button", { type: "button", class: "secondary" }, ["Open settings.json"]);
+  const settingsButton = h("button", { type: "button", class: "secondary" }, [
+    "Open settings.json",
+  ]);
   settingsButton.addEventListener("click", () => vscode.postMessage({ type: "openSettings" }));
 
   app.append(
     h("h1", { class: "panel-title" }, ["Coloring Rules"]),
-    h("div", { class: "panel-subtitle" }, ["The first matching rule colors a packet. Alt+↑ / Alt+↓ reorder a rule."]),
-    h("div", { class: "toolbar" }, [addButton, saveButton, revertButton, h("span", { class: "spacer" }), defaultsButton, settingsButton]),
+    h("div", { class: "panel-subtitle" }, [
+      "The first matching rule colors a packet. Alt+↑ / Alt+↓ reorder a rule.",
+    ]),
+    h("div", { class: "toolbar" }, [
+      addButton,
+      saveButton,
+      revertButton,
+      h("span", { class: "spacer" }),
+      defaultsButton,
+      settingsButton,
+    ]),
     statusLine,
     h("table", { class: "stats rules" }, [
       h("thead", {}, [
-        h("tr", {}, [h("th", {}, ["On"]), h("th", {}, ["Name"]), h("th", {}, ["Filter"]), h("th", {}, ["Colors"]), h("th", {}, ["Sample"]), h("th", {}, [""])]),
+        h("tr", {}, [
+          h("th", {}, ["On"]),
+          h("th", {}, ["Name"]),
+          h("th", {}, ["Filter"]),
+          h("th", {}, ["Colors"]),
+          h("th", {}, ["Sample"]),
+          h("th", {}, [""]),
+        ]),
       ]),
       tbody,
     ]),
@@ -324,8 +397,12 @@
         }
         state.errors.set(row.id, msg.error);
         const tr = tbody.querySelector(`tr[data-id="${row.id}"]`);
-        const input = /** @type {HTMLInputElement | null} */ (tr?.querySelector(".rule-filter") ?? null);
-        const problem = /** @type {HTMLElement | null} */ (tr?.querySelector(".rule-problem") ?? null);
+        const input = /** @type {HTMLInputElement | null} */ (
+          tr?.querySelector(".rule-filter") ?? null
+        );
+        const problem = /** @type {HTMLElement | null} */ (
+          tr?.querySelector(".rule-problem") ?? null
+        );
         if (input && problem) {
           showProblem(row, input, problem);
         }

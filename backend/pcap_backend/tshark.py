@@ -117,6 +117,9 @@ class DissectionOptions:
     lua_scripts: tuple[str, ...] = ()
     decode_as: tuple[str, ...] = ()
     prefs: tuple[tuple[str, str], ...] = ()
+    # Name resolution as ``-N`` letters ("" = ``-n``); None leaves tshark's own
+    # preferences (see name_flags).
+    names: str | None = None
 
     @classmethod
     def from_params(
@@ -124,6 +127,7 @@ class DissectionOptions:
         lua: Sequence[str] = (),
         decode_as: Sequence[str] = (),
         prefs: Mapping[str, object] | None = None,
+        names: Mapping[str, object] | None = None,
     ) -> DissectionOptions:
         for rule in decode_as:
             if not _DECODE_AS_RE.match(rule):
@@ -138,10 +142,18 @@ class DissectionOptions:
             if "\n" in text or "\r" in text:
                 raise ConfigError(f"preference {key!r} must be a single line")
             pref_items.append((key, text))
-        return cls(tuple(lua), tuple(decode_as), tuple(sorted(pref_items)))
+        flags = name_flags(names) if names is not None else None
+        return cls(tuple(lua), tuple(decode_as), tuple(sorted(pref_items)), flags)
+
+    @property
+    def resolves_addresses(self) -> bool:
+        """Source/Destination may show names instead of addresses."""
+        return self.names is None or "m" in self.names or "n" in self.names
 
     def args(self) -> list[str]:
         out: list[str] = []
+        if self.names is not None:
+            out += ["-N", self.names] if self.names else ["-n"]
         for script in self.lua_scripts:
             out += ["-X", f"lua_script:{script}"]
         for rule in self.decode_as:
@@ -152,10 +164,7 @@ class DissectionOptions:
 
     def check_scripts(self) -> list[str]:
         """Return warnings for Lua scripts and key log files tshark would silently ignore."""
-        warnings: list[str] = []
-        for script in self.lua_scripts:
-            if not Path(script).is_file():
-                warnings.append(f"Lua script not found: {script}")
+        warnings = [f"Lua script not found: {s}" for s in self.lua_scripts if not Path(s).is_file()]
         for key, value in self.prefs:
             if key.endswith(".keylog_file") and value and not Path(value).is_file():
                 warnings.append(f"Key log file not found ({key}): {value}")
@@ -164,6 +173,25 @@ class DissectionOptions:
                 "tshark disables Lua dissectors when running as root; Lua scripts were not loaded"
             )
         return warnings
+
+
+# Name resolution switches (the host's pcapViewer.nameResolution.* settings) and
+# their ``-N`` letters. "external" (N: ask the system's DNS resolver) only works
+# with "network" (n); without it names come from the capture's DNS answers (d)
+# and hosts files.
+_NAME_FLAGS = (("mac", "m"), ("network", "n"), ("capturedDns", "d"), ("external", "N"),
+               ("transport", "t"))  # fmt: skip
+
+
+def name_flags(names: Mapping[str, object]) -> str:
+    """``-N`` letters for name resolution switches ("" = none, i.e. ``-n``)."""
+    unknown = set(names) - {key for key, _ in _NAME_FLAGS}
+    if unknown:
+        raise ConfigError(f"unknown name resolution option(s): {', '.join(sorted(unknown))}")
+    on = {key for key, _ in _NAME_FLAGS if names.get(key) is True}
+    if "network" not in on:
+        on -= {"capturedDns", "external"}
+    return "".join(letter for key, letter in _NAME_FLAGS if key in on)
 
 
 def _pref_value(value: object) -> str:

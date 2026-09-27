@@ -15,6 +15,11 @@ test/**
 **/.mypy_cache/**
 **/.pytest_cache/**
 eslint.config.mjs
+.prettierrc.json
+.prettierignore
+.editorconfig
+.gitattributes
+.git-blame-ignore-revs
 .ncurc.cjs
 Makefile
 tsconfig*.json

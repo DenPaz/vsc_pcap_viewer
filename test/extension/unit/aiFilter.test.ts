@@ -23,7 +23,13 @@ const INPUT: PromptInput = {
 
 suite("aiFilter", () => {
   test("extractKeywords keeps protocol/field-like words", () => {
-    assert.deepEqual(extractKeywords("Show me DNS queries for example.com that got no answer"), ["dns", "queries", "example.com", "got", "answer"]);
+    assert.deepEqual(extractKeywords("Show me DNS queries for example.com that got no answer"), [
+      "dns",
+      "queries",
+      "example.com",
+      "got",
+      "answer",
+    ]);
     assert.deepEqual(extractKeywords("tcp.port 443 or 10.0.0.1, http2!"), ["tcp.port", "http2"]);
     assert.deepEqual(extractKeywords("a b c the"), []);
     assert.equal(extractKeywords("one two three four five six seven eight nine ten", 3).length, 3);
@@ -37,11 +43,20 @@ suite("aiFilter", () => {
     assert.match(prompt, /^- dns\.qry\.name \(FT_STRING\): Name — Query Name$/m);
     assert.match(prompt, /^- dns\.flags\.response \(FT_BOOLEAN\): Response flag$/m);
     assert.match(prompt, /JSON only/);
-    assert.equal(buildFilterPrompt({ ...INPUT, currentFilter: "", protocols: [], fields: [] }).includes("Current display filter: (none)"), true);
+    assert.equal(
+      buildFilterPrompt({ ...INPUT, currentFilter: "", protocols: [], fields: [] }).includes(
+        "Current display filter: (none)",
+      ),
+      true,
+    );
   });
 
   test("the prompt never includes packet data, even if a caller passes some", () => {
-    const withPackets = { ...INPUT, packets: [{ info: "SECRET-PAYLOAD GET /private?token=abc" }], rows: ["10.1.2.3 → 10.9.9.9"] } as PromptInput;
+    const withPackets = {
+      ...INPUT,
+      packets: [{ info: "SECRET-PAYLOAD GET /private?token=abc" }],
+      rows: ["10.1.2.3 → 10.9.9.9"],
+    } as PromptInput;
     const prompt = buildFilterPrompt(withPackets);
     assert.ok(!prompt.includes("SECRET-PAYLOAD"));
     assert.ok(!prompt.includes("token=abc"));
@@ -50,14 +65,18 @@ suite("aiFilter", () => {
   });
 
   test("the prompt is bounded", () => {
-    const fields = Array.from({ length: 500 }, (_, i) => ({ name: `f${i}.x`, desc: "d".repeat(1000) }));
+    const fields = Array.from({ length: 500 }, (_, i) => ({
+      name: `f${i}.x`,
+      desc: "d".repeat(1000),
+    }));
     const prompt = buildFilterPrompt({ ...INPUT, request: "x".repeat(10_000), fields });
     assert.ok(prompt.length < 20_000, `prompt is ${prompt.length} chars`);
     assert.ok(!prompt.includes("f60.x"));
   });
 
   test("parseSuggestions accepts the JSON array, fenced or with prose", () => {
-    const good = '[{"filter": "dns.flags.response == 0", "explanation": "DNS queries"}, {"filter": "dns", "explanation": "All DNS"}]';
+    const good =
+      '[{"filter": "dns.flags.response == 0", "explanation": "DNS queries"}, {"filter": "dns", "explanation": "All DNS"}]';
     const expected: FilterSuggestion[] = [
       { filter: "dns.flags.response == 0", explanation: "DNS queries" },
       { filter: "dns", explanation: "All DNS" },
@@ -66,7 +85,9 @@ suite("aiFilter", () => {
     assert.deepEqual(parseSuggestions("```json\n" + good + "\n```"), expected);
     assert.deepEqual(parseSuggestions(`Here you go:\n${good}\nHope it helps!`), expected);
     assert.deepEqual(parseSuggestions(`{"suggestions": ${good}}`), expected);
-    assert.deepEqual(parseSuggestions('{"filter": "tcp", "explanation": "TCP"}'), [{ filter: "tcp", explanation: "TCP" }]);
+    assert.deepEqual(parseSuggestions('{"filter": "tcp", "explanation": "TCP"}'), [
+      { filter: "tcp", explanation: "TCP" },
+    ]);
   });
 
   test("parseSuggestions drops bad entries, duplicates and extras", () => {
@@ -93,7 +114,8 @@ suite("aiFilter", () => {
   });
 
   test("validateSuggestions drops what tshark rejects", async () => {
-    const validate = async (f: string) => (f.includes("bogus") ? `"${f}" is neither a field nor a protocol name.` : undefined);
+    const validate = async (f: string) =>
+      f.includes("bogus") ? `"${f}" is neither a field nor a protocol name.` : undefined;
     const res = await validateSuggestions(
       [
         { filter: "dns", explanation: "ok" },
@@ -102,12 +124,20 @@ suite("aiFilter", () => {
       validate,
     );
     assert.deepEqual(res.valid, [{ filter: "dns", explanation: "ok" }]);
-    assert.deepEqual(res.rejected, [{ filter: "bogus.field == 1", error: '"bogus.field == 1" is neither a field nor a protocol name.' }]);
+    assert.deepEqual(res.rejected, [
+      {
+        filter: "bogus.field == 1",
+        error: '"bogus.field == 1" is neither a field nor a protocol name.',
+      },
+    ]);
   });
 
   test("suggestFilters retries once with tshark's errors when nothing was valid", async () => {
     const seen: ChatTurn[][] = [];
-    const answers = ['[{"filter": "dns.bogus == 1", "explanation": "x"}]', '[{"filter": "dns.flags.response == 0", "explanation": "fixed"}]'];
+    const answers = [
+      '[{"filter": "dns.bogus == 1", "explanation": "x"}]',
+      '[{"filter": "dns.flags.response == 0", "explanation": "fixed"}]',
+    ];
     const res = await suggestFilters(
       {
         ask: async (turns) => {
@@ -118,7 +148,9 @@ suite("aiFilter", () => {
       },
       INPUT,
     );
-    assert.deepEqual(res.suggestions, [{ filter: "dns.flags.response == 0", explanation: "fixed" }]);
+    assert.deepEqual(res.suggestions, [
+      { filter: "dns.flags.response == 0", explanation: "fixed" },
+    ]);
     assert.deepEqual(res.rejected, [{ filter: "dns.bogus == 1", error: "not a field" }]);
     assert.equal(seen.length, 2);
     assert.deepEqual(
@@ -137,14 +169,23 @@ suite("aiFilter", () => {
       },
       validate: async (f: string) => (f === "bogus" ? "bad" : undefined),
     };
-    assert.deepEqual((await suggestFilters(deps, INPUT)).suggestions, [{ filter: "tcp", explanation: "a" }]);
+    assert.deepEqual((await suggestFilters(deps, INPUT)).suggestions, [
+      { filter: "tcp", explanation: "a" },
+    ]);
     assert.equal(calls, 1);
-    const none = await suggestFilters({ ask: async () => "no idea", validate: deps.validate }, INPUT, { retry: false });
+    const none = await suggestFilters(
+      { ask: async () => "no idea", validate: deps.validate },
+      INPUT,
+      { retry: false },
+    );
     assert.deepEqual(none, { suggestions: [], rejected: [] });
   });
 
   test("buildRetryPrompt", () => {
     assert.match(buildRetryPrompt([]), /JSON only/);
-    assert.match(buildRetryPrompt([{ filter: "x ==", error: "Unexpected end\nof filter" }]), /- x ==: Unexpected end of filter/);
+    assert.match(
+      buildRetryPrompt([{ filter: "x ==", error: "Unexpected end\nof filter" }]),
+      /- x ==: Unexpected end of filter/,
+    );
   });
 });

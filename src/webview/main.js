@@ -31,7 +31,14 @@
     utc: "Time: UTC date and time",
     epoch: "Time: epoch seconds",
   };
-  const DEFAULT_WIDTHS = { number: 70, time: 100, source: 150, destination: 150, protocol: 80, length: 64 };
+  const DEFAULT_WIDTHS = {
+    number: 70,
+    time: 100,
+    source: 150,
+    destination: 150,
+    protocol: 80,
+    length: 64,
+  };
   const CUSTOM_WIDTH = 120;
   const NUMERIC_IDS = new Set(["number", "time", "length"]);
 
@@ -68,6 +75,7 @@
     statusLeft: $("status-left"),
     statusRight: $("status-right"),
     statusTime: $("status-time"),
+    statusNames: $("status-names"),
     statusInfo: $("status-info"),
     findBar: $("find-bar"),
     findMode: /** @type {HTMLSelectElement} */ ($("find-mode")),
@@ -94,7 +102,7 @@
 
   /**
    * @typedef {{id: string, title: string, field: string, numeric?: boolean, custom?: boolean}} Column
-   * @typedef {{number: number, cells: string[], color?: number, cid?: number, marked?: boolean}} Row
+   * @typedef {{number: number, cells: string[], color?: number, cid?: number, marked?: boolean, addresses?: string[]}} Row
    * @typedef {{name: string, foreground: string, background: string}} ColorRule
    */
   const state = {
@@ -158,7 +166,13 @@
     /** Field name → {type, desc} from the backend's field catalogue (frame links, Apply as Column). */
     /** @type {Map<string, {type: string, desc: string}>} */ fieldTypes: new Map(),
     /** "✨ Ask AI": available (host says a model can be used), asking (the input holds a description). */
-    ai: { available: false, asking: false, /** @type {number | null} */ request: null, savedText: "", /** @type {string[]} */ savedClasses: [] },
+    ai: {
+      available: false,
+      asking: false,
+      /** @type {number | null} */ request: null,
+      savedText: "",
+      /** @type {string[]} */ savedClasses: [],
+    },
   };
 
   // ------------------------------------------------------------------ rpc
@@ -302,6 +316,7 @@
     state.customColumns = lib.acceptedColumns(msg.columns, msg.info.columns.slice(7));
     state.layout = msg.layout || { order: [], hidden: [] };
     state.timeFormat = msg.timeFormat || "relative";
+    el.statusNames.textContent = msg.names || "";
     state.quickDetail = msg.quickDetail || state.quickDetail;
     state.timeRef = null;
     state.markCount = 0;
@@ -419,7 +434,12 @@
   function columns() {
     return [
       ...state.baseColumns,
-      ...state.customColumns.map((c) => ({ id: `custom:${c.field}`, title: c.title, field: c.field, custom: true })),
+      ...state.customColumns.map((c) => ({
+        id: `custom:${c.field}`,
+        title: c.title,
+        field: c.field,
+        custom: true,
+      })),
     ];
   }
 
@@ -430,11 +450,18 @@
 
   /** @param {Column} c */
   function columnWidth(c) {
-    return c.id === "info" ? "minmax(200px, 1fr)" : `${state.widths[c.id] ?? DEFAULT_WIDTHS[/** @type {keyof typeof DEFAULT_WIDTHS} */ (c.id)] ?? CUSTOM_WIDTH}px`;
+    return c.id === "info"
+      ? "minmax(200px, 1fr)"
+      : `${state.widths[c.id] ?? DEFAULT_WIDTHS[/** @type {keyof typeof DEFAULT_WIDTHS} */ (c.id)] ?? CUSTOM_WIDTH}px`;
   }
 
   function applyColumnWidths() {
-    el.list.style.setProperty("--cols", visibleColumns().map((v) => columnWidth(v.column)).join(" "));
+    el.list.style.setProperty(
+      "--cols",
+      visibleColumns()
+        .map((v) => columnWidth(v.column))
+        .join(" "),
+    );
   }
 
   function rebuildColumns() {
@@ -485,7 +512,10 @@
     if (state.sort && bad.has(state.sort.field)) {
       state.sort = null;
     }
-    showFilterError(`Unknown field${fields.length > 1 ? "s" : ""} removed from columns: ${fields.join(", ")}`, true);
+    showFilterError(
+      `Unknown field${fields.length > 1 ? "s" : ""} removed from columns: ${fields.join(", ")}`,
+      true,
+    );
     rebuildColumns();
     resetView({ keepSelection: true });
   }
@@ -603,7 +633,9 @@
     if (ev.event === "stopped") {
       showNotice(`Filter stopped: showing the ${found} found so far.`);
     } else if (ev.event === "failed") {
-      showNotice(`The filter stopped early (${ev.message ?? "tshark failed"}): showing the ${found} found so far.`);
+      showNotice(
+        `The filter stopped early (${ev.message ?? "tshark failed"}): showing the ${found} found so far.`,
+      );
     }
   }
 
@@ -706,7 +738,12 @@
   }
 
   function updateSpacer() {
-    const win = lib.computeWindow({ scrollTop: 0, viewportHeight: el.viewport.clientHeight, total: state.total, rowHeight: state.rowHeight });
+    const win = lib.computeWindow({
+      scrollTop: 0,
+      viewportHeight: el.viewport.clientHeight,
+      total: state.total,
+      rowHeight: state.rowHeight,
+    });
     el.spacer.style.height = `${win.virtualHeight}px`;
     el.empty.classList.toggle("hidden", !state.ready || state.total > 0);
   }
@@ -777,9 +814,14 @@
       for (let c = 0; c < cols.length; c++) {
         const cell = /** @type {HTMLElement} */ (rowEl.children[c]);
         // Times arrive formatted by the backend (pcapViewer.timeFormat, time reference).
-        const text = row ? row.cells[cols[c].index] ?? "" : c === 0 ? "…" : "";
+        const text = row ? (row.cells[cols[c].index] ?? "") : c === 0 ? "…" : "";
         if (cell.textContent !== text) {
           cell.textContent = text;
+        }
+        // A resolved name: the address as tooltip.
+        const address = (row && lib.cellAddress(cols[c].column, row)) ?? "";
+        if (cell.title !== address) {
+          cell.title = address;
         }
       }
     }
@@ -792,7 +834,11 @@
     const viewKey = state.viewKey;
     for (const page of pages) {
       const key = `${viewKey}#${page}`;
-      if (state.pages.has(key) || state.inflightPages.has(key) || state.inflightPages.size >= MAX_INFLIGHT_PAGES) {
+      if (
+        state.pages.has(key) ||
+        state.inflightPages.has(key) ||
+        state.inflightPages.size >= MAX_INFLIGHT_PAGES
+      ) {
         continue;
       }
       const req = rpc("list_packets", {
@@ -822,7 +868,11 @@
             state.total = res.total;
             updateSpacer();
           }
-          if (state.selectedIndex !== null && state.selectedFrame === null && Math.floor(state.selectedIndex / PAGE_SIZE) === page) {
+          if (
+            state.selectedIndex !== null &&
+            state.selectedFrame === null &&
+            Math.floor(state.selectedIndex / PAGE_SIZE) === page
+          ) {
             const row = rowAt(state.selectedIndex);
             if (row) {
               selectFrame(row.number);
@@ -849,7 +899,9 @@
   // ------------------------------------------------------------------ selection
 
   el.rows.addEventListener("mousedown", (e) => {
-    const rowEl = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (e.target).closest(".list-row"));
+    const rowEl = /** @type {HTMLElement | null} */ (
+      /** @type {HTMLElement} */ (e.target).closest(".list-row")
+    );
     if (!rowEl || rowEl.dataset.index === undefined || e.button !== 0) {
       return; // right-click: the context menu decides (it keeps a multi-selection)
     }
@@ -962,7 +1014,11 @@
     try {
       const viewKey = state.viewKey;
       const res = await rpc("find_frame", { number: frame, ...orderParams() }).promise;
-      if (res.filterId === state.filterId && viewKey === state.viewKey && typeof res.index === "number") {
+      if (
+        res.filterId === state.filterId &&
+        viewKey === state.viewKey &&
+        typeof res.index === "number"
+      ) {
         focusIndex(res.index);
       }
     } catch {
@@ -996,8 +1052,13 @@
     if (!frames.length) {
       try {
         const viewKey = state.viewKey;
-        const res = await rpc("view_frames", { offset: lo, limit: count, ...orderParams() }).promise;
-        if (seq !== state.rangeSeq || res.filterId !== state.filterId || viewKey !== state.viewKey) {
+        const res = await rpc("view_frames", { offset: lo, limit: count, ...orderParams() })
+          .promise;
+        if (
+          seq !== state.rangeSeq ||
+          res.filterId !== state.filterId ||
+          viewKey !== state.viewKey
+        ) {
           return;
         }
         frames = res.frames;
@@ -1021,13 +1082,22 @@
       return;
     }
     const all = Math.min(state.total, MAX_SELECTION);
-    if (!state.ready || state.total === 0 || selectAllPending || (all > 1 && state.selection.size === all)) {
+    if (
+      !state.ready ||
+      state.total === 0 ||
+      selectAllPending ||
+      (all > 1 && state.selection.size === all)
+    ) {
       return; // (the key and VS Code's Select All command can both arrive)
     }
     selectAllPending = true;
     const filterId = state.filterId;
     try {
-      const res = await rpc("view_frames", { offset: 0, limit: Math.min(state.total, MAX_SELECTION), ...orderParams() }).promise;
+      const res = await rpc("view_frames", {
+        offset: 0,
+        limit: Math.min(state.total, MAX_SELECTION),
+        ...orderParams(),
+      }).promise;
       if (res.filterId !== filterId) {
         return;
       }
@@ -1086,7 +1156,11 @@
   function copyText(rows) {
     const cols = visibleColumns();
     const cells = rows.map((r) => cols.map((c) => r.cells[c.index] ?? ""));
-    return lib.rowsToText(cols.map((c) => c.column.title), cells, rows.length > 1);
+    return lib.rowsToText(
+      cols.map((c) => c.column.title),
+      cells,
+      rows.length > 1,
+    );
   }
 
   /** Copy the selected rows (visible columns, view order); rows not loaded come from the backend. */
@@ -1102,7 +1176,10 @@
     }
     const viewKey = state.viewKey;
     try {
-      const ordered = (await rpc("view_frames", { frames, ...orderParams() }).promise).frames.slice(0, MAX_COPY_ROWS);
+      const ordered = (await rpc("view_frames", { frames, ...orderParams() }).promise).frames.slice(
+        0,
+        MAX_COPY_ROWS,
+      );
       /** @type {Row[]} */
       const rows = [];
       for (let i = 0; i < ordered.length; i += COPY_CHUNK) {
@@ -1120,7 +1197,9 @@
       }
       copy(copyText(rows));
       if (frames.length > MAX_COPY_ROWS) {
-        showNotice(`Copied the first ${MAX_COPY_ROWS.toLocaleString()} rows. Export Packet List saves them all.`);
+        showNotice(
+          `Copied the first ${MAX_COPY_ROWS.toLocaleString()} rows. Export Packet List saves them all.`,
+        );
       }
     } catch (err) {
       showNotice(String(/** @type {any} */ (err)?.message ?? err));
@@ -1177,7 +1256,11 @@
     const viewKey = state.viewKey;
     try {
       const res = await rpc("find_frame", { number: frame, ...orderParams() }).promise;
-      if (res.filterId !== state.filterId || frame !== state.selectedFrame || viewKey !== state.viewKey) {
+      if (
+        res.filterId !== state.filterId ||
+        frame !== state.selectedFrame ||
+        viewKey !== state.viewKey
+      ) {
         return;
       }
       if ((res.index === null || res.index === undefined) && state.filtering) {
@@ -1212,7 +1295,9 @@
       if (res.index === null || res.index === undefined) {
         showNotice(
           `Packet ${frame} is not displayed with the current filter.`,
-          state.appliedFilter ? { label: "Clear filter and go", run: () => void clearFilterAndGo(frame, opts) } : undefined,
+          state.appliedFilter
+            ? { label: "Clear filter and go", run: () => void clearFilterAndGo(frame, opts) }
+            : undefined,
         );
         return false;
       }
@@ -1292,7 +1377,10 @@
       if (e?.code !== CANCELLED && state.selectedFrame === frame) {
         if (state.detail?.number === frame && state.detail.approximate) {
           // Keep the quick view, but say the exact one failed.
-          showDetailNote(`${quickNote(state.detail)} The exact view failed: ${e?.message ?? e}`, false);
+          showDetailNote(
+            `${quickNote(state.detail)} The exact view failed: ${e?.message ?? e}`,
+            false,
+          );
         } else {
           el.tree.replaceChildren();
           el.treePlaceholder.textContent = `Could not dissect packet ${frame}: ${e?.message ?? e}`;
@@ -1335,7 +1423,11 @@
   /** The focused frame plus, for a multi-selection, every selected frame (Export Selected…). */
   function postSelection() {
     const frames = state.selection.size ? [...state.selection] : undefined;
-    vscode.postMessage(frames ? { type: "selection", frame: reportedFrame, frames } : { type: "selection", frame: reportedFrame });
+    vscode.postMessage(
+      frames
+        ? { type: "selection", frame: reportedFrame, frames }
+        : { type: "selection", frame: reportedFrame },
+    );
   }
 
   function clearDetail() {
@@ -1361,13 +1453,17 @@
 
   /** @param {any} detail */
   function showDetail(detail) {
-    const previous = state.selectedNodeId !== null ? nodeIndex.get(state.selectedNodeId) : undefined;
+    const previous =
+      state.selectedNodeId !== null ? nodeIndex.get(state.selectedNodeId) : undefined;
     const previousKey = previous ? lib.nodeKey(previous.path) : null;
     // The exact view replacing the quick one: keep the reader where they were.
     const sameFrame = state.detail?.number === detail.number;
     const scrollTop = el.detailPane.scrollTop;
     state.detail = detail;
-    showDetailNote(detail.approximate ? `${quickNote(detail)} Loading the exact view` : "", !!detail.approximate);
+    showDetailNote(
+      detail.approximate ? `${quickNote(detail)} Loading the exact view` : "",
+      !!detail.approximate,
+    );
     state.selectedNodeId = null;
     nodeIndex.clear();
     el.treePlaceholder.classList.add("hidden");
@@ -1403,7 +1499,10 @@
     const wrap = document.createElement("div");
     wrap.setAttribute("role", "treeitem");
     const row = document.createElement("div");
-    row.className = "node-row" + (node.proto ? " proto" : "") + (node.name && node.name.startsWith("_ws.expert") ? " expert" : "");
+    row.className =
+      "node-row" +
+      (node.proto ? " proto" : "") +
+      (node.name && node.name.startsWith("_ws.expert") ? " expert" : "");
     row.dataset.id = String(node.id);
     row.style.paddingLeft = `${depth * 14}px`;
     const twisty = document.createElement("span");
@@ -1463,7 +1562,9 @@
   }
 
   el.tree.addEventListener("click", (e) => {
-    const row = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (e.target).closest(".node-row"));
+    const row = /** @type {HTMLElement | null} */ (
+      /** @type {HTMLElement} */ (e.target).closest(".node-row")
+    );
     if (!row) {
       return;
     }
@@ -1482,7 +1583,9 @@
   });
 
   el.tree.addEventListener("dblclick", (e) => {
-    const row = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (e.target).closest(".node-row"));
+    const row = /** @type {HTMLElement | null} */ (
+      /** @type {HTMLElement} */ (e.target).closest(".node-row")
+    );
     const entry = row && nodeIndex.get(Number(row.dataset.id));
     if (entry) {
       setExpanded(entry, !isExpanded(entry));
@@ -1490,7 +1593,9 @@
   });
 
   el.tree.addEventListener("keydown", (e) => {
-    const visible = [...el.tree.querySelectorAll(".node-row")].filter((r) => /** @type {HTMLElement} */ (r).offsetParent !== null);
+    const visible = [...el.tree.querySelectorAll(".node-row")].filter(
+      (r) => /** @type {HTMLElement} */ (r).offsetParent !== null,
+    );
     if (!visible.length) {
       return;
     }
@@ -1498,7 +1603,9 @@
     const idx = current ? visible.indexOf(current.row) : -1;
     /** @param {number} i */
     const go = (i) => {
-      const row = /** @type {HTMLElement} */ (visible[Math.max(0, Math.min(visible.length - 1, i))]);
+      const row = /** @type {HTMLElement} */ (
+        visible[Math.max(0, Math.min(visible.length - 1, i))]
+      );
       selectNode(Number(row.dataset.id), { scroll: true });
     };
     switch (e.key) {
@@ -1630,7 +1737,7 @@
       ascii.className = "ascii";
       for (let i = off; i < Math.min(off + 16, data.length); i++) {
         const b = document.createElement("span");
-        b.className = "b" + ((i - off) === 7 ? " gap" : "");
+        b.className = "b" + (i - off === 7 ? " gap" : "");
         b.dataset.i = String(i);
         b.textContent = data[i].toString(16).padStart(2, "0");
         row.append(b);
@@ -1645,7 +1752,7 @@
       // Pad short final rows so the ASCII column lines up.
       for (let i = data.length; i < off + 16; i++) {
         const pad = document.createElement("span");
-        pad.className = "b" + ((i - off) === 7 ? " gap" : "");
+        pad.className = "b" + (i - off === 7 ? " gap" : "");
         pad.textContent = "  ";
         row.append(pad);
       }
@@ -1714,7 +1821,9 @@
 
   // Packet list: follow the selected packet's stream.
   el.rows.addEventListener("contextmenu", (e) => {
-    const rowEl = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (e.target).closest(".list-row"));
+    const rowEl = /** @type {HTMLElement | null} */ (
+      /** @type {HTMLElement} */ (e.target).closest(".list-row")
+    );
     if (!rowEl || rowEl.dataset.index === undefined) {
       return;
     }
@@ -1732,20 +1841,40 @@
     const multi = state.selection.size;
     const protocol = (row.cells[4] || "").toUpperCase();
     /** @param {"tcp" | "udp" | "tls" | "http"} proto */
-    const follow = (proto) => () => vscode.postMessage({ type: "follow", proto, frame: row.number });
+    const follow = (proto) => () =>
+      vscode.postMessage({ type: "follow", proto, frame: row.number });
     // The clicked cell: Apply as Filter on its value (validated when applied).
-    const cellEl = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (e.target).closest(".list-row > div"));
+    const cellEl = /** @type {HTMLElement | null} */ (
+      /** @type {HTMLElement} */ (e.target).closest(".list-row > div")
+    );
     const vis = cellEl ? visibleColumns()[[...rowEl.children].indexOf(cellEl)] : undefined;
-    const cellValue = vis ? row.cells[vis.index] ?? "" : "";
+    // (A resolved name filters on its address.)
+    const cellValue = vis ? (lib.cellAddress(vis.column, row) ?? row.cells[vis.index] ?? "") : "";
     const filter = vis ? lib.cellFilter(vis.column, cellValue) : null;
     const current = state.appliedFilter;
     /** @type {[string, (() => void) | null][]} */
     const items = [
-      ["Apply as Filter", filter ? () => applyFromTree(lib.combineFilter(current, filter, "replace"), true) : null],
+      [
+        "Apply as Filter",
+        filter ? () => applyFromTree(lib.combineFilter(current, filter, "replace"), true) : null,
+      ],
       ["Prepare as Filter", filter ? () => applyFromTree(filter, false) : null],
-      ["…and Selected", filter && current ? () => applyFromTree(lib.combineFilter(current, filter, "and"), true) : null],
-      ["…or Selected", filter && current ? () => applyFromTree(lib.combineFilter(current, filter, "or"), true) : null],
-      ["…and not Selected", filter ? () => applyFromTree(lib.combineFilter(current, filter, "not"), true) : null],
+      [
+        "…and Selected",
+        filter && current
+          ? () => applyFromTree(lib.combineFilter(current, filter, "and"), true)
+          : null,
+      ],
+      [
+        "…or Selected",
+        filter && current
+          ? () => applyFromTree(lib.combineFilter(current, filter, "or"), true)
+          : null,
+      ],
+      [
+        "…and not Selected",
+        filter ? () => applyFromTree(lib.combineFilter(current, filter, "not"), true) : null,
+      ],
       ["-", null],
       ["Follow TCP Stream", follow("tcp")],
       ["Follow UDP Stream", follow("udp")],
@@ -1756,17 +1885,36 @@
       ...(state.ai.available
         ? /** @type {[string, (() => void) | null][]} */ ([
             [
-              multi ? `Ask Copilot About ${multi.toLocaleString()} Selected Packets…` : "Ask Copilot About This Packet…",
-              () => vscode.postMessage({ type: "askAboutPackets", frames: selectedFrames().sort((a, b) => a - b) }),
+              multi
+                ? `Ask Copilot About ${multi.toLocaleString()} Selected Packets…`
+                : "Ask Copilot About This Packet…",
+              () =>
+                vscode.postMessage({
+                  type: "askAboutPackets",
+                  frames: selectedFrames().sort((a, b) => a - b),
+                }),
             ],
             ["-", null],
           ])
         : []),
       ["Decode As…", () => vscode.postMessage({ type: "decodeAs", frame: row.number })],
-      ["Export Packet Bytes…", () => vscode.postMessage({ type: "exportBytes", frame: row.number })],
+      [
+        "Export Packet Bytes…",
+        () => vscode.postMessage({ type: "exportBytes", frame: row.number }),
+      ],
       ["-", null],
-      [multi ? `Mark/Unmark ${multi.toLocaleString()} Selected Packets` : row.marked ? "Unmark Packet" : "Mark Packet", () => void toggleMark()],
-      [state.timeRef === row.number ? "Unset Time Reference" : "Set Time Reference", () => toggleTimeReference()],
+      [
+        multi
+          ? `Mark/Unmark ${multi.toLocaleString()} Selected Packets`
+          : row.marked
+            ? "Unmark Packet"
+            : "Mark Packet",
+        () => void toggleMark(),
+      ],
+      [
+        state.timeRef === row.number ? "Unset Time Reference" : "Set Time Reference",
+        () => toggleTimeReference(),
+      ],
       ["Select All", () => void selectAll()],
       ["-", null],
       ["Copy Value", cellValue ? () => copy(cellValue) : null],
@@ -1774,7 +1922,10 @@
         ? /** @type {[string, (() => void) | null][]} */ ([
             [`Copy ${multi.toLocaleString()} Rows`, () => void copyRows()],
             [`Copy ${multi.toLocaleString()} Frame Numbers`, () => void copyFrameNumbers()],
-            [`Export ${multi.toLocaleString()} Selected Packets…`, () => vscode.postMessage({ type: "exportSelected" })],
+            [
+              `Export ${multi.toLocaleString()} Selected Packets…`,
+              () => vscode.postMessage({ type: "exportSelected" }),
+            ],
           ])
         : /** @type {[string, (() => void) | null][]} */ ([
             ["Copy Summary", () => copy(row.cells.join("\t"))],
@@ -1785,7 +1936,9 @@
   });
 
   el.tree.addEventListener("contextmenu", (e) => {
-    const row = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (e.target).closest(".node-row"));
+    const row = /** @type {HTMLElement | null} */ (
+      /** @type {HTMLElement} */ (e.target).closest(".node-row")
+    );
     const entry = row && nodeIndex.get(Number(row.dataset.id));
     if (!entry) {
       return;
@@ -1797,14 +1950,40 @@
     const current = state.appliedFilter;
     /** @type {[string, (() => void) | null][]} */
     const items = [
-      ["Apply as Filter", filter ? () => applyFromTree(lib.combineFilter(current, filter, "replace"), true) : null],
+      [
+        "Apply as Filter",
+        filter ? () => applyFromTree(lib.combineFilter(current, filter, "replace"), true) : null,
+      ],
       ["Prepare as Filter", filter ? () => applyFromTree(filter, false) : null],
-      ["…and Selected", filter && current ? () => applyFromTree(lib.combineFilter(current, filter, "and"), true) : null],
-      ["…or Selected", filter && current ? () => applyFromTree(lib.combineFilter(current, filter, "or"), true) : null],
-      ["…and not Selected", filter ? () => applyFromTree(lib.combineFilter(current, filter, "not"), true) : null],
-      ["Colorize with Filter…", filter ? () => vscode.postMessage({ type: "colorize", filter }) : null],
+      [
+        "…and Selected",
+        filter && current
+          ? () => applyFromTree(lib.combineFilter(current, filter, "and"), true)
+          : null,
+      ],
+      [
+        "…or Selected",
+        filter && current
+          ? () => applyFromTree(lib.combineFilter(current, filter, "or"), true)
+          : null,
+      ],
+      [
+        "…and not Selected",
+        filter ? () => applyFromTree(lib.combineFilter(current, filter, "not"), true) : null,
+      ],
+      [
+        "Colorize with Filter…",
+        filter ? () => vscode.postMessage({ type: "colorize", filter }) : null,
+      ],
       ["Apply as Column", canBeColumn(node) ? () => applyColumn(node) : null],
-      ...(frameLinkTarget(node) !== null ? /** @type {[string, (() => void) | null][]} */ ([[`Go to Packet ${frameLinkTarget(node)}`, () => void gotoFrame(/** @type {number} */ (frameLinkTarget(node)))]]) : []),
+      ...(frameLinkTarget(node) !== null
+        ? /** @type {[string, (() => void) | null][]} */ ([
+            [
+              `Go to Packet ${frameLinkTarget(node)}`,
+              () => void gotoFrame(/** @type {number} */ (frameLinkTarget(node))),
+            ],
+          ])
+        : []),
       ["-", null],
       ["Copy Value", node.show !== undefined ? () => copy(node.show) : null],
       ["Copy Line", () => copy(node.label)],
@@ -1965,6 +2144,9 @@
     setBusy(req.id, true);
     try {
       const res = await req.promise;
+      if (state.filterRequest !== req.id) {
+        return; // a newer filter was applied meanwhile: its reply decides
+      }
       state.appliedFilter = res.expr;
       state.filterId = res.filterId;
       state.total = res.matchCount;
@@ -2073,7 +2255,12 @@
         hideSuggest();
         return;
       }
-      const items = lib.operatorSuggestions(ctx.kind, ctx.prefix).map((/** @type {any} */ o) => ({ label: o.label, desc: o.desc, kind: "operator", value: o.label }));
+      const items = lib.operatorSuggestions(ctx.kind, ctx.prefix).map((/** @type {any} */ o) => ({
+        label: o.label,
+        desc: o.desc,
+        kind: "operator",
+        value: o.label,
+      }));
       renderSuggest(items, "complete", ctx);
       return;
     }
@@ -2093,11 +2280,27 @@
       }
       /** @type {SuggestItem[]} */
       const items = [
-        ...res.protocols.map((/** @type {any} */ p) => ({ label: p.name, detail: "protocol", desc: p.desc, kind: "protocol", value: p.name })),
-        ...res.fields.map((/** @type {any} */ f) => ({ label: f.name, detail: lib.friendlyType(f.type), desc: f.blurb ? `${f.desc} — ${f.blurb}` : f.desc, kind: "field", value: f.name })),
+        ...res.protocols.map((/** @type {any} */ p) => ({
+          label: p.name,
+          detail: "protocol",
+          desc: p.desc,
+          kind: "protocol",
+          value: p.name,
+        })),
+        ...res.fields.map((/** @type {any} */ f) => ({
+          label: f.name,
+          detail: lib.friendlyType(f.type),
+          desc: f.blurb ? `${f.desc} — ${f.blurb}` : f.desc,
+          kind: "field",
+          value: f.name,
+        })),
       ];
       // An exact match first, then protocols before fields (both lists are sorted).
-      items.sort((a, b) => Number(b.value.toLowerCase() === ctx.prefix.toLowerCase()) - Number(a.value.toLowerCase() === ctx.prefix.toLowerCase()));
+      items.sort(
+        (a, b) =>
+          Number(b.value.toLowerCase() === ctx.prefix.toLowerCase()) -
+          Number(a.value.toLowerCase() === ctx.prefix.toLowerCase()),
+      );
       if (items.length === 1 && items[0].value === ctx.prefix) {
         hideSuggest(); // already complete
         return;
@@ -2123,7 +2326,13 @@
       items.push({ label: "Save this filter…", desc: current, kind: "action", value: "save" });
     }
     for (const f of state.savedFilters) {
-      items.push({ label: f.name, detail: "saved", desc: f.filter, kind: "saved", value: f.filter });
+      items.push({
+        label: f.name,
+        detail: "saved",
+        desc: f.filter,
+        kind: "saved",
+        value: f.filter,
+      });
     }
     const savedValues = new Set(state.savedFilters.map((f) => f.filter));
     for (const h of state.history.slice(0, 15)) {
@@ -2196,7 +2405,9 @@
   }
 
   function highlightSuggestion() {
-    [...el.suggest.children].forEach((row, i) => row.classList.toggle("active", i === suggest.index));
+    [...el.suggest.children].forEach((row, i) =>
+      row.classList.toggle("active", i === suggest.index),
+    );
     const active = suggest.index >= 0 ? el.suggest.children[suggest.index] : null;
     if (active) {
       active.scrollIntoView({ block: "nearest" });
@@ -2236,7 +2447,12 @@
       validateSoon();
       return;
     }
-    const res = lib.applyCompletion(el.filterInput.value, ctx, item.value, item.kind === "operator");
+    const res = lib.applyCompletion(
+      el.filterInput.value,
+      ctx,
+      item.value,
+      item.kind === "operator",
+    );
     el.filterInput.value = res.text;
     el.filterInput.focus();
     el.filterInput.setSelectionRange(res.cursor, res.cursor);
@@ -2298,15 +2514,19 @@
       hideSuggest();
     }
   });
-  el.filterInput.addEventListener("blur", () => window.setTimeout(() => {
-    if (document.activeElement !== el.filterInput && document.activeElement !== el.filterSaved) {
-      hideSuggest();
-    }
-  }, 150));
+  el.filterInput.addEventListener("blur", () =>
+    window.setTimeout(() => {
+      if (document.activeElement !== el.filterInput && document.activeElement !== el.filterSaved) {
+        hideSuggest();
+      }
+    }, 150),
+  );
   // mousedown (not click) so the input keeps focus.
   el.suggest.addEventListener("mousedown", (e) => {
     e.preventDefault();
-    const row = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (e.target).closest(".suggest-item"));
+    const row = /** @type {HTMLElement | null} */ (
+      /** @type {HTMLElement} */ (e.target).closest(".suggest-item")
+    );
     if (row) {
       acceptSuggestion(Number(row.dataset.index));
     }
@@ -2359,7 +2579,11 @@
   }
 
   /** Select a row found by the backend (find, marks, conversation, first/last). */
-  function jumpToIndex(/** @type {number} */ index, /** @type {number | null} */ frame, /** @type {boolean} */ focusList) {
+  function jumpToIndex(
+    /** @type {number} */ index,
+    /** @type {number | null} */ frame,
+    /** @type {boolean} */ focusList,
+  ) {
     recordJump(frame ?? undefined);
     selectIndex(index, true);
     if (focusList) {
@@ -2373,7 +2597,9 @@
     const to = which === "back" ? state.nav.forward : state.nav.back;
     const frame = from.pop();
     if (frame === undefined) {
-      showNotice(which === "back" ? "No earlier packet to go back to." : "No later packet to go forward to.");
+      showNotice(
+        which === "back" ? "No earlier packet to go back to." : "No later packet to go forward to.",
+      );
       return;
     }
     if (state.selectedFrame !== null) {
@@ -2438,7 +2664,12 @@
 
   /** @param {any} node */
   function canBeColumn(node) {
-    return !!node.name && !node.proto && node.name !== "fake-field-wrapper" && /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/.test(node.name);
+    return (
+      !!node.name &&
+      !node.proto &&
+      node.name !== "fake-field-wrapper" &&
+      /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/.test(node.name)
+    );
   }
 
   /** "Apply as Column": the host adds it to pcapViewer.columns (capture's folder scope). @param {any} node */
@@ -2480,7 +2711,10 @@
 
   /** Immediate feedback for hex input (the backend validates everything again). */
   function checkFindInput() {
-    const bad = el.findMode.value === "hex" && el.findInput.value.trim() !== "" && !lib.parseHexBytes(el.findInput.value);
+    const bad =
+      el.findMode.value === "hex" &&
+      el.findInput.value.trim() !== "" &&
+      !lib.parseHexBytes(el.findInput.value);
     el.findInput.classList.toggle("invalid", bad);
     if (bad) {
       setFindStatus("Not hex bytes", true);
@@ -2575,7 +2809,9 @@
     try {
       const res = await rpc("neighbor_frame", { frame, direction, ...orderParams() }).promise;
       if (res.frame === null || res.frame === undefined) {
-        showNotice(`No ${direction} packet in this conversation${state.appliedFilter ? " among the displayed packets" : ""}.`);
+        showNotice(
+          `No ${direction} packet in this conversation${state.appliedFilter ? " among the displayed packets" : ""}.`,
+        );
         return;
       }
       jumpToIndex(res.index, res.frame, true);
@@ -2654,7 +2890,12 @@
       return;
     }
     try {
-      const res = await rpc("find_packet", { mode: "marked", from: state.selectedFrame, direction, ...orderParams() }).promise;
+      const res = await rpc("find_packet", {
+        mode: "marked",
+        from: state.selectedFrame,
+        direction,
+        ...orderParams(),
+      }).promise;
       if (res.frame === null || res.frame === undefined) {
         showNotice("None of the marked packets is displayed with the current filter.");
         return;
@@ -2752,6 +2993,9 @@
   });
 
   el.statusTime.addEventListener("click", () => vscode.postMessage({ type: "pickTimeFormat" }));
+  el.statusNames.addEventListener("click", () =>
+    vscode.postMessage({ type: "pickNameResolution" }),
+  );
 
   // ------------------------------------------------------------------ column header menu and drag
 
@@ -2766,7 +3010,9 @@
 
   /** @param {string} id @param {boolean} hidden */
   function setHidden(id, hidden) {
-    const next = hidden ? [...new Set([...state.layout.hidden, id])] : state.layout.hidden.filter((h) => h !== id);
+    const next = hidden
+      ? [...new Set([...state.layout.hidden, id])]
+      : state.layout.hidden.filter((h) => h !== id);
     if (columns().every((c) => next.includes(c.id))) {
       return; // keep at least one column
     }
@@ -2780,7 +3026,9 @@
     if (pos < 0) {
       return;
     }
-    const sample = /** @type {HTMLElement | null} */ (el.rows.firstElementChild?.children[pos] ?? el.header.children[pos] ?? null);
+    const sample = /** @type {HTMLElement | null} */ (
+      el.rows.firstElementChild?.children[pos] ?? el.header.children[pos] ?? null
+    );
     const ctx = document.createElement("canvas").getContext("2d");
     if (!ctx || !sample) {
       return;
@@ -2796,7 +3044,9 @@
   }
 
   el.header.addEventListener("contextmenu", (e) => {
-    const cell = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (e.target).closest("[data-id]"));
+    const cell = /** @type {HTMLElement | null} */ (
+      /** @type {HTMLElement} */ (e.target).closest("[data-id]")
+    );
     const col = cell ? columns().find((c) => c.id === cell.dataset.id) : undefined;
     if (!col) {
       return;
@@ -2809,13 +3059,20 @@
       ["Resize to Contents", col.id !== "info" ? () => resizeToContents(col.id) : null],
       ...(col.custom
         ? /** @type {[string, (() => void) | null][]} */ ([
-            ["Rename Column…", () => vscode.postMessage({ type: "renameColumn", field: col.field })],
+            [
+              "Rename Column…",
+              () => vscode.postMessage({ type: "renameColumn", field: col.field }),
+            ],
             ["Remove Column", () => vscode.postMessage({ type: "removeColumn", field: col.field })],
           ])
         : []),
       ["-", null],
       ...columns().map(
-        (c) => /** @type {[string, (() => void) | null]} */ ([`${isHidden(c.id) ? "   " : "✓ "}${c.title}`, !isHidden(c.id) && visible === 1 ? null : () => setHidden(c.id, !isHidden(c.id))]),
+        (c) =>
+          /** @type {[string, (() => void) | null]} */ ([
+            `${isHidden(c.id) ? "   " : "✓ "}${c.title}`,
+            !isHidden(c.id) && visible === 1 ? null : () => setHidden(c.id, !isHidden(c.id)),
+          ]),
       ),
       ["-", null],
       [
@@ -2839,9 +3096,12 @@
 
   /** @type {string | null} */
   let dragId = null;
-  const clearDragMarks = () => [...el.header.children].forEach((c) => c.classList.remove("drag-over"));
+  const clearDragMarks = () =>
+    [...el.header.children].forEach((c) => c.classList.remove("drag-over"));
   el.header.addEventListener("dragstart", (e) => {
-    const cell = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (e.target).closest?.("[data-id]") ?? null);
+    const cell = /** @type {HTMLElement | null} */ (
+      /** @type {HTMLElement} */ (e.target).closest?.("[data-id]") ?? null
+    );
     if (!cell || resizing) {
       e.preventDefault();
       return;
@@ -2853,7 +3113,9 @@
     }
   });
   el.header.addEventListener("dragover", (e) => {
-    const cell = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (e.target).closest("[data-id]"));
+    const cell = /** @type {HTMLElement | null} */ (
+      /** @type {HTMLElement} */ (e.target).closest("[data-id]")
+    );
     if (!dragId || !cell) {
       return;
     }
@@ -2866,15 +3128,22 @@
   el.header.addEventListener("drop", (e) => {
     e.preventDefault();
     clearDragMarks();
-    const cell = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (e.target).closest("[data-id]"));
+    const cell = /** @type {HTMLElement | null} */ (
+      /** @type {HTMLElement} */ (e.target).closest("[data-id]")
+    );
     const moving = dragId;
     dragId = null;
     if (!moving || !cell || cell.dataset.id === moving) {
       return;
     }
     // Reorder over all columns (hidden ones keep their place), dropping in front of the target.
-    const order = lib.layoutColumns(columns(), { order: state.layout.order }).map((/** @type {any} */ c) => c.column.id);
-    state.layout = { ...state.layout, order: lib.moveColumn(order, moving, cell.dataset.id ?? null) };
+    const order = lib
+      .layoutColumns(columns(), { order: state.layout.order })
+      .map((/** @type {any} */ c) => c.column.id);
+    state.layout = {
+      ...state.layout,
+      order: lib.moveColumn(order, moving, cell.dataset.id ?? null),
+    };
     saveLayout();
   });
   el.header.addEventListener("dragend", () => {
@@ -2902,13 +3171,26 @@
     const all = lib.hexToBytes(state.detail.sources[hex.src].hex);
     const entry = state.selectedNodeId !== null ? nodeIndex.get(state.selectedNodeId) : undefined;
     const node = entry?.node;
-    const field = node && node.pos !== undefined && node.src === hex.src ? { bytes: all.subarray(node.pos, node.pos + node.size), offset: node.pos } : null;
+    const field =
+      node && node.pos !== undefined && node.src === hex.src
+        ? { bytes: all.subarray(node.pos, node.pos + node.size), offset: node.pos }
+        : null;
     /** @type {[string, (() => void) | null][]} */
     const items = [
-      ...BYTE_FORMATS.map(([label, kind]) => /** @type {[string, (() => void) | null]} */ ([`Copy Bytes as ${label}`, () => copy(lib.formatBytesAs(all, kind))])),
+      ...BYTE_FORMATS.map(
+        ([label, kind]) =>
+          /** @type {[string, (() => void) | null]} */ ([
+            `Copy Bytes as ${label}`,
+            () => copy(lib.formatBytesAs(all, kind)),
+          ]),
+      ),
       ["-", null],
       ...BYTE_FORMATS.map(
-        ([label, kind]) => /** @type {[string, (() => void) | null]} */ ([`Copy Field Bytes as ${label}`, field ? () => copy(lib.formatBytesAs(field.bytes, kind, field.offset)) : null]),
+        ([label, kind]) =>
+          /** @type {[string, (() => void) | null]} */ ([
+            `Copy Field Bytes as ${label}`,
+            field ? () => copy(lib.formatBytesAs(field.bytes, kind, field.offset)) : null,
+          ]),
       ),
     ];
     showMenu(e.clientX, e.clientY, items);
@@ -2920,7 +3202,8 @@
   // the language model, validates the answers with tshark and sends back only
   // valid filters, shown in the suggestion dropdown.
   const FILTER_PLACEHOLDER = el.filterInput.placeholder;
-  const AI_PLACEHOLDER = "Describe the packets you want, e.g. DNS queries that got no answer (Enter to ask, Esc to cancel)";
+  const AI_PLACEHOLDER =
+    "Describe the packets you want, e.g. DNS queries that got no answer (Enter to ask, Esc to cancel)";
   let aiSeq = 0;
 
   /** @param {boolean} available */
@@ -2943,7 +3226,9 @@
     showFilterError("");
     state.ai.asking = true;
     state.ai.savedText = el.filterInput.value;
-    state.ai.savedClasses = ["valid", "invalid"].filter((c) => el.filterInput.classList.contains(c));
+    state.ai.savedClasses = ["valid", "invalid"].filter((c) =>
+      el.filterInput.classList.contains(c),
+    );
     el.filterInput.classList.remove("valid", "invalid");
     el.filterInput.value = "";
     el.filterInput.placeholder = AI_PLACEHOLDER;
@@ -2998,7 +3283,13 @@
     }
     showFilterError("");
     renderSuggest(
-      msg.suggestions.map((s) => ({ label: s.filter, detail: "AI", desc: s.explanation, kind: "ai", value: s.filter })),
+      msg.suggestions.map((s) => ({
+        label: s.filter,
+        detail: "AI",
+        desc: s.explanation,
+        kind: "ai",
+        value: s.filter,
+      })),
       "ai",
       null,
     );
@@ -3024,13 +3315,22 @@
     handle.addEventListener("mousedown", (e) => {
       e.preventDefault();
       handle.classList.add("dragging");
-      const container = axis === "row" ? /** @type {HTMLElement} */ ($("main")) : /** @type {HTMLElement} */ ($("bottom"));
+      const container =
+        axis === "row"
+          ? /** @type {HTMLElement} */ ($("main"))
+          : /** @type {HTMLElement} */ ($("bottom"));
       /** @param {MouseEvent} ev */
       const move = (ev) => {
         const rect = container.getBoundingClientRect();
-        const ratio = axis === "row" ? (ev.clientY - rect.top) / rect.height : (ev.clientX - rect.left) / rect.width;
+        const ratio =
+          axis === "row"
+            ? (ev.clientY - rect.top) / rect.height
+            : (ev.clientX - rect.left) / rect.width;
         const pct = `${Math.round(Math.max(0.1, Math.min(0.9, ratio)) * 1000) / 10}%`;
-        document.documentElement.style.setProperty(axis === "row" ? "--list-height" : "--tree-width", pct);
+        document.documentElement.style.setProperty(
+          axis === "row" ? "--list-height" : "--tree-width",
+          pct,
+        );
       };
       const up = () => {
         handle.classList.remove("dragging");
@@ -3051,6 +3351,7 @@
     const info = state.info;
     el.statusTime.textContent = TIME_LABELS[state.timeFormat] ?? "";
     el.statusTime.classList.toggle("hidden", !info);
+    el.statusNames.classList.toggle("hidden", !info);
     if (!info) {
       el.statusLeft.textContent = "";
       el.statusInfo.textContent = "";
@@ -3058,11 +3359,13 @@
     }
     const parts = [`Packets: ${info.frames.toLocaleString()}`];
     if (state.indexing) {
-      const pct = state.indexFraction !== null ? ` (${Math.round(state.indexFraction * 100)}%)` : "";
+      const pct =
+        state.indexFraction !== null ? ` (${Math.round(state.indexFraction * 100)}%)` : "";
       parts[0] = `Indexing… ${info.frames.toLocaleString()} packets so far${pct}`;
     }
     if (state.filtering) {
-      const pct = state.filterFraction !== null ? ` (${Math.round(state.filterFraction * 100)}%)` : "";
+      const pct =
+        state.filterFraction !== null ? ` (${Math.round(state.filterFraction * 100)}%)` : "";
       parts.push(`Filtering… ${state.matchCount.toLocaleString()} matches so far${pct}`);
     } else if (state.appliedFilter) {
       const pct = info.frames ? ((state.matchCount / info.frames) * 100).toFixed(1) : "0";
@@ -3070,14 +3373,17 @@
       parts.push(`Displayed: ${state.matchCount.toLocaleString()} (${pct}%${stopped})`);
     }
     if (state.selectedFrame !== null) {
-      const multi = state.selection.size ? ` (${state.selection.size.toLocaleString()} packets)` : "";
+      const multi = state.selection.size
+        ? ` (${state.selection.size.toLocaleString()} packets)`
+        : "";
       parts.push(`Selected: ${state.selectedFrame}${multi}`);
     }
     if (state.markCount) {
       parts.push(`Marked: ${state.markCount.toLocaleString()}`);
     }
     if (state.coloringProgress !== undefined) {
-      const pct = state.coloringProgress !== null ? ` ${Math.round(state.coloringProgress * 100)}%` : "";
+      const pct =
+        state.coloringProgress !== null ? ` ${Math.round(state.coloringProgress * 100)}%` : "";
       parts.push(`Coloring…${pct}`);
     }
     if (state.timeRef !== null) {
@@ -3109,7 +3415,9 @@
   if (saved.treeWidth) {
     document.documentElement.style.setProperty("--tree-width", saved.treeWidth);
   }
-  const rh = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--row-height"));
+  const rh = parseFloat(
+    getComputedStyle(document.documentElement).getPropertyValue("--row-height"),
+  );
   if (rh > 0) {
     state.rowHeight = rh;
   }

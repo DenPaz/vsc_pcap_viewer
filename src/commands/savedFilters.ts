@@ -7,13 +7,17 @@ import { SavedFilter, upsertSavedFilter } from "../settingsModel";
  * Ask for a name and store `expr` in `pcapViewer.savedFilters` (asks before
  * overwriting an existing name). Returns the saved entry, or undefined if cancelled.
  */
-export async function saveFilterInteractive(expr: string, session?: PcapEditorSession): Promise<SavedFilter | undefined> {
+export async function saveFilterInteractive(
+  expr: string,
+  session?: PcapEditorSession,
+): Promise<SavedFilter | undefined> {
   let filter = expr.trim();
   if (!filter) {
     const typed = await vscode.window.showInputBox({
       title: "Save Display Filter",
       prompt: "Display filter to save",
-      validateInput: async (text) => (text.trim() && session ? await session.validateFilter(text) : undefined),
+      validateInput: async (text) =>
+        text.trim() && session ? await session.validateFilter(text) : undefined,
     });
     filter = typed?.trim() ?? "";
     if (!filter) {
@@ -30,7 +34,9 @@ export async function saveFilterInteractive(expr: string, session?: PcapEditorSe
   const name = await vscode.window.showInputBox({
     title: "Save Display Filter",
     prompt: `Name for: ${filter}`,
-    value: existing.find((f) => f.filter === filter)?.name ?? (filter.length <= 40 ? filter : `${filter.slice(0, 37)}…`),
+    value:
+      existing.find((f) => f.filter === filter)?.name ??
+      (filter.length <= 40 ? filter : `${filter.slice(0, 37)}…`),
     validateInput: (text) => (text.trim() ? undefined : "Enter a name"),
   });
   if (name === undefined) {
@@ -55,7 +61,10 @@ export async function saveFilterInteractive(expr: string, session?: PcapEditorSe
 
 type FilterItem = vscode.QuickPickItem & { entry?: SavedFilter; action?: "save" | "settings" };
 
-const DELETE_BUTTON: vscode.QuickInputButton = { iconPath: new vscode.ThemeIcon("trash"), tooltip: "Delete" };
+const DELETE_BUTTON: vscode.QuickInputButton = {
+  iconPath: new vscode.ThemeIcon("trash"),
+  tooltip: "Delete",
+};
 
 /** Quick pick over saved filters: select to apply, trash button to delete. */
 export async function showSavedFilters(session: PcapEditorSession | undefined): Promise<void> {
@@ -67,9 +76,16 @@ export async function showSavedFilters(session: PcapEditorSession | undefined): 
     const saved = readSettings().savedFilters;
     const current = session?.currentFilter.trim();
     qp.items = [
-      ...saved.map<FilterItem>((entry) => ({ label: entry.name, description: entry.filter, entry, buttons: [DELETE_BUTTON] })),
+      ...saved.map<FilterItem>((entry) => ({
+        label: entry.name,
+        description: entry.filter,
+        entry,
+        buttons: [DELETE_BUTTON],
+      })),
       { label: "", kind: vscode.QuickPickItemKind.Separator },
-      ...(current ? [{ label: "$(save) Save current filter…", description: current, action: "save" as const }] : []),
+      ...(current
+        ? [{ label: "$(save) Save current filter…", description: current, action: "save" as const }]
+        : []),
       { label: "$(settings-gear) Edit in settings", action: "settings" },
     ];
   };
@@ -89,19 +105,30 @@ export async function showSavedFilters(session: PcapEditorSession | undefined): 
     } else if (item?.action === "save" && session) {
       await saveFilterInteractive(session.currentFilter, session);
     } else if (item?.action === "settings") {
-      await vscode.commands.executeCommand("workbench.action.openSettings", "pcapViewer.savedFilters");
+      await vscode.commands.executeCommand(
+        "workbench.action.openSettings",
+        "pcapViewer.savedFilters",
+      );
     }
   });
   qp.onDidHide(() => qp.dispose());
   qp.show();
 }
 
-export function registerSavedFilterCommands(context: vscode.ExtensionContext, provider: PcapEditorProvider): void {
+export function registerSavedFilterCommands(
+  context: vscode.ExtensionContext,
+  provider: PcapEditorProvider,
+): void {
   context.subscriptions.push(
     vscode.commands.registerCommand("pcapViewer.saveFilter", async (expr?: unknown) => {
       const session = provider.activeSession;
-      await saveFilterInteractive(typeof expr === "string" ? expr : (session?.currentFilter ?? ""), session);
+      await saveFilterInteractive(
+        typeof expr === "string" ? expr : (session?.currentFilter ?? ""),
+        session,
+      );
     }),
-    vscode.commands.registerCommand("pcapViewer.savedFilters", () => showSavedFilters(provider.activeSession)),
+    vscode.commands.registerCommand("pcapViewer.savedFilters", () =>
+      showSavedFilters(provider.activeSession),
+    ),
   );
 }

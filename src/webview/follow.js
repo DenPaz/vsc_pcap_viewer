@@ -50,7 +50,9 @@
   app.append(title, legend, toolbar, notice, status, body);
 
   const dirSelect = /** @type {HTMLSelectElement} */ (h("select", { "aria-label": "Direction" }));
-  const formatSelect = /** @type {HTMLSelectElement} */ (h("select", { "aria-label": "Show data as" }));
+  const formatSelect = /** @type {HTMLSelectElement} */ (
+    h("select", { "aria-label": "Show data as" })
+  );
   for (const [value, label] of [
     ["ascii", "ASCII"],
     ["hex", "Hex dump"],
@@ -58,10 +60,16 @@
   ]) {
     formatSelect.append(h("option", { value }, [label]));
   }
-  const streamInput = /** @type {HTMLInputElement} */ (h("input", { type: "number", min: "0", "aria-label": "Stream number" }));
+  const streamInput = /** @type {HTMLInputElement} */ (
+    h("input", { type: "number", min: "0", "aria-label": "Stream number" })
+  );
   const prev = h("button", { type: "button", class: "secondary", title: "Previous stream" }, ["◀"]);
   const next = h("button", { type: "button", class: "secondary", title: "Next stream" }, ["▶"]);
-  const filterBtn = h("button", { type: "button", title: "Apply a display filter for this stream in the capture" }, ["Filter to Stream"]);
+  const filterBtn = h(
+    "button",
+    { type: "button", title: "Apply a display filter for this stream in the capture" },
+    ["Filter to Stream"],
+  );
   const saveBtn = h("button", { type: "button", class: "secondary" }, ["Save as…"]);
   toolbar.append(
     h("label", {}, ["Show ", dirSelect]),
@@ -93,7 +101,11 @@
   next.addEventListener("click", () => state.result && goStream(state.result.stream + 1));
   filterBtn.addEventListener("click", () => {
     if (state.result) {
-      vscode.postMessage({ type: "filter", expr: lib.streamFilter(state.result.proto, state.result.stream), apply: true });
+      vscode.postMessage({
+        type: "filter",
+        expr: lib.streamFilter(state.result.proto, state.result.stream),
+        apply: true,
+      });
     }
   });
   saveBtn.addEventListener("click", () => {
@@ -101,7 +113,12 @@
       return;
     }
     const raw = state.format === "raw";
-    vscode.postMessage({ type: "save", dir: state.dir, format: raw ? "raw" : "text", text: raw ? undefined : renderText(Infinity).text });
+    vscode.postMessage({
+      type: "save",
+      dir: state.dir,
+      format: raw ? "raw" : "text",
+      text: raw ? undefined : renderText(Infinity).text,
+    });
   });
 
   window.addEventListener("message", (event) => {
@@ -184,7 +201,11 @@
         break;
       }
     }
-    return { parts, clipped, text: parts.map((p) => p.text).join(state.format === "ascii" ? "" : "\n") };
+    return {
+      parts,
+      clipped,
+      text: parts.map((p) => p.text).join(state.format === "ascii" ? "" : "\n"),
+    };
   }
 
   function renderBody() {

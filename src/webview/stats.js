@@ -69,9 +69,19 @@
   const tableBox = h("div");
   app.append(title, toolbar, actions, notice, status, chartBox, tableBox);
 
-  const applyBtn = h("button", { type: "button", title: "Apply this row as the display filter" }, ["Apply as Filter"]);
-  const prepareBtn = h("button", { type: "button", class: "secondary", title: "Put this row's filter in the filter bar" }, ["Prepare as Filter"]);
-  const gotoBtn = h("button", { type: "button", class: "secondary", title: "Select the first packet of this row" }, ["Go to Packet"]);
+  const applyBtn = h("button", { type: "button", title: "Apply this row as the display filter" }, [
+    "Apply as Filter",
+  ]);
+  const prepareBtn = h(
+    "button",
+    { type: "button", class: "secondary", title: "Put this row's filter in the filter bar" },
+    ["Prepare as Filter"],
+  );
+  const gotoBtn = h(
+    "button",
+    { type: "button", class: "secondary", title: "Select the first packet of this row" },
+    ["Go to Packet"],
+  );
   const copyBtn = h("button", { type: "button", class: "secondary" }, ["Copy as CSV"]);
   applyBtn.addEventListener("click", () => rowFilter(true));
   prepareBtn.addEventListener("click", () => rowFilter(false));
@@ -109,7 +119,10 @@
         query();
       });
       const metric = h("select", { "aria-label": "Metric" });
-      metric.append(h("option", { value: "packets" }, ["Packets"]), h("option", { value: "bytes" }, ["Bytes"]));
+      metric.append(
+        h("option", { value: "packets" }, ["Packets"]),
+        h("option", { value: "bytes" }, ["Bytes"]),
+      );
       metric.addEventListener("change", () => {
         state.metric = /** @type {HTMLSelectElement} */ (metric).value;
         renderChart();
@@ -124,7 +137,11 @@
         state.limit = box.checked;
         query();
       });
-      const label = h("label", { title: state.filter ? "" : "No display filter is applied in the capture" }, [box, "Limit to display filter"]);
+      const label = h(
+        "label",
+        { title: state.filter ? "" : "No display filter is applied in the capture" },
+        [box, "Limit to display filter"],
+      );
       if (state.filter) {
         label.append(" ", h("code", {}, [state.filter]));
       }
@@ -133,7 +150,14 @@
     const refresh = h("button", { type: "button", class: "secondary" }, ["Refresh"]);
     refresh.addEventListener("click", () => query());
     toolbar.append(h("span", { class: "spacer" }), refresh);
-    actions.replaceChildren(...(state.kind === "expert" ? [gotoBtn, applyBtn, prepareBtn] : state.kind === "properties" || state.kind === "io" ? [] : [applyBtn, prepareBtn]), copyBtn);
+    actions.replaceChildren(
+      ...(state.kind === "expert"
+        ? [gotoBtn, applyBtn, prepareBtn]
+        : state.kind === "properties" || state.kind === "io"
+          ? []
+          : [applyBtn, prepareBtn]),
+      copyBtn,
+    );
     updateActions();
   }
 
@@ -217,11 +241,23 @@
     const headRow = h("tr");
     t.columns.forEach((/** @type {any} */ col, /** @type {number} */ i) => {
       const indicator = state.sort && state.sort.col === i ? (state.sort.desc ? " ▼" : " ▲") : "";
-      const th = h("th", { class: col.numeric ? "num" : "", scope: "col" }, [col.label + indicator]);
+      const th = h("th", { class: col.numeric ? "num" : "", scope: "col" }, [
+        col.label + indicator,
+      ]);
       if (state.kind !== "phs" && state.kind !== "properties") {
-        th.setAttribute("aria-sort", state.sort && state.sort.col === i ? (state.sort.desc ? "descending" : "ascending") : "none");
+        th.setAttribute(
+          "aria-sort",
+          state.sort && state.sort.col === i
+            ? state.sort.desc
+              ? "descending"
+              : "ascending"
+            : "none",
+        );
         th.addEventListener("click", () => {
-          state.sort = !state.sort || state.sort.col !== i ? { col: i, desc: col.numeric } : { col: i, desc: !state.sort.desc };
+          state.sort =
+            !state.sort || state.sort.col !== i
+              ? { col: i, desc: col.numeric }
+              : { col: i, desc: !state.sort.desc };
           renderTable();
         });
       }
@@ -279,7 +315,11 @@
     if (!row) {
       return;
     }
-    const expr = row.filter || (state.kind === "expert" ? `_ws.expert.message == ${lib.quoteFilterString(String(row.cells[1]))}` : "");
+    const expr =
+      row.filter ||
+      (state.kind === "expert"
+        ? `_ws.expert.message == ${lib.quoteFilterString(String(row.cells[1]))}`
+        : "");
     if (expr) {
       vscode.postMessage({ type: "filter", expr, apply });
     }
@@ -326,9 +366,18 @@
     // Each interval is plotted at its midpoint.
     const x = (/** @type {number} */ v) => MARGIN.left + (v / (xMax || 1)) * innerW;
     const y = (/** @type {number} */ v) => MARGIN.top + innerH - (v / yMax) * innerH;
-    const points = rows.map((/** @type {any} */ r) => ({ x: x((r.cells[0] + r.cells[1]) / 2), y: y(r.cells[col]), row: r }));
+    const points = rows.map((/** @type {any} */ r) => ({
+      x: x((r.cells[0] + r.cells[1]) / 2),
+      y: y(r.cells[col]),
+      row: r,
+    }));
 
-    const svg = s("svg", { viewBox: `0 0 ${width} ${CHART_HEIGHT}`, height: CHART_HEIGHT, role: "img", "aria-label": `${state.metric === "bytes" ? "Bytes" : "Packets"} per ${lib.formatCell(t.interval)} s interval` });
+    const svg = s("svg", {
+      viewBox: `0 0 ${width} ${CHART_HEIGHT}`,
+      height: CHART_HEIGHT,
+      role: "img",
+      "aria-label": `${state.metric === "bytes" ? "Bytes" : "Packets"} per ${lib.formatCell(t.interval)} s interval`,
+    });
     const grid = s("g", { class: "grid" });
     const axis = s("g", { class: "axis" });
     for (const tick of ticks) {
@@ -348,17 +397,32 @@
     }
     svg.append(grid, axis);
     if (points.length) {
-      const line = points.map((p, i) => `${i ? "L" : "M"}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join("");
+      const line = points
+        .map((p, i) => `${i ? "L" : "M"}${p.x.toFixed(1)},${p.y.toFixed(1)}`)
+        .join("");
       const base = (MARGIN.top + innerH).toFixed(1);
       svg.append(
-        s("path", { class: "series-area", d: `${line}L${points[points.length - 1].x.toFixed(1)},${base}L${points[0].x.toFixed(1)},${base}Z` }),
+        s("path", {
+          class: "series-area",
+          d: `${line}L${points[points.length - 1].x.toFixed(1)},${base}L${points[0].x.toFixed(1)},${base}Z`,
+        }),
         s("path", { class: "series-line", d: line }),
       );
     }
-    const crosshair = s("line", { class: "crosshair hidden", y1: MARGIN.top, y2: MARGIN.top + innerH });
+    const crosshair = s("line", {
+      class: "crosshair hidden",
+      y1: MARGIN.top,
+      y2: MARGIN.top + innerH,
+    });
     const marker = s("circle", { class: "marker hidden", r: 4 });
     // Hit area larger than the marks: the whole plot.
-    const overlay = s("rect", { x: MARGIN.left, y: MARGIN.top, width: innerW, height: innerH, fill: "transparent" });
+    const overlay = s("rect", {
+      x: MARGIN.left,
+      y: MARGIN.top,
+      width: innerW,
+      height: innerH,
+      fill: "transparent",
+    });
     svg.append(crosshair, marker, overlay);
     const tooltip = h("div", { class: "tooltip hidden", role: "status" });
     chartBox.replaceChildren(svg, tooltip);
@@ -376,8 +440,14 @@
       crosshair.classList.remove("hidden");
       marker.classList.remove("hidden");
       const [start, end, packets, bytes] = p.row.cells;
-      const value = state.metric === "bytes" ? `${lib.formatCell(bytes)} bytes` : `${lib.formatCell(packets)} packets`;
-      tooltip.replaceChildren(h("strong", {}, [value]), h("span", {}, [`${lib.formatCell(start)}–${lib.formatCell(end)} s`]));
+      const value =
+        state.metric === "bytes"
+          ? `${lib.formatCell(bytes)} bytes`
+          : `${lib.formatCell(packets)} packets`;
+      tooltip.replaceChildren(
+        h("strong", {}, [value]),
+        h("span", {}, [`${lib.formatCell(start)}–${lib.formatCell(end)} s`]),
+      );
       tooltip.classList.remove("hidden");
       const box = chartBox.getBoundingClientRect();
       const scale = box.width / width;

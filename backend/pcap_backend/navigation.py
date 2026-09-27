@@ -115,5 +115,7 @@ def format_seconds(ns: int) -> str:
 def format_absolute(epoch_ns: int, utc: bool) -> str:
     """``2023-11-14 22:13:20.000000`` in local time (the machine running VS Code) or UTC."""
     sec, rem = divmod(epoch_ns, NS)
-    dt = datetime.fromtimestamp(sec, UTC) if utc else datetime.fromtimestamp(sec)
+    dt = datetime.fromtimestamp(sec, UTC)
+    if not utc:
+        dt = dt.astimezone()  # the local time zone
     return dt.strftime("%Y-%m-%d %H:%M:%S") + f".{rem // 1000:06d}"

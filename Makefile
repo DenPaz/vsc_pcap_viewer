@@ -43,16 +43,18 @@ compile: ## Build the extension (tsc -> out/)
 watch: ## Rebuild the extension on changes
 	$(PNPM) run watch
 
-lint: ## ESLint, webview type check, ruff, ruff format --check and mypy
+lint: ## ESLint, webview type check, Prettier --check, ruff, ruff format --check and mypy
 	$(PNPM) run lint
+	$(PNPM) run format:check
 	$(UV) run ruff check
 	$(UV) run ruff format --check
 	$(UV) run mypy
 
-format: ## Fix what the linters can fix (ruff format, ruff --fix, eslint --fix)
-	$(UV) run ruff format
+format: ## Fix what the linters can fix (ruff format, ruff --fix, eslint --fix, Prettier)
 	$(UV) run ruff check --fix
+	$(UV) run ruff format
 	$(PNPM) exec eslint --fix src test
+	$(PNPM) run format
 
 test: test-backend test-unit ## Backend tests plus TS unit and webview tests
 

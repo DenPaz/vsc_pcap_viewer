@@ -113,7 +113,7 @@ def test_broken_entries_are_ignored(tmp_path: Path) -> None:
     (tmp_path / ("e" * 64)).mkdir()
     (tmp_path / ("e" * 64) / "meta.json").write_text("{not json")
     assert cache.load("e" * 64) is None
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="bad cache key"):
         cache.load("../escape")
 
 
@@ -256,7 +256,7 @@ def test_closing_a_streaming_capture_stops_the_pass(
     service: PcapService, ctx: RequestContext, slow_index: threading.Event
 ) -> None:
     events: list[dict[str, Any]] = []
-    service.notify = lambda method, params: events.append(params)
+    service.notify = lambda _method, params: events.append(params)
     assert service.open({"path": str(FIXTURES / "http.pcap"), "stream": True}, ctx)["indexing"]
     service.close()
     assert len(ts.PROCESSES) == 0

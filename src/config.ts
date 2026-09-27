@@ -1,5 +1,23 @@
 import * as vscode from "vscode";
-import { ColoringRule, ColumnLayout, ColumnSetting, QuickDetail, SavedFilter, TimeFormat, configTargetFor, normalizeColoringRules, normalizeColumnLayout, normalizeColumns, normalizeSavedFilters, normalizeTimeFormat, resolveLuaScripts, resolveSettingPath, withTlsKeyLog } from "./settingsModel";
+import {
+  ColoringRule,
+  ColumnLayout,
+  ColumnSetting,
+  NameResolution,
+  QuickDetail,
+  SavedFilter,
+  TimeFormat,
+  configTargetFor,
+  normalizeColoringRules,
+  normalizeColumnLayout,
+  normalizeColumns,
+  normalizeNameResolution,
+  normalizeSavedFilters,
+  normalizeTimeFormat,
+  resolveLuaScripts,
+  resolveSettingPath,
+  withTlsKeyLog,
+} from "./settingsModel";
 
 export const SECTION = "pcapViewer";
 
@@ -24,6 +42,7 @@ export interface Settings {
   quickDetail: QuickDetail;
   /** Saved packet-list indexes (reopening skips the index pass); 0 bytes = off. */
   indexCacheBytes: number;
+  nameResolution: NameResolution;
 }
 
 export function readQuickDetail(scope?: vscode.Uri): QuickDetail {
@@ -32,13 +51,20 @@ export function readQuickDetail(scope?: vscode.Uri): QuickDetail {
     const v = cfg.get<number>(key, fallback);
     return Number.isFinite(v) ? Math.min(max, Math.max(min, Math.round(v))) : fallback;
   };
-  return { after: num("quickDetail.after", 20_000, 0, Number.MAX_SAFE_INTEGER), window: num("quickDetail.window", 300, 2, 5000) };
+  return {
+    after: num("quickDetail.after", 20_000, 0, Number.MAX_SAFE_INTEGER),
+    window: num("quickDetail.window", 300, 2, 5000),
+  };
 }
 
 export function readSettings(scope?: vscode.Uri): Settings {
   const cfg = vscode.workspace.getConfiguration(SECTION, scope);
   const baseDir = workspaceDirFor(scope);
-  const lua = resolveLuaScripts(cfg.get<string[]>("luaScripts", []), cfg.get<string>("dissectorsFolder", ""), baseDir);
+  const lua = resolveLuaScripts(
+    cfg.get<string[]>("luaScripts", []),
+    cfg.get<string>("dissectorsFolder", ""),
+    baseDir,
+  );
   const keyLog = resolveSettingPath(cfg.get<string>("tlsKeyLogFile", ""), baseDir) ?? "";
   return {
     pythonPath: cfg.get<string>("pythonPath", "").trim(),
@@ -57,7 +83,10 @@ export function readSettings(scope?: vscode.Uri): Settings {
     maxCachedFrames: cfg.get<number>("maxCachedFrames", 5_000_000),
     requestTimeoutMs: cfg.get<number>("requestTimeoutSeconds", 60) * 1000,
     quickDetail: readQuickDetail(scope),
-    indexCacheBytes: cfg.get<boolean>("indexCache.enabled", true) ? Math.max(0, cfg.get<number>("indexCache.maxSizeMB", 1024)) * 1024 * 1024 : 0,
+    indexCacheBytes: cfg.get<boolean>("indexCache.enabled", true)
+      ? Math.max(0, cfg.get<number>("indexCache.maxSizeMB", 1024)) * 1024 * 1024
+      : 0,
+    nameResolution: normalizeNameResolution((key) => cfg.get<unknown>(`nameResolution.${key}`)),
   };
 }
 
@@ -93,7 +122,11 @@ export function getSetting<T>(key: string, fallback: T, scope?: vscode.Uri): T {
  * Update a setting where it is currently defined for `scope` (folder,
  * workspace, else user), so the new value is the one `scope` sees.
  */
-export async function updateSetting(key: string, value: unknown, scope?: vscode.Uri): Promise<void> {
+export async function updateSetting(
+  key: string,
+  value: unknown,
+  scope?: vscode.Uri,
+): Promise<void> {
   const cfg = vscode.workspace.getConfiguration(SECTION, scope);
   const target = {
     workspaceFolder: vscode.ConfigurationTarget.WorkspaceFolder,

@@ -28,11 +28,19 @@ interface Piece {
 export function rotationPiece(name: string): Piece | undefined {
   const ring = RING.exec(name);
   if (ring) {
-    return { key: `ring:${ring[1]}:${ring[4]}${ring[5] ?? ""}`, index: Number(ring[2]), stem: ring[1] };
+    return {
+      key: `ring:${ring[1]}:${ring[4]}${ring[5] ?? ""}`,
+      index: Number(ring[2]),
+      stem: ring[1],
+    };
   }
   const tcpdump = TCPDUMP.exec(name);
   if (tcpdump) {
-    return { key: `tcpdump:${tcpdump[1]}`, index: tcpdump[2] ? Number(tcpdump[2]) : -1, stem: captureStem(tcpdump[1]) };
+    return {
+      key: `tcpdump:${tcpdump[1]}`,
+      index: tcpdump[2] ? Number(tcpdump[2]) : -1,
+      stem: captureStem(tcpdump[1]),
+    };
   }
   return undefined;
 }
@@ -52,7 +60,9 @@ export function rotatedSet(name: string, names: readonly string[]): string[] {
   if (pieces.length < 2 || !pieces.some((p) => p.name === name)) {
     return [];
   }
-  return pieces.sort((a, b) => a.piece.index - b.piece.index || a.name.localeCompare(b.name)).map((p) => p.name);
+  return pieces
+    .sort((a, b) => a.piece.index - b.piece.index || a.name.localeCompare(b.name))
+    .map((p) => p.name);
 }
 
 /** Suggested name for the merged capture: `trace.pcap3` → `trace-merged.pcapng`. */

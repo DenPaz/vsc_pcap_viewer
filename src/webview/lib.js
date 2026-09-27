@@ -87,7 +87,10 @@
     }
     const lastPage = Math.floor((total - 1) / pageSize);
     const start = Math.max(0, Math.floor(first / pageSize) - prefetch);
-    const end = Math.min(lastPage, Math.floor(Math.max(first, first + count - 1) / pageSize) + prefetch);
+    const end = Math.min(
+      lastPage,
+      Math.floor(Math.max(first, first + count - 1) / pageSize) + prefetch,
+    );
     const pages = [];
     for (let p = start; p <= end; p++) {
       pages.push(p);
@@ -176,7 +179,13 @@
     if (show === "True" || show === "False") {
       return `${name} == ${show === "True" ? 1 : 0}`;
     }
-    if (NUMBER_RE.test(show) || HEX_RE.test(show) || IPV4_RE.test(show) || MAC_RE.test(show) || (show.includes(":") && IPV6_RE.test(show))) {
+    if (
+      NUMBER_RE.test(show) ||
+      HEX_RE.test(show) ||
+      IPV4_RE.test(show) ||
+      MAC_RE.test(show) ||
+      (show.includes(":") && IPV6_RE.test(show))
+    ) {
       return `${name} == ${show}`;
     }
     return `${name} == ${quoteFilterString(show)}`;
@@ -219,7 +228,12 @@
     function walk(nodes, path) {
       for (const n of nodes) {
         const here = [...path, n];
-        const hit = n.src === src && n.pos !== undefined && n.size !== undefined && offset >= n.pos && offset < n.pos + n.size;
+        const hit =
+          n.src === src &&
+          n.pos !== undefined &&
+          n.size !== undefined &&
+          offset >= n.pos &&
+          offset < n.pos + n.size;
         if (hit && (n.size ?? Infinity) <= bestSize) {
           best = here;
           bestSize = n.size ?? Infinity;
@@ -268,7 +282,27 @@
 
   const WORD_CHARS = /[A-Za-z0-9_.-]/;
   const LOGICAL_WORDS = new Set(["and", "or", "not", "xor", "&&", "||", "!", "^^", "("]);
-  const COMPARISON_WORDS = new Set(["==", "!=", ">", "<", ">=", "<=", "eq", "ne", "gt", "lt", "ge", "le", "contains", "matches", "in", "~", "===", "!==", "~="]);
+  const COMPARISON_WORDS = new Set([
+    "==",
+    "!=",
+    ">",
+    "<",
+    ">=",
+    "<=",
+    "eq",
+    "ne",
+    "gt",
+    "lt",
+    "ge",
+    "le",
+    "contains",
+    "matches",
+    "in",
+    "~",
+    "===",
+    "!==",
+    "~=",
+  ]);
 
   /**
    * Work out what can be completed at `cursor` in a display filter.
@@ -299,7 +333,12 @@
       return none;
     }
     const prev = previousToken(before.slice(0, start));
-    const prevIsValue = prev !== null && (/^["\d]/.test(prev) || prev === ")" || prev.startsWith("{") || /^[0-9a-f]{2}([:.-][0-9a-f]{2})+$/i.test(prev));
+    const prevIsValue =
+      prev !== null &&
+      (/^["\d]/.test(prev) ||
+        prev === ")" ||
+        prev.startsWith("{") ||
+        /^[0-9a-f]{2}([:.-][0-9a-f]{2})+$/i.test(prev));
     if (prev === null || LOGICAL_WORDS.has(prev.toLowerCase())) {
       // Start of an expression: a field or protocol name, unless a value is being typed.
       return /^\d/.test(prefix) ? none : { kind: "field", prefix, start, end };
@@ -313,7 +352,9 @@
     // The previous token is a field name (or a value typed without quotes, e.g. an IP
     // or a bare string, which looks the same): after a field an operator is expected;
     // after `field op value` a logical operator is.
-    const prevPrev = previousToken(before.slice(0, before.slice(0, start).trimEnd().length - prev.length));
+    const prevPrev = previousToken(
+      before.slice(0, before.slice(0, start).trimEnd().length - prev.length),
+    );
     if (prevPrev !== null && COMPARISON_WORDS.has(prevPrev.toLowerCase())) {
       return { kind: "logical", prefix, start, end };
     }
@@ -343,7 +384,9 @@
     if (!t) {
       return null;
     }
-    const m = t.match(/("(?:[^"\\]|\\.)*"|\{[^}]*\}|===|!==|==|!=|>=|<=|~=|&&|\|\||\^\^|[<>!~()]|[A-Za-z0-9_.:-]+)$/);
+    const m = t.match(
+      /("(?:[^"\\]|\\.)*"|\{[^}]*\}|===|!==|==|!=|>=|<=|~=|&&|\|\||\^\^|[<>!~()]|[A-Za-z0-9_.:-]+)$/,
+    );
     return m ? m[1] : t.slice(-1);
   }
 
@@ -470,7 +513,9 @@
       const left = hex.slice(0, 8).join(" ");
       const right = hex.slice(8).join(" ");
       const ascii = [...chunk].map(asciiChar).join("");
-      lines.push(`${(offset + i).toString(16).padStart(8, "0")}  ${left.padEnd(23)}  ${right.padEnd(23)}  ${ascii}`);
+      lines.push(
+        `${(offset + i).toString(16).padStart(8, "0")}  ${left.padEnd(23)}  ${right.padEnd(23)}  ${ascii}`,
+      );
     }
     return lines.join("\n");
   }
@@ -487,7 +532,9 @@
     if (typeof v !== "number") {
       return v === null || v === undefined ? "" : String(v);
     }
-    return Number.isInteger(v) ? v.toLocaleString("en-US") : v.toLocaleString("en-US", { maximumFractionDigits: 6 });
+    return Number.isInteger(v)
+      ? v.toLocaleString("en-US")
+      : v.toLocaleString("en-US", { maximumFractionDigits: 6 });
   }
 
   /**
@@ -504,7 +551,10 @@
         const c =
           typeof x === "number" && typeof y === "number"
             ? x - y
-            : String(x ?? "").localeCompare(String(y ?? ""), undefined, { sensitivity: "base", numeric: true });
+            : String(x ?? "").localeCompare(String(y ?? ""), undefined, {
+                sensitivity: "base",
+                numeric: true,
+              });
         return c * dir || a.i - b.i;
       })
       .map((e) => e.row);
@@ -517,7 +567,10 @@
       const s = v === null || v === undefined ? "" : String(v);
       return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
     };
-    return [columns.map((c) => q(c.label)).join(","), ...rows.map((r) => r.cells.map(q).join(","))].join("\n");
+    return [
+      columns.map((c) => q(c.label)).join(","),
+      ...rows.map((r) => r.cells.map(q).join(",")),
+    ].join("\n");
   }
 
   /**
@@ -651,6 +704,34 @@
   }
 
   /**
+   * Export Objects rows shown for a protocol ("" = all) and a text that must
+   * appear (case-insensitively) in the name, host or content type.
+   * @template {{protocol: string, name: string, host: string, contentType: string}} T
+   * @param {T[]} objects @param {string} protocol @param {string} text
+   * @returns {T[]}
+   */
+  function filterObjects(objects, protocol, text) {
+    const needle = text.trim().toLowerCase();
+    return objects.filter(
+      (o) =>
+        (!protocol || o.protocol === protocol) &&
+        (!needle || [o.name, o.host, o.contentType].some((v) => v.toLowerCase().includes(needle))),
+    );
+  }
+
+  /**
+   * The address behind a Source/Destination cell that shows a name (name
+   * resolution: the row's `addresses`), else null.
+   * @param {{id: string}} column @param {{cells: string[], addresses?: string[]} | undefined} row
+   * @returns {string | null}
+   */
+  function cellAddress(column, row) {
+    const i = column.id === "source" ? 0 : column.id === "destination" ? 1 : -1;
+    const address = i >= 0 ? row?.addresses?.[i] : undefined;
+    return address && address !== row?.cells[2 + i] ? address : null;
+  }
+
+  /**
    * Visible columns in display order: ids in `layout.order` first, the rest in
    * their natural order; hidden ones left out (at least one always stays).
    * `index` is the column's position in `all` (= its cell index in a row).
@@ -666,7 +747,9 @@
       return i < 0 ? order.length : i;
     };
     const indexed = all.map((column, index) => ({ column, index }));
-    const sorted = [...indexed].sort((a, b) => rank(a.column.id) - rank(b.column.id) || a.index - b.index);
+    const sorted = [...indexed].sort(
+      (a, b) => rank(a.column.id) - rank(b.column.id) || a.index - b.index,
+    );
     const visible = sorted.filter((c) => !hidden.has(c.column.id));
     return visible.length ? visible : sorted.slice(0, 1);
   }
@@ -693,7 +776,11 @@
    * @returns {string[] | null}
    */
   function parseHexBytes(text) {
-    const tokens = text.trim().split(/[\s:.,-]+/).filter(Boolean).map((t) => t.toLowerCase());
+    const tokens = text
+      .trim()
+      .split(/[\s:.,-]+/)
+      .filter(Boolean)
+      .map((t) => t.toLowerCase());
     /** @type {string[]} */
     const out = [];
     for (const token of tokens) {
@@ -743,7 +830,11 @@
       case "c": {
         const lines = [];
         for (let i = 0; i < bytes.length; i += 8) {
-          lines.push("  " + [...bytes.subarray(i, i + 8)].map((b) => `0x${hex2(b)}`).join(", ") + (i + 8 < bytes.length ? "," : ""));
+          lines.push(
+            "  " +
+              [...bytes.subarray(i, i + 8)].map((b) => `0x${hex2(b)}`).join(", ") +
+              (i + 8 < bytes.length ? "," : ""),
+          );
         }
         return `static const unsigned char packet_bytes[${bytes.length}] = {\n${lines.join("\n")}\n};`;
       }
@@ -817,6 +908,8 @@
     rowColors,
     protocolFilterName,
     cellFilter,
+    cellAddress,
+    filterObjects,
     layoutColumns,
     moveColumn,
     parseHexBytes,

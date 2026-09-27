@@ -12,7 +12,10 @@ interface FieldInfo {
 type Item = vscode.QuickPickItem & { action: "add" | "remove"; column?: ColumnSetting };
 
 /** "PCAP: Manage Custom Columns": add/remove extra packet-list columns (persisted in settings). */
-export function registerColumnCommands(context: vscode.ExtensionContext, provider: PcapEditorProvider): void {
+export function registerColumnCommands(
+  context: vscode.ExtensionContext,
+  provider: PcapEditorProvider,
+): void {
   context.subscriptions.push(
     vscode.commands.registerCommand("pcapViewer.manageColumns", async (field?: unknown) => {
       const scope = provider.activeSession?.uri;
@@ -33,7 +36,10 @@ export function registerColumnCommands(context: vscode.ExtensionContext, provide
           column: c,
         })),
       ];
-      const pick = await vscode.window.showQuickPick(items, { title: "Custom Columns", placeHolder: "Add or remove packet list columns" });
+      const pick = await vscode.window.showQuickPick(items, {
+        title: "Custom Columns",
+        placeHolder: "Add or remove packet list columns",
+      });
       if (!pick) {
         return;
       }
@@ -53,7 +59,11 @@ export function registerColumnCommands(context: vscode.ExtensionContext, provide
       if (title === undefined) {
         return;
       }
-      await updateSetting("columns", [...columns, { field: newField, title: title.trim() || newField }], scope);
+      await updateSetting(
+        "columns",
+        [...columns, { field: newField, title: title.trim() || newField }],
+        scope,
+      );
     }),
   );
 }
@@ -68,16 +78,25 @@ async function pickField(provider: PcapEditorProvider): Promise<string | undefin
   let seq = 0;
   const refresh = async (prefix: string) => {
     const mine = ++seq;
-    const typed: vscode.QuickPickItem[] = isValidFieldName(prefix) ? [{ label: prefix, description: "use as typed" }] : [];
+    const typed: vscode.QuickPickItem[] = isValidFieldName(prefix)
+      ? [{ label: prefix, description: "use as typed" }]
+      : [];
     if (!backend?.running || prefix.length < 2) {
       qp.items = typed;
       return;
     }
     qp.busy = true;
     try {
-      const res = await backend.request<{ fields: FieldInfo[] }>("field_index", { prefix, limit: 100 });
+      const res = await backend.request<{ fields: FieldInfo[] }>("field_index", {
+        prefix,
+        limit: 100,
+      });
       if (mine === seq) {
-        const found = res.fields.map((f) => ({ label: f.name, description: f.desc, detail: f.type }));
+        const found = res.fields.map((f) => ({
+          label: f.name,
+          description: f.desc,
+          detail: f.type,
+        }));
         qp.items = found.some((f) => f.label === prefix) ? found : [...typed, ...found];
       }
     } catch {
