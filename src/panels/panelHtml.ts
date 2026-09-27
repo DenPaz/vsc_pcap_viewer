@@ -9,12 +9,14 @@ export function webviewRoot(context: vscode.ExtensionContext): vscode.Uri {
 /**
  * HTML shell for an auxiliary panel (statistics, follow stream): the same
  * strict CSP as the editor, the shared stylesheet, `lib.js`, and one script.
+ * `media` lets `<audio>` play the panel's own local resources (VoIP).
  */
 export function panelHtml(
   webview: vscode.Webview,
   root: vscode.Uri,
   script: string,
   title: string,
+  options: { media?: boolean } = {},
 ): string {
   const nonce = crypto.randomBytes(16).toString("base64");
   const uri = (name: string) => webview.asWebviewUri(vscode.Uri.joinPath(root, name)).toString();
@@ -23,6 +25,7 @@ export function panelHtml(
     `img-src ${webview.cspSource} data:`,
     `style-src ${webview.cspSource}`,
     `font-src ${webview.cspSource}`,
+    ...(options.media ? [`media-src ${webview.cspSource}`] : []),
     `script-src 'nonce-${nonce}'`,
   ].join("; ");
   const esc = (s: string) => s.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);

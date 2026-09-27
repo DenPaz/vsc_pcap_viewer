@@ -1,6 +1,7 @@
 import * as assert from "node:assert/strict";
 import * as path from "node:path";
 import {
+  audioFileName,
   COLORIZE_PALETTE,
   DEFAULT_NAME_RESOLUTION,
   nameResolutionLabel,
@@ -176,6 +177,19 @@ suite("settingsModel", () => {
     assert.equal(
       exportFileName(path.join("dir", "trace.pcapng.zst"), "packets", "csv"),
       path.join("dir", "trace-packets.csv"),
+    );
+  });
+
+  test("audioFileName names a stream's audio next to the capture", () => {
+    const v4 = { src: "10.0.0.1", srcPort: 40000, dst: "10.0.0.2", dstPort: 50000, ssrc: "0x11" };
+    assert.equal(
+      audioFileName(path.join("dir", "call.pcapng"), v4, "wav"),
+      path.join("dir", "call-10.0.0.1_40000-10.0.0.2_50000-0x11.wav"),
+    );
+    const v6 = { src: "2001:db8::1", srcPort: 5004, dst: "::1", dstPort: 5006, ssrc: "0xab" };
+    assert.equal(
+      audioFileName(path.join("dir", "call.pcap.gz"), v6, "raw"),
+      path.join("dir", "call-2001-db8--1_5004---1_5006-0xab.raw"),
     );
   });
 

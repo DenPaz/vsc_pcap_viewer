@@ -387,6 +387,20 @@ export function safeFileName(name: string): string {
   return (WINDOWS_RESERVED_NAME.test(safe) ? `_${safe}` : safe).slice(0, 200);
 }
 
+/**
+ * Suggested file for an RTP stream's audio, next to the capture:
+ * `trace-10.0.0.1_40000-10.0.0.2_50000-0x11111111.wav` (IPv6 colons become `-`).
+ */
+export function audioFileName(
+  capturePath: string,
+  stream: { src: string; srcPort: number; dst: string; dstPort: number; ssrc: string },
+  ext: "wav" | "raw",
+): string {
+  const end = (addr: string, port: number) => `${addr.replace(/:/g, "-")}_${port}`;
+  const name = `${end(stream.src, stream.srcPort)}-${end(stream.dst, stream.dstPort)}-${stream.ssrc}`;
+  return exportFileName(capturePath, safeFileName(name), ext);
+}
+
 export type ConfigTarget = "workspaceFolder" | "workspace" | "global";
 
 /**

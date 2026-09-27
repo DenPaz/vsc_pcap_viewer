@@ -24,6 +24,7 @@ from pathlib import Path
 from scapy.layers.dns import DNS, DNSQR, DNSRR
 from scapy.layers.inet import ICMP, IP, TCP, UDP
 from scapy.layers.l2 import ARP, Ether
+from scapy.layers.rtp import RTP
 from scapy.packet import Packet, Raw
 from scapy.utils import wrpcap, wrpcapng
 
@@ -279,6 +280,132 @@ def tls_packets() -> list[Packet]:
     s.handshake()
     s.client_send(record)
     return _stamp(s.packets)
+
+
+# ---------------------------------------------------------------------- VoIP
+
+ALICE, BOB, CAROL = "10.0.0.1", "10.0.0.2", "10.0.0.3"
+VOIP_START = BASE_TS + 100.0
+RTP_PACKETS = 50  # per direction: one second of 20 ms G.711 frames
+RTP_LOST = 20  # the caller's packet with this index is never sent
+RTP_TONES = (440.0, 880.0)  # caller → callee, callee → caller
+
+
+def ulaw_encode(sample: int) -> int:
+    """G.711 µ-law byte of a 16-bit linear sample (ITU-T G.711, the usual
+    segment encoder); the backend's decoder is the inverse."""
+    bias, clip = 0x84, 32635
+    sign = 0x80 if sample < 0 else 0
+    magnitude = min(abs(sample), clip) + bias
+    exponent = max(0, magnitude.bit_length() - 8)
+    mantissa = (magnitude >> (exponent + 3)) & 0x0F
+    return ~(sign | (exponent << 4) | mantissa) & 0xFF
+
+
+def _tone(freq: float, start: int, count: int, rate: int = 8000) -> bytes:
+    """``count`` µ-law samples of a sine wave from sample ``start`` on."""
+    import math  # noqa: PLC0415 - only the VoIP fixture needs it
+
+    return bytes(
+        ulaw_encode(int(12000 * math.sin(2 * math.pi * freq * (start + i) / rate)))
+        for i in range(count)
+    )
+
+
+def _sip(src: str, dst: str, text: str) -> Packet:
+    body = text.replace("\n", "\r\n").encode()
+    return Ether() / IP(src=src, dst=dst) / UDP(sport=5060, dport=5060) / Raw(body)
+
+
+def _sdp(addr: str, port: int, formats: str) -> str:
+    return (
+        f"v=0\no=- 1 1 IN IP4 {addr}\ns=call\nc=IN IP4 {addr}\nt=0 0\n"
+        f"m=audio {port} RTP/AVP {formats}\na=rtpmap:0 PCMU/8000\n"
+    )
+
+
+def _sip_message(first: str, src: str, call_id: str, cseq: str, frm: str, to: str,
+                 sdp: str = "") -> str:  # fmt: skip
+    ctype = "Content-Type: application/sdp\n" if sdp else ""
+    return (
+        f"{first}\nVia: SIP/2.0/UDP {src}:5060;branch=z9hG4bK{sum(map(ord, call_id + cseq))}\n"
+        f"From: <sip:{frm}>;tag=a1\nTo: <sip:{to}>\nCall-ID: {call_id}\nCSeq: {cseq}\n"
+        f"Contact: <sip:{frm.partition('@')[0]}@{src}>\nMax-Forwards: 70\n{ctype}"
+        f"Content-Length: {len(sdp.replace(chr(10), chr(13) + chr(10)))}\n\n{sdp}"
+    )
+
+
+def voip_packets() -> list[Packet]:
+    """A SIP call from alice to bob with SDP and one second of G.711 µ-law
+    audio each way (caller: a 440 Hz tone on port 40000, with packet
+    RTP_LOST missing and some jitter; callee: 880 Hz on port 50000), then
+    carol's call to bob, rejected with 486 Busy Here. Deterministic."""
+    rng = random.Random(7)
+    timed: list[tuple[float, Packet]] = []
+    call, other = "call-1@10.0.0.1", "call-2@10.0.0.3"
+    alice, bob, carol = "alice@10.0.0.1", "bob@10.0.0.2", "carol@10.0.0.3"
+
+    def sip(at: float, src: str, dst: str, first: str, cid: str, cseq: str, frm: str,
+            to: str, sdp: str = "") -> None:  # fmt: skip
+        timed.append(
+            (
+                VOIP_START + at,
+                _sip(src, dst, _sip_message(first, src, cid, cseq, frm, to, sdp)),
+            )
+        )
+
+    sip(
+        0.000,
+        ALICE,
+        BOB,
+        f"INVITE sip:{bob} SIP/2.0",
+        call,
+        "1 INVITE",
+        alice,
+        bob,
+        _sdp(ALICE, 40000, "0 8"),
+    )
+    sip(0.010, BOB, ALICE, "SIP/2.0 100 Trying", call, "1 INVITE", alice, bob)
+    sip(0.050, BOB, ALICE, "SIP/2.0 180 Ringing", call, "1 INVITE", alice, bob)
+    sip(1.000, BOB, ALICE, "SIP/2.0 200 OK", call, "1 INVITE", alice, bob, _sdp(BOB, 50000, "0"))
+    sip(1.010, ALICE, BOB, f"ACK sip:{bob} SIP/2.0", call, "1 ACK", alice, bob)
+    media = 1.020
+    for direction, (src, dst, sport, dport, ssrc) in enumerate(
+        ((ALICE, BOB, 40000, 50000, 0x11111111), (BOB, ALICE, 50000, 40000, 0x22222222))
+    ):
+        for i in range(RTP_PACKETS):
+            if direction == 0 and i == RTP_LOST:
+                continue
+            jitter = rng.uniform(0, 0.004) if direction == 0 else 0.0
+            payload = _tone(RTP_TONES[direction], i * 160, 160)
+            pkt = (
+                Ether() / IP(src=src, dst=dst) / UDP(sport=sport, dport=dport)
+                / RTP(version=2, payload_type=0, sequence=1000 * (direction + 1) + i,
+                      timestamp=160 * i, sourcesync=ssrc, marker=int(i == 0))
+                / Raw(payload)
+            )  # fmt: skip
+            timed.append((VOIP_START + media + 0.020 * i + direction * 0.001 + jitter, pkt))
+    end = media + 0.020 * RTP_PACKETS + 0.05
+    sip(end, ALICE, BOB, f"BYE sip:{bob} SIP/2.0", call, "2 BYE", alice, bob)
+    sip(end + 0.010, BOB, ALICE, "SIP/2.0 200 OK", call, "2 BYE", alice, bob)
+    sip(
+        end + 0.500,
+        CAROL,
+        BOB,
+        f"INVITE sip:{bob} SIP/2.0",
+        other,
+        "1 INVITE",
+        carol,
+        bob,
+        _sdp(CAROL, 42000, "0"),
+    )
+    sip(end + 0.510, BOB, CAROL, "SIP/2.0 100 Trying", other, "1 INVITE", carol, bob)
+    sip(end + 0.600, BOB, CAROL, "SIP/2.0 486 Busy Here", other, "1 INVITE", carol, bob)
+    sip(end + 0.610, CAROL, BOB, f"ACK sip:{bob} SIP/2.0", other, "1 ACK", carol, bob)
+    timed.sort(key=lambda tp: tp[0])
+    for at, pkt in timed:
+        pkt.time = at
+    return [pkt for _, pkt in timed]
 
 
 def mixed_packets() -> list[Packet]:
@@ -608,6 +735,7 @@ def main() -> None:
     # The walkthrough's sample capture (PCAP: Open Sample Capture) is the same file.
     shutil.copyfile(HERE / "mixed.pcapng", HERE.parents[1] / "media" / "sample.pcapng")
     wrpcap(str(HERE / "objects.pcap"), objects_packets())
+    wrpcap(str(HERE / "voip.pcap"), voip_packets())
     (HERE / "comments.pcapng").write_bytes(
         comments_pcapng(_records(http_packets()), PACKET_COMMENTS)
     )

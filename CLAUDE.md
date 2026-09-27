@@ -92,9 +92,10 @@ wireshark`, `C:\Program Files\Wireshark` added to PATH): lint, backend and
   shared with Node tests; `main.js` = UI. Type-checked via JSDoc +
   `tsconfig.webview.json`.
 - `src/panels/` statistics, follow-stream, coloring-rules, export-objects,
-  flow-graph and TCP-graph webview panels (`panelHtml.ts` builds their CSP'd
-  HTML); their UIs are `src/webview/stats.js`, `follow.js`, `coloring.js`,
-  `objects.js`, `flowgraph.js` and `tcpgraph.js` with `panel.css`.
+  flow-graph, TCP-graph and VoIP webview panels (`panelHtml.ts` builds their
+  CSP'd HTML); their UIs are `src/webview/stats.js`, `follow.js`,
+  `coloring.js`, `objects.js`, `flowgraph.js`, `tcpgraph.js` and `voip.js`
+  with `panel.css`.
 - `backend/pcap_backend/` Python package run as `python -m pcap_backend`
   with `PYTHONPATH=backend`. `server.py` (JSON-RPC), `pcap_service.py`
   (methods), `tshark.py` (discovery/argv/process helpers), `cache.py`
@@ -106,7 +107,8 @@ wireshark`, `C:\Program Files\Wireshark` added to PATH): lint, backend and
   linking files to packets, safe names), `comments.py` (pcapng packet
   comments, editcap options, packet counts), `capture.py` (live capture:
   dumpcap interfaces, filters, the pcapng tee), `editing.py` (editcap options
-  of capture editing), `protocol.py` (error codes,
+  of capture editing), `voip.py` (RTP stream report, SIP calls, RTP stream
+  analysis, G.711 decoding and WAV), `protocol.py` (error codes,
   request context), `cancellation.py`, `index_cache.py` (saved indexes),
   `procs.py` (stopping children, also
   when the kill is refused), `sandbox.py` (AppArmor/Snap detection and hints).
@@ -692,6 +694,41 @@ filesize` needs a file), packets/seconds by dumpcap (`-c`, `-a duration`).
   (`discardTemporaryCapture`): at shutdown the extension host is gone by then,
   so a hot-exit backup still finds its file. Activation prunes folders older
   than 7 days. No saved index for them; no merge offer.
+- **VoIP** (`voip.py`, `voip_calls {heuristic}`, `rtp_stream {stream}`,
+  `rtp_audio {stream, dest, format}`; `VoipPanel`, `voip.js`): RTP streams
+  come from tshark's `-z rtp,streams` report (`parse_rtp_streams`: the
+  columns after "Lost" are found by name, since "Min Jitter(ms) Mean
+  Jitter(ms)" are one space apart, and their set varies by version; payload
+  names may hold spaces). tshark has no call list, so SIP calls are built
+  from one `-Y sip` fields pass (`SIP_FIELDS`, aggregator `\x1e`: Call-IDs may
+  hold commas), run in parallel with the report: a call is a Call-ID with an
+  INVITE (REGISTER, OPTIONS… are skipped); state from INVITE responses, BYE
+  and CANCEL; SDP `c=`/`m=` endpoints link streams (by either end). A
+  stream's key (5-tuple + SSRC, `StreamKey`, checked: it becomes a display
+  filter) comes back from the client with `heuristic`, and every per-stream
+  pass is `-Y <stream filter>` (plus `-o rtp.heuristic_rtp:TRUE` for
+  heuristic streams), streamed line by line. `analyse_stream` follows
+  Wireshark's tap-rtp-analysis: extended (unwrapped) sequence numbers and
+  timestamps, RFC 3550 jitter with the payload type's clock (static types;
+  8000 for dynamic ones), delta, skew, and a status per packet (gap with the
+  number missing, late/duplicate, payload type change); the jitter matches
+  the report's (tests compare them). Audio: G.711 only (PT 0/8, 256-entry
+  tables), packets placed by timestamp in sequence order, silence for gaps up
+  to `MAX_GAP_S`, duplicates dropped, other payload types (DTMF events)
+  skipped; stdlib `wave` writes it through `atomic_output`. Other codecs:
+  `InvalidParamsError` with `data.unsupported`, and the host offers the raw
+  payload (`format: "raw"`). Results are cached (`_voip`, `_rtp_streams`)
+  only once the capture is completely indexed. Play: the host has the
+  backend write `stream-N.wav` into the panel's own folder under
+  `globalStorageUri/audio/<random>` (a `localResourceRoot`, removed with the
+  panel) and posts its `asWebviewUri`; `panelHtml(…, {media: true})` adds
+  `media-src cspSource`, so audio never goes through postMessage. The panel:
+  calls table, call flow (`lib.callFlow`: SIP rows plus one dashed row per
+  linked stream; SIP rows go to their packet, RTP rows select the stream),
+  streams table (a call's streams highlighted), analysis (summary, jitter
+  chart with flagged packets, `lib.rtpProblems` as links). `voip.pcap`
+  (`generate.voip_packets`, a µ-law encoder in the generator) has a call with
+  440/880 Hz tones, one lost packet and jitter, and a 486-rejected call.
 - **Capture editing** (`editing.py`, `edit_capture {operation, …, dest | dir}`;
   `commands/editCapture.ts`): one editcap run over the whole file (not the
   view; comment edits not included) into `dest` via `atomic_output`, `-F
@@ -967,4 +1004,5 @@ export of packet dissections, merging captures, a coloring rules editor,
 Export Objects, name resolution, packet comments, the flow graph and TCP
 stream graphs, live capture and capture editing, AI capture summaries,
 anomaly explanations and `@pcap` tools, and publishing: a release workflow,
-Marketplace details, and the Get Started walkthrough.
+Marketplace details, and the Get Started walkthrough. Then resumable indexing
+with a progress bar, and VoIP analysis (SIP calls, RTP streams, audio).

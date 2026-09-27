@@ -528,3 +528,80 @@ table.rules .empty-rules {
   stroke: var(--vscode-foreground);
   stroke-width: 1.5;
 }
+
+/* VoIP calls panel (the call flow shares the flow graph's classes). */
+.panel-subtitle-h {
+  margin: 8px 0 0;
+  font-size: 1em;
+  font-weight: 600;
+}
+
+table.stats caption {
+  caption-side: bottom;
+  padding: 6px 8px;
+  text-align: left;
+  color: var(--vscode-descriptionForeground);
+}
+
+table.stats tbody tr.linked:not(.selected) {
+  background: var(--vscode-editor-inactiveSelectionBackground, var(--vscode-list-hoverBackground));
+}
+
+table.stats tbody tr:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+.voip-flow {
+  overflow: auto;
+  max-height: 60vh;
+  border: 1px solid var(--border);
+  font-family: var(--mono);
+  font-size: var(--mono-size);
+}
+
+.voip-flow:empty {
+  display: none;
+}
+
+.voip-flow .voip-node {
+  font-weight: 600;
+}
+
+.voip-flow .flow-row:focus-visible .flow-bg {
+  stroke: var(--vscode-focusBorder);
+}
+
+.flow-arrow.rtp {
+  stroke: var(--vscode-charts-green, #89d185);
+  stroke-dasharray: 6 3;
+}
+
+.flow-head.rtp {
+  fill: var(--vscode-charts-green, #89d185);
+}
+
+#voip-audio {
+  height: 28px;
+  max-width: 320px;
+}
+
+.voip-problems {
+  margin: 4px 0;
+  padding-left: 20px;
+  font-family: var(--mono);
+  font-size: var(--mono-size);
+}
+
+button.link {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--vscode-textLink-foreground);
+  cursor: pointer;
+  font: inherit;
+}
+
+button.link:hover {
+  text-decoration: underline;
+}
