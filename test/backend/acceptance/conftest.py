@@ -67,6 +67,8 @@ class World:
     names: dict[str, bool] | None = None  # name resolution switches (None: tshark's own)
     objects: list[dict[str, Any]] | None = None
     save_dir: Path | None = None
+    release: Any = None  # slow_index's event: lets a held index pass finish
+    saved_frames: int = 0  # rows of the unfinished saved index
     error: Exception | None = None
 
     def call(self, fn: Any, params: dict[str, Any]) -> Any:
@@ -200,7 +202,94 @@ def from_saved(world: World) -> None:
 def indexed_again(world: World) -> None:
     assert world.error is None, world.error
     assert world.info is not None and "fromCache" not in world.info
-    assert any(p.get("phase") == "index" for p in world.progress), "an index pass ran"
+    assert any(p.get("phase") == "indexing" for p in world.progress), "an index pass ran"
+
+
+# ---------------------------------------------------------------------- resuming an index
+
+
+@given("the index pass is slow")
+def index_pass_is_slow(world: World, request: pytest.FixtureRequest) -> None:
+    """``slow_index``: the pass shows 3 packets, then crawls and holds after 8
+    until indexing is allowed to finish (or the capture is closed)."""
+    world.release = request.getfixturevalue("slow_index")
+
+
+def _open_streaming(world: World, name: str) -> None:
+    world.events = []
+    world.service.notify = lambda method, p: world.events.append({"method": method, **p})
+    open_capture(world, name, stream=True)
+    assert world.error is None, world.error
+
+
+@given(parsers.re(r'the capture "(?P<name>[^"]+)" was closed while it was being indexed$'))
+def closed_mid_index(world: World, name: str) -> None:
+    _open_streaming(world, name)
+    assert world.info is not None and world.info["indexing"] is True
+    world.service.close()
+
+
+@then(parsers.re(r"an unfinished index of fewer than (?P<count>\d+) packets is saved$"))
+def unfinished_index_saved(world: World, count: str) -> None:
+    assert world.cache_dir is not None
+    (meta,) = world.cache_dir.glob("*/meta.json")
+    entry = json.loads(meta.read_text())
+    assert entry["complete"] is False
+    assert 0 < entry["frames"] < int(count)
+    world.saved_frames = entry["frames"]
+
+
+@when(parsers.re(r'I open the capture "(?P<name>[^"]+)" again as a stream$'))
+def open_again_streaming(world: World, name: str) -> None:
+    _open_streaming(world, name)
+
+
+@then("the packets indexed before are shown at once, while the capture is read again")
+def shown_at_once(world: World) -> None:
+    assert world.info is not None and world.info["indexing"] is True
+    assert world.info["resumedAt"] == world.saved_frames == world.info["frames"]
+    assert len(world.rows()["rows"]) == world.saved_frames
+
+
+@when("indexing finishes")
+def indexing_finishes(world: World) -> None:
+    world.release.set()
+    _until(lambda: _index_end(world) is not None)
+    end = _index_end(world)
+    assert end is not None and end["event"] == "done", end
+    world.info = end["info"]
+
+
+@then("indexing caught up with the packets shown before, then went on")
+def caught_up_then_indexed(world: World) -> None:
+    phases = [
+        e["phase"] for e in world.events if e.get("method") == "index" and e["event"] == "progress"
+    ]
+    assert "catching-up" in phases and "indexing" in phases, phases
+    assert phases.index("catching-up") < phases.index("indexing")
+    assert "indexing" not in phases[: phases.index("catching-up")]
+
+
+@then("the packet list is the same as after a full index")
+def same_as_full_index(world: World) -> None:
+    fresh = PcapService()
+    try:
+        assert world.info is not None
+        fresh.open({"path": world.info["path"], "columns": world.columns}, RequestContext())
+        expected = fresh.list_packets({"offset": 0, "limit": 1000}, RequestContext())["rows"]
+    finally:
+        fresh.shutdown()
+    assert world.rows()["rows"] == expected
+
+
+@then("the saved index is finished")
+def saved_index_finished(world: World) -> None:
+    assert world.cache_dir is not None
+    world.service.close()
+    (meta,) = world.cache_dir.glob("*/meta.json")
+    entry = json.loads(meta.read_text())
+    assert entry["complete"] is True
+    assert world.info is not None and entry["frames"] == world.info["frames"]
 
 
 @given(parsers.parse('the display filter "{expr}" is applied'))
@@ -337,7 +426,7 @@ def request_fails(world: World, text: str) -> None:
 @then(parsers.re(r"the open progress is (?P<kind>estimated|indeterminate)$"))
 def open_progress(world: World, kind: str) -> None:
     assert world.error is None, world.error
-    index = [p for p in world.progress if p.get("phase") == "index"]
+    index = [p for p in world.progress if p.get("phase") == "indexing"]
     assert index[-1]["fraction"] == 1.0  # done
     during = [p["fraction"] for p in index[:-1]]
     assert during, "no progress was reported while indexing"

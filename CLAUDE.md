@@ -183,7 +183,32 @@ true`), else when done. The pass then reports through backend notifications
   `view {filterId, matchCount}` when a filter is applied. The webview refuses
   sorting with a notice, grows `total` on `indexProgress` (`growList`, which
   drops the cached short last page), and `refreshRows()` on done. Closing cancels the pass and waits
-  for it (`_close_file` drops `_lock` meanwhile: the pass takes it to finish).
+  for it (`_close_file` drops `_lock` meanwhile: the pass takes it to finish),
+  and also for the last pass's index save (`_last_index`: it runs after
+  "done", and the work dir must not be removed under it). Progress events
+  carry `phase`: `"catching-up"` (a resumed open re-reading its saved rows,
+  with `resumedAt` and `position`) or `"indexing"` (was `"index"`), plus
+  `restarted` once when a resume fell back to a full pass (see _Saved
+  indexes_). **A pass counts as finished only when it really ended**: not
+  cancelled, tshark not killed (`ProcessRegistry.kill_all` remembers what it
+  killed, `was_killed`; `stream_lines` then raises CancelledError, and a
+  negative returncode is a ToolError), every line read (`_read_rows` stops
+  per line on a cancel; `_stream_rows` re-raises it after closing the
+  generator). The old bug: at shutdown the server kills every child before
+  the pass's token is cancelled, tshark's output just ended, and the rows so
+  far were saved as a finished index.
+- **Progress bar** (webview): `div#busy-bar.progress-bar` (created by
+  `main.js`, between the filter bar and `#main`: `role="progressbar"`,
+  `aria-valuemin/max`, `aria-valuenow` only when determinate, `aria-label`)
+  with a `.progress-fill` whose width is set through CSSOM (allowed by the
+  CSP, unlike a `style` attribute). `renderProgress()` shows what
+  `lib.progressView` picks: indexing first (class `secondary` while catching
+  up), then a streaming filter, an export (`exportProgress` from the host's
+  `runExport`), coloring, and any request that reported progress
+  (`busyRequests`: rpc id → fraction). A null fraction is `indeterminate` (a
+  sliding animation; a static stripe under prefers-reduced-motion). The
+  status bar text comes from `lib.indexingLabel` ("Indexing… 42% · 420,000
+  packets", "Resuming… re-reading packets 1–N (already shown)").
 - **Saved indexes** (`index_cache.py`, `open {cache: {dir, maxBytes}}`; the
   host passes `globalStorageUri/index-cache`, `pcapViewer.indexCache.*`): an
   entry `<key>/` holds `rows.tsv`, `offsets.bin`, `meta.json` (info, fields,
@@ -204,6 +229,32 @@ true`), else when done. The pass then reports through backend notifications
   file's size and mtime to the key, so new keys mean a new index. _PCAP: Clear
   Index Cache_ deletes the folder from the host. Custom columns added later are extra
   passes and not saved (the next open with them is a new key).
+  **Complete and incomplete entries** (`CACHE_FORMAT` 2): meta.json has
+  `frames` (= offsets) and `complete`; `load` returns both kinds and callers
+  check `.complete`, and colors and filter results are only saved to, and
+  loaded from, complete entries (`_complete` reads meta.json; format-1
+  entries or a missing flag count as incomplete). `_save_index` (after the
+  pass): finished → complete entry plus colors; cancelled (closed) → an
+  incomplete entry with the rows read, when there are more than the entry it
+  resumed from holds; a tshark failure → nothing (resuming would fail the
+  same way). **Resume**: a streaming open whose key has an incomplete entry
+  (`_resume_from`) copies its rows (a real copy: the pass appends to it;
+  `RowStore.resume` truncates after the last row and reopens for appending),
+  publishes them at once (`open` returns `indexing: true, resumedAt: N`) and
+  starts the usual pass with `_Resume`. tshark can't start mid-file
+  (dissection state such as TCP reassembly needs every earlier packet, and
+  there is no seek by frame), so the pass re-reads from the start: rows ≤ N
+  are not stored but compared at `RESUME_SAMPLES` (16) evenly spread frames
+  plus the first and row N (`_sample_frames`, raw bytes). A mismatch (or a
+  column tshark now rejects, or a capture that ends before N) raises
+  `_ResumeMismatchError`: stderr says why, the entry is discarded and a full
+  pass replaces the base store (`_replace_base`: filter/sort caches cleared,
+  a "progress" event with `restarted`). Everything that needs every row
+  keeps raising IndexingError until "done"; streaming filters work over the
+  published rows. Closing again saves the larger N; finishing saves
+  `complete: true`. Live and unsaved captures never get an entry (no key);
+  pruning treats incomplete entries like complete ones. Tests close mid-pass
+  with the cancel-aware `slow_index` fixture (`test_resume_index.py`).
 - **Streaming filters** (`set_filter {stream: true}`, what the webview sends):
   after validation, `_start_filter` installs a view with a `_Filtering`
   (`view.live`) and runs `_filter_pass` in the pool; `set_filter` returns after
@@ -881,7 +932,10 @@ stream, sessionId}`. The query stays short: expert rows (sanitized by
 ## Performance notes (test/perf/bench.py, 1M synthetic packets, 146 MB)
 
 With `-o tcp.analyze_sequence_numbers:FALSE`: open 29–36 s (first rows after
-0.5 s with streaming, colored; +2 s with the 14 default coloring rules; reopening from the saved index 0.01 s, 104 MB), filter 26 s
+0.5 s with streaming, colored; +2 s with the 14 default coloring rules; reopening from the saved index 0.01 s, 104 MB;
+closed at ~500k and reopened: the 501,575 saved rows after 0.2 s, caught up
+after 18.6 s, done after 36.7 s, i.e. a resume shows rows at once but saves
+no tshark time), filter 26 s
 (first matches after 0.5 s when streaming), page
 fetch < 1 ms, sort 0.6 s, detail of last frame 20–26 s (quick view of any
 frame 0.25–0.3 s with a 300-packet window), backend RSS 125 MB,

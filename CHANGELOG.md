@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Fixed: closing VS Code (or a capture) while a big capture was still being
+  indexed could save the packets read so far as the capture's complete
+  index, so the next open showed a truncated packet list. Only a pass that
+  really reached the end of the file is saved as complete now, and saved
+  colors and filter results come only from complete indexes.
+- Opening big captures is resumable: closing a capture before it is fully
+  indexed keeps what was indexed, and the next open shows those packets at
+  once, re-reads them to check they still match ("Resuming… re-reading
+  packets 1–N (already shown)"), then goes on with the rest.
+- A progress bar under the filter bar for indexing (determinate when the
+  size is known, animated otherwise, a quieter style while resuming),
+  streaming filters, coloring and exports, with the percentage and packet
+  count in the status bar ("Indexing… 42% · 420,000 packets").
+
 - Remote windows (WSL, SSH, Dev Containers, Codespaces): PCAP Viewer runs on
   the remote machine, next to the captures and the tools, and says so when
   Python or tshark is missing there. Saved files are shown in the Explorer

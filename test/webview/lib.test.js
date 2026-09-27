@@ -629,4 +629,59 @@ suite("webview lib: navigation and customisation", () => {
     assert.deepEqual(lib.moveColumn(["a", "b", "c", "d"], "d", "b"), ["a", "d", "b", "c"]);
     assert.deepEqual(lib.moveColumn(["a", "b", "c"], "a", null), ["b", "c", "a"]);
   });
+
+  test("indexingLabel: percentage, packets, and the catching-up phase", () => {
+    const n = (v) => v.toLocaleString();
+    assert.equal(
+      lib.indexingLabel({ frames: 420000, fraction: 0.4213 }),
+      `Indexing… 42% · ${n(420000)} packets`,
+    );
+    assert.equal(lib.indexingLabel({ frames: 7, fraction: null }), "Indexing… 7 packets");
+    assert.equal(lib.indexingLabel({ frames: 7, fraction: 1.7 }), "Indexing… 100% · 7 packets");
+    assert.equal(
+      lib.indexingLabel({ frames: 50000, fraction: 0.1, phase: "catching-up", resumedAt: 50000 }),
+      `Resuming… re-reading packets 1–${n(50000)} (already shown)`,
+    );
+    assert.equal(
+      lib.indexingLabel({ frames: 50001, fraction: 0.2, phase: "indexing", resumedAt: 50000 }),
+      `Indexing… 20% · ${n(50001)} packets`,
+    );
+  });
+
+  test("progressView: indexing first, then filter, export, coloring, other work", () => {
+    const hidden = { visible: false, fraction: null, secondary: false, label: "" };
+    assert.deepEqual(lib.progressView({}), hidden);
+    assert.deepEqual(lib.progressView({ index: null, filter: undefined }), hidden);
+    assert.deepEqual(lib.progressView({ index: { frames: 10, fraction: 0.25 }, filter: 0.9 }), {
+      visible: true,
+      fraction: 0.25,
+      secondary: false,
+      label: "Indexing packets",
+    });
+    assert.deepEqual(lib.progressView({ index: { frames: 10, fraction: null } }), {
+      visible: true,
+      fraction: null,
+      secondary: false,
+      label: "Indexing packets",
+    });
+    const resuming = lib.progressView({
+      index: { frames: 10, fraction: 0.1, phase: "catching-up", resumedAt: 10 },
+    });
+    assert.deepEqual(resuming, {
+      visible: true,
+      fraction: 0.1,
+      secondary: true,
+      label: "Resuming indexing",
+    });
+    assert.deepEqual(lib.progressView({ filter: 0.5, exporting: 0.1 }).label, "Filtering packets");
+    assert.deepEqual(lib.progressView({ exporting: null, coloring: 0.3 }), {
+      visible: true,
+      fraction: null,
+      secondary: false,
+      label: "Exporting",
+    });
+    assert.equal(lib.progressView({ coloring: 0.3, busy: null }).label, "Coloring packets");
+    assert.equal(lib.progressView({ busy: -2 }).fraction, 0, "clamped to 0–1");
+    assert.equal(lib.progressView({ busy: 0 }).visible, true, "0% is still running");
+  });
 });

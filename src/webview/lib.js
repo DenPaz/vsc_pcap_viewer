@@ -1019,7 +1019,82 @@
     return rule && COLOR_RE.test(rule.foreground) && COLOR_RE.test(rule.background) ? rule : null;
   }
 
+  /**
+   * @typedef {object} IndexProgress
+   * @property {string} [phase] "catching-up" (a resumed open re-reads the rows it
+   *   already shows) or "indexing"
+   * @property {number} frames packets indexed (shown) so far
+   * @property {number | null} fraction null when it can't be estimated
+   * @property {number | null} [resumedAt] rows a resumed open started with
+   */
+
+  /**
+   * The status text of a streaming open's indexing, e.g. "Indexing… 42% · 420,000 packets".
+   * @param {IndexProgress} p
+   */
+  function indexingLabel(p) {
+    if (p.phase === "catching-up" && p.resumedAt) {
+      return `Resuming… re-reading packets 1–${p.resumedAt.toLocaleString()} (already shown)`;
+    }
+    const packets = `${p.frames.toLocaleString()} packets`;
+    return typeof p.fraction === "number"
+      ? `Indexing… ${Math.round(clampFraction(p.fraction) * 100)}% · ${packets}`
+      : `Indexing… ${packets}`;
+  }
+
+  /** @param {number} f */
+  function clampFraction(f) {
+    return Math.min(1, Math.max(0, f));
+  }
+
+  /**
+   * What the progress bar shows: the most important work running. Each kind is
+   * a fraction (0–1), null (running, amount unknown: indeterminate) or undefined
+   * (not running). Indexing comes first, then a streaming filter, an export,
+   * coloring and any other request that reported progress.
+   * @param {{
+   *   index?: IndexProgress | null,
+   *   filter?: number | null,
+   *   exporting?: number | null,
+   *   coloring?: number | null,
+   *   busy?: number | null,
+   * }} work
+   * @returns {{visible: boolean, fraction: number | null, secondary: boolean, label: string}}
+   */
+  function progressView(work) {
+    if (work.index) {
+      const resuming = work.index.phase === "catching-up";
+      return {
+        visible: true,
+        fraction:
+          typeof work.index.fraction === "number" ? clampFraction(work.index.fraction) : null,
+        // While re-reading rows already shown: a quieter bar.
+        secondary: resuming,
+        label: resuming ? "Resuming indexing" : "Indexing packets",
+      };
+    }
+    /** @type {[keyof typeof work, string][]} */
+    const kinds = [
+      ["filter", "Filtering packets"],
+      ["exporting", "Exporting"],
+      ["coloring", "Coloring packets"],
+      ["busy", "Working"],
+    ];
+    for (const [kind, label] of kinds) {
+      const value = work[kind];
+      if (value !== undefined && typeof value !== "object") {
+        return { visible: true, fraction: clampFraction(value), secondary: false, label };
+      }
+      if (value === null) {
+        return { visible: true, fraction: null, secondary: false, label };
+      }
+    }
+    return { visible: false, fraction: null, secondary: false, label: "" };
+  }
+
   const api = {
+    indexingLabel,
+    progressView,
     MAX_SCROLL_HEIGHT,
     computeWindow,
     scrollTopForIndex,

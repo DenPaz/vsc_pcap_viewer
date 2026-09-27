@@ -45,6 +45,27 @@
   /** @param {string} id */
   const $ = (id) => /** @type {HTMLElement} */ (document.getElementById(id));
 
+  /**
+   * The progress bar between the filter bar and the packet list, for the
+   * long-running work (lib.progressView: indexing, a streaming filter, an
+   * export, coloring, other requests). Built with createElement, styled in
+   * styles.css; renderProgress() updates it.
+   */
+  function createProgressBar() {
+    const bar = document.createElement("div");
+    bar.id = "busy-bar";
+    bar.className = "progress-bar hidden";
+    bar.setAttribute("role", "progressbar");
+    bar.setAttribute("aria-valuemin", "0");
+    bar.setAttribute("aria-valuemax", "100");
+    const fill = document.createElement("div");
+    fill.className = "progress-fill";
+    bar.append(fill);
+    $("main").before(bar);
+    return { bar, fill };
+  }
+  const progressBar = createProgressBar();
+
   const el = {
     filterInput: /** @type {HTMLInputElement} */ ($("filter-input")),
     filterApply: $("filter-apply"),
@@ -55,8 +76,8 @@
     filterAi: $("filter-ai"),
     filterField: $("filter-field"),
     suggest: $("suggest"),
-    busyBar: $("busy-bar"),
-    busyFill: $("busy-bar-fill"),
+    busyBar: progressBar.bar,
+    busyFill: progressBar.fill,
     list: $("list"),
     header: $("list-header"),
     viewport: $("list-viewport"),
@@ -167,6 +188,12 @@
      */
     capture: null,
     /** @type {number | null} */ indexFraction: null,
+    /** "catching-up" while a resumed open re-reads the rows it already shows, else "indexing". */
+    indexPhase: "indexing",
+    /** Rows a resumed open started with (shown at once), else null. */
+    /** @type {number | null} */ resumedAt: null,
+    /** An export's progress (undefined: none running, null: amount unknown). */
+    /** @type {number | null | undefined} */ exportProgress: undefined,
     /** Streaming filter: its matches are still arriving (a sort applies when it's done). */
     filtering: false,
     /** @type {number | null} */ filterFraction: null,
@@ -282,7 +309,11 @@
         state.quickDetail = msg.quickDetail;
         break;
       case "indexProgress":
-        onIndexProgress(msg.frames, msg.fraction, msg.view);
+        onIndexProgress(msg);
+        break;
+      case "exportProgress":
+        state.exportProgress = msg.done ? undefined : (msg.fraction ?? null);
+        updateStatus();
         break;
       case "captureEvent":
         onCaptureEvent(msg);
@@ -348,6 +379,9 @@
     state.filterId = msg.info.filterId;
     state.indexing = !!msg.info.indexing;
     state.indexFraction = null;
+    state.resumedAt = state.indexing && msg.info.resumedAt ? msg.info.resumedAt : null;
+    state.indexPhase = state.resumedAt ? "catching-up" : "indexing";
+    state.exportProgress = undefined;
     const capture = msg.info.capture;
     state.capture = capture
       ? {
@@ -380,7 +414,7 @@
     state.selection = new Set();
     state.anchorIndex = null;
     busyRequests.clear();
-    el.busyBar.classList.add("hidden");
+    renderProgress();
     state.elapsedMs = msg.elapsedMs;
     const filter = msg.filter || el.filterInput.value.trim();
     if (filter) {
@@ -410,19 +444,51 @@
    * The busy bar shows while a request that reported progress (a filter, a first
    * sort, a column extraction…) is running, and hides when the last one settles.
    */
-  /** @type {Set<number>} */
-  const busyRequests = new Set();
+  /** Requests running (id → fraction, null if unknown). */
+  /** @type {Map<number, number | null>} */
+  const busyRequests = new Map();
   /** Busy-bar id of a streaming filter after its set_filter request returned. */
   const FILTER_BUSY = -1;
   /** @param {number} id @param {boolean} on @param {number | null} [fraction] */
   function setBusy(id, on, fraction = null) {
     if (on) {
-      busyRequests.add(id);
-      setProgress(el.busyBar, el.busyFill, fraction);
+      busyRequests.set(id, fraction);
     } else {
       busyRequests.delete(id);
     }
-    el.busyBar.classList.toggle("hidden", busyRequests.size === 0);
+    renderProgress();
+  }
+
+  /** Show the most important work running in the progress bar (or hide it). */
+  function renderProgress() {
+    const busy = [...busyRequests.values()];
+    const view = lib.progressView({
+      index:
+        state.indexing && !state.capture && state.info
+          ? {
+              phase: state.indexPhase,
+              frames: state.info.frames,
+              fraction: state.indexFraction,
+              resumedAt: state.resumedAt,
+            }
+          : null,
+      filter: state.filtering ? state.filterFraction : undefined,
+      exporting: state.exportProgress,
+      coloring: state.coloringProgress,
+      busy: busy.length ? (busy.find((f) => f !== null) ?? null) : undefined,
+    });
+    const bar = el.busyBar;
+    bar.classList.toggle("hidden", !view.visible);
+    bar.classList.toggle("indeterminate", view.visible && view.fraction === null);
+    bar.classList.toggle("secondary", view.secondary);
+    bar.setAttribute("aria-label", view.label || "Progress");
+    if (view.visible && view.fraction !== null) {
+      bar.setAttribute("aria-valuenow", String(Math.round(view.fraction * 100)));
+      el.busyFill.style.width = `${(view.fraction * 100).toFixed(1)}%`;
+    } else {
+      bar.removeAttribute("aria-valuenow"); // (indeterminate, or hidden)
+      el.busyFill.style.width = "";
+    }
   }
 
   /**
@@ -584,22 +650,45 @@
   }
 
   /**
-   * More rows are indexed (streaming open): grow the list.
-   * @param {number} frames @param {number | null} fraction @param {{filterId: number, matchCount: number}} [view]
+   * More rows are indexed (streaming open): grow the list. A resumed open first
+   * re-reads the rows it shows ("catching-up"); `restarted` means those didn't
+   * match and indexing started over.
+   * @param {{frames: number, fraction: number | null, view?: {filterId: number, matchCount: number}, phase?: string, resumedAt?: number, restarted?: boolean}} msg
    */
-  function onIndexProgress(frames, fraction, view) {
+  function onIndexProgress(msg) {
     if (!state.indexing || !state.info) {
       return;
     }
+    const frames = Number(msg.frames) || 0;
+    const view = msg.view;
     // Live capture: while the end of the list is in view, it stays in view.
     const follow = !!state.capture?.running && atListEnd();
     state.info.frames = frames;
-    state.indexFraction = fraction;
+    state.indexFraction = typeof msg.fraction === "number" ? msg.fraction : null;
+    const wasResuming = state.indexPhase === "catching-up";
+    state.indexPhase = msg.phase === "catching-up" ? "catching-up" : "indexing";
+    if (typeof msg.resumedAt === "number") {
+      state.resumedAt = msg.resumedAt;
+    }
+    if (msg.restarted) {
+      // A resumed open's saved rows no longer matched: indexed again from scratch.
+      state.resumedAt = null;
+      const matches = viewCount(view);
+      state.total = state.appliedFilter ? (matches ?? 0) : frames;
+      state.matchCount = state.total;
+      updateSpacer();
+      refreshRows();
+      updateStatus();
+      return;
+    }
     const matches = viewCount(view);
     if (!state.appliedFilter) {
       growList(frames);
     } else if (matches !== null && matches !== state.total) {
       growList(matches);
+    }
+    if (wasResuming && state.indexPhase === "indexing") {
+      refreshRows(); // the rows shown at once get their colors by now
     }
     if (follow) {
       el.viewport.scrollTop = el.viewport.scrollHeight;
@@ -665,6 +754,8 @@
   function onIndexDone(info, error, view) {
     state.indexing = false;
     state.indexFraction = null;
+    state.indexPhase = "indexing";
+    state.resumedAt = null;
     state.info = info;
     const captured = !!state.capture;
     if (state.capture) {
@@ -3579,6 +3670,7 @@
   // ------------------------------------------------------------------ status & state
 
   function updateStatus() {
+    renderProgress();
     const info = state.info;
     el.statusTime.textContent = TIME_LABELS[state.timeFormat] ?? "";
     el.statusTime.classList.toggle("hidden", !info);
@@ -3590,9 +3682,12 @@
     }
     const parts = [`Packets: ${info.frames.toLocaleString()}`];
     if (state.indexing && !state.capture) {
-      const pct =
-        state.indexFraction !== null ? ` (${Math.round(state.indexFraction * 100)}%)` : "";
-      parts[0] = `Indexing… ${info.frames.toLocaleString()} packets so far${pct}`;
+      parts[0] = lib.indexingLabel({
+        phase: state.indexPhase,
+        frames: info.frames,
+        fraction: state.indexFraction,
+        resumedAt: state.resumedAt,
+      });
     }
     if (state.filtering) {
       const pct =
@@ -3616,6 +3711,11 @@
       const pct =
         state.coloringProgress !== null ? ` ${Math.round(state.coloringProgress * 100)}%` : "";
       parts.push(`Coloring…${pct}`);
+    }
+    if (state.exportProgress !== undefined) {
+      const pct =
+        state.exportProgress !== null ? ` ${Math.round(state.exportProgress * 100)}%` : "";
+      parts.push(`Exporting…${pct}`);
     }
     if (state.timeRef !== null) {
       parts.push(`Time reference: ${state.timeRef}`);

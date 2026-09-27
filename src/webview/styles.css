@@ -242,14 +242,19 @@ button.icon:hover {
   border: 1px solid var(--vscode-inputValidation-errorBorder);
 }
 
-#busy-bar,
+/* The progress bar between the filter bar and the packet list (main.js
+   createProgressBar), like VS Code's own editor progress; .progress is the
+   loading overlay's. */
+.progress-bar,
 .progress {
+  position: relative;
+  flex: none;
   height: 2px;
   overflow: hidden;
   background: transparent;
 }
 
-#busy-bar-fill,
+.progress-fill,
 .progress > div {
   height: 100%;
   width: 0;
@@ -257,9 +262,28 @@ button.icon:hover {
   transition: width 0.15s linear;
 }
 
+/* A resumed open re-reading the rows it already shows: a quieter bar. */
+.progress-bar.secondary .progress-fill {
+  opacity: 0.45;
+}
+
 .indeterminate > div {
   width: 30% !important;
   animation: indeterminate 1.2s infinite ease-in-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* No sliding: a static striped bar says "working, amount unknown". */
+  .indeterminate > div {
+    width: 100% !important;
+    animation: none;
+    opacity: 0.6;
+    background: repeating-linear-gradient(
+      90deg,
+      var(--vscode-progressBar-background) 0 8px,
+      transparent 8px 16px
+    );
+  }
 }
 
 @keyframes indeterminate {

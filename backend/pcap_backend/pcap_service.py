@@ -29,8 +29,8 @@ import threading
 import time
 from array import array
 from bisect import bisect_left, bisect_right
-from collections.abc import Callable, Iterable, Sequence
-from concurrent.futures import Future, ThreadPoolExecutor
+from collections.abc import Callable, Generator, Iterable, Sequence
+from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -57,7 +57,7 @@ from .export import (
     check_destination,
 )
 from .fields import FieldCatalog, parse_field_list
-from .index_cache import IndexCache, folder_fingerprint, index_key, rules_key
+from .index_cache import CachedIndex, IndexCache, folder_fingerprint, index_key, rules_key
 from .objects import ExportedObject
 from .protocol import (
     FilterError,
@@ -110,6 +110,9 @@ PROGRESS_INTERVAL_S = 0.2
 FIRST_BATCH = 1000
 FIRST_BATCH_S = 0.5
 DEFAULT_CACHE_BYTES = 1 << 30
+# A resumed open compares this many of the saved rows (evenly spread, plus the
+# first and the last) with the rows tshark re-reads before going on.
+RESUME_SAMPLES = 16
 
 
 @dataclass(frozen=True, slots=True)
@@ -259,15 +262,39 @@ class _PassProgress:
         on_rows: Callable[[_Store], None] | None,
         size: int,
         overhead: int | None,
+        resume: _Resume | None = None,
     ) -> None:
         self.ctx = ctx
         self.store = store
         self.on_rows = on_rows
         self.size = size
         self.overhead = overhead
+        self.resume = resume
         self.bytes_seen = 0
         self.last_emit = 0.0
         self.started = time.monotonic()
+
+    def progress(self, number: int, fraction: float | None) -> dict[str, Any]:
+        """A progress report at frame ``number``: "catching-up" while a resumed
+        pass re-reads the rows already shown (``frames`` stays their count),
+        then "indexing"."""
+        resume = self.resume
+        if resume is None:
+            return {"phase": "indexing", "frames": number, "fraction": fraction}
+        if number <= resume.known:
+            return {
+                "phase": "catching-up",
+                "frames": resume.known,
+                "position": number,
+                "resumedAt": resume.known,
+                "fraction": fraction,
+            }
+        return {
+            "phase": "indexing",
+            "frames": number,
+            "resumedAt": resume.known,
+            "fraction": fraction,
+        }
 
     def ready(self) -> None:
         """Hand the store over now, rows or not (a live capture may be quiet)."""
@@ -287,7 +314,7 @@ class _PassProgress:
             self.last_emit = now
             rows.publish()
             fraction = min(0.99, self.bytes_seen / self.size) if self.overhead else None
-            self.ctx.progress({"phase": "index", "frames": number, "fraction": fraction})
+            self.ctx.progress(self.progress(number, fraction))
         if self.on_rows is not None and (
             rows.appended >= FIRST_BATCH or now - self.started >= FIRST_BATCH_S
         ):
@@ -333,6 +360,32 @@ class _Indexing:
     # `open` returned while the pass was running: finishing it updates the capture.
     attached: bool = False
     inline: _InlineColoring | None = None
+    # Resuming from an unfinished saved index (its rows are shown at once).
+    resume: _Resume | None = None
+
+
+@dataclass(slots=True)
+class _Resume:
+    """An open resumed from an unfinished saved index: ``store`` holds its
+    ``known`` rows (a private copy, appended to from row ``known + 1``).
+
+    tshark can't start in the middle of a capture: stream numbers, relative
+    sequence numbers, reassembly, expert flags and time references depend on
+    the packets before. So the pass re-reads the capture from the start;
+    rows 1…``known`` are not stored again but ``samples`` of them are compared
+    (a mismatch means the rows no longer match: index again from scratch)."""
+
+    store: _Store
+    known: int
+    samples: dict[int, bytes]
+    # (name the caller asked for, field passed to tshark), as when it was saved
+    pairs: list[tuple[str, str]]
+    columns: list[str]
+    caught_up: bool = False
+
+
+class _ResumeMismatchError(Exception):
+    """The re-read rows differ from the saved ones (or the columns do)."""
 
 
 @dataclass(slots=True)
@@ -418,6 +471,9 @@ class PcapService:
         self._marks: set[int] = set()
         # Streaming open: the index pass still running after `open` returned.
         self._indexing: _Indexing | None = None
+        # The last index pass, which saves the index after its "done": closing
+        # waits for it, so the work dir isn't removed under the save.
+        self._last_index: Future[None] | None = None
         self._tshark_versions: dict[Path, str] = {}
         # Backend -> client notifications ("index": progress/done/failed of a streaming open).
         self.notify: Callable[[str, dict[str, Any]], None] = lambda _method, _params: None
@@ -457,6 +513,9 @@ class PcapService:
         if indexing is not None:
             indexing.token.cancel()
             self._wait_unlocked(indexing.future)
+        last, self._last_index = self._last_index, None
+        if last is not None and not last.done():
+            self._wait_unlocked(last)  # (still saving the index: hard links, quick)
         if self._file is not None:
             self._file.base.rows.close()
             for s in self._file.extra:
@@ -679,10 +738,15 @@ class PcapService:
         info = CaptureInfo(path=str(path), size=path.stat().st_size if live is None else 0)
         info.warnings += options.check_scripts()
         key = self._index_key(tshark, path, options, requested_columns, ctx) if cache else None
+        resume: _Resume | None = None
         if cache is not None and key is not None:
             hit = cache.load(key)
-            if hit is not None:
+            if hit is not None and hit.complete:
                 return self._open_cached(path, tshark, hit, work_dir, cache, key, inline)
+            if hit is not None and stream:
+                resume = self._resume_from(hit, work_dir)
+                if resume is not None:
+                    columns = list(resume.columns)
 
         capture: LiveCapture | None = None
         info_future: Future[dict[str, Any]] | None = None
@@ -692,6 +756,10 @@ class PcapService:
             capture = LiveCapture(command, live[0], path, lambda e: self.notify("capture", e))
             capture.start(ctx.token)  # raises when dumpcap can't capture
         indexing = _Indexing(token=CancelToken(), report=ctx.progress, inline=inline)
+        if resume is not None:
+            # The saved rows are shown at once; the pass catches up behind them.
+            indexing.resume, indexing.store = resume, resume.store
+            indexing.first.set()
         ctx.token.on_cancel(indexing.token.cancel)
         if capture is not None:
             indexing.token.on_cancel(capture.abort)
@@ -699,6 +767,7 @@ class PcapService:
             self._run_index, tshark, path, work_dir, columns, info, info_future, indexing,
             cache, key, capture,
         )  # fmt: skip
+        self._last_index = indexing.future
         wait_for = indexing.first if stream else indexing.done
         while not wait_for.wait(0.1):
             ctx.token.raise_if_cancelled()
@@ -749,6 +818,8 @@ class PcapService:
             everything = FrameIndex.all(info.frames)
             self._view = _View(self._next_filter_id, "", everything, None, everything)
             result = self._open_result(self._file, indexing=not complete)
+            if not complete and indexing.resume is not None:
+                result["resumedAt"] = indexing.resume.known
             if inline is not None and inline.enabled:
                 self._show_colors(inline, inline.colors)
                 # (The pass keeps appending to inline.colors: published rows have theirs.)
@@ -798,11 +869,29 @@ class PcapService:
             indexing.store = store
             indexing.first.set()
 
+        resume = indexing.resume
         try:
-            base = self._index_pass(
-                tshark, path, work_dir, columns, info, ctx, base=True, on_rows=rows_ready,
-                inline=indexing.inline, live=capture,
-            )  # fmt: skip
+            try:
+                base = self._index_pass(
+                    tshark, path, work_dir, columns, info, ctx, base=True,
+                    on_rows=None if resume else rows_ready, inline=indexing.inline,
+                    live=capture, resume=resume,
+                )  # fmt: skip
+            except _ResumeMismatchError as exc:
+                assert resume is not None
+                print(  # noqa: T201 - stderr
+                    f"pcap-viewer: can't resume indexing {path.name} ({exc}): indexing it again",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                if cache is not None and key is not None:
+                    cache.discard(key)
+                resume = indexing.resume = None
+                base = self._index_pass(
+                    tshark, path, work_dir, columns, info, ctx, base=True,
+                    on_rows=lambda store: self._replace_base(indexing, store),
+                    inline=indexing.inline,
+                )  # fmt: skip
             indexing.store = base
             if capture is not None:
                 capture.join()  # the file is complete
@@ -835,24 +924,103 @@ class PcapService:
                 done = self._finish_streaming(indexing)
         if attached:
             self.notify("index", done)
-        if indexing.error is None and cache is not None and key is not None:
-            store = indexing.store
-            assert store is not None
-            cache.save(
-                key,
-                store.rows.path,
-                store.rows.offsets,
-                {
-                    "info": info.to_json(),
-                    "fields": list(store.rows.fields),
-                    "names": list(store.fields),
-                    "columns": columns,
-                },
-            )
+        if cache is not None and key is not None:
+            self._save_index(cache, key, info, columns, indexing, resume)
+
+    @staticmethod
+    def _save_index(
+        cache: IndexCache,
+        key: str,
+        info: CaptureInfo,
+        columns: list[str],
+        indexing: _Indexing,
+        resume: _Resume | None,
+    ) -> None:
+        """Save a finished pass as a complete index (with its colors). A pass
+        closed on the way (cancelled) keeps its rows as an incomplete entry,
+        which the next open resumes from; anything else saves nothing."""
+        store = indexing.store
+        if store is None:
+            return
+        meta = {
+            "info": info.to_json(),
+            "fields": list(store.rows.fields),
+            "names": list(store.fields),
+            "columns": columns,
+        }
+        if indexing.error is None:
+            cache.save(key, store.rows.path, store.rows.offsets, meta, complete=True)
             inline = indexing.inline
             if inline is not None and inline.enabled:
                 extra = {"colored": inline.colored, "errors": inline.summary()["errors"]}
                 cache.save_colors(key, rules_key(inline.raw), inline.colors, extra)
+            return
+        if not isinstance(indexing.error, CancelledError):
+            return  # (tshark failed: resuming would fail again)
+        # (While catching up, the saved entry already holds these rows.)
+        known = resume.known if resume is not None and store is resume.store else 0
+        if len(store.rows) > known:
+            cache.save(key, store.rows.path, store.rows.offsets, meta, complete=False)
+
+    def _resume_from(self, hit: CachedIndex, work_dir: Path) -> _Resume | None:
+        """Resume from an unfinished saved index: a private copy of its rows
+        (the pass appends to it), and the rows to compare (None if unusable)."""
+        meta = hit.meta
+        known = len(hit.offsets)
+        if not known:
+            return None
+        self._store_seq += 1
+        rows_path = work_dir / f"rows-{self._store_seq}.tsv"
+        try:
+            shutil.copyfile(hit.rows, rows_path)  # (not a hard link: it grows)
+            fields, names = list(meta["fields"]), list(meta["names"])
+            rows = RowStore.resume(rows_path, fields, array("Q", hit.offsets))
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            print(f"pcap-viewer: can't resume indexing: {exc}", file=sys.stderr)  # noqa: T201
+            return None
+        if len(fields) != len(names):
+            rows.close()
+            return None
+        samples = rows.raw(_sample_frames(known, RESUME_SAMPLES))
+        return _Resume(
+            store=_Store(rows, tuple(names)),
+            known=known,
+            samples=samples,
+            pairs=list(zip(names, fields, strict=True)),
+            columns=[str(c) for c in meta.get("columns", [])],
+        )
+
+    def _replace_base(self, indexing: _Indexing, store: _Store) -> None:
+        """A resumed open fell back to indexing from scratch: once the new
+        pass has rows, they replace the saved ones shown so far."""
+        with self._lock:
+            old, indexing.store = indexing.store, store
+            f = self._file
+            attached = indexing.attached and self._indexing is indexing and f is not None
+            event: dict[str, Any] | None = None
+            if attached and f is not None:
+                f.base = store
+                f.info.frames = len(store.rows)
+                for cache in (self._filters, self._sorts, self._sort_columns):
+                    cache.clear()
+                view = self._view
+                if view is not None and not view.expr:
+                    view.matched = view.ordered = FrameIndex.all(f.info.frames)
+                    view.sort = None
+                event = {
+                    "event": "progress",
+                    "phase": "indexing",
+                    "frames": f.info.frames,
+                    "fraction": None,
+                    "restarted": True,
+                }
+                counts = self._view_counts()
+                if counts is not None:
+                    event["view"] = counts
+        if old is not None and old is not store:
+            old.rows.close()
+        if event is not None:
+            self.notify("index", event)
 
     @staticmethod
     def _capture_warnings(info: CaptureInfo, capture: LiveCapture) -> None:
@@ -1026,6 +1194,7 @@ class PcapService:
         on_rows: Callable[[_Store], None] | None = None,
         inline: _InlineColoring | None = None,
         live: LiveCapture | None = None,
+        resume: _Resume | None = None,
     ) -> _Store:
         """Run one ``-T fields`` pass, writing every frame's row to a RowStore.
 
@@ -1040,13 +1209,13 @@ class PcapService:
         ``on_rows`` gets the store at once. That stream can be read only once,
         so the fields are first tried against the empty capture (tshark checks
         them before reading any packet) and the retries happen there.
+
+        With ``resume`` (base pass), the pass goes on from an unfinished saved
+        index: same fields, the saved store (``on_rows`` already had it), and
+        rows 1…``resume.known`` compared instead of stored (_read_rows). Raises
+        _ResumeMismatchError when they don't match (or tshark refuses those fields).
         """
-        # (name the caller asked for, name actually passed to tshark)
-        pairs = [(c.field, c.field) for c in BASE_COLUMNS] if base else []
-        pairs += [(fld, fld) for fld in custom]
-        unresolved = base and tshark.options.resolves_addresses
-        if unresolved:
-            pairs += [(fld, fld) for fld in UNRESOLVED_FIELDS]
+        pairs, unresolved = _pass_fields(tshark, custom, base=base, resume=resume)
         legacy = {c.field: c.legacy_field for c in BASE_COLUMNS}
         size = max(1, info.size)
         overhead = _RECORD_OVERHEAD.get(sniff_format(path) or "") if base and not live else None
@@ -1057,8 +1226,8 @@ class PcapService:
             self._store_seq += 1
             store_path = work_dir / f"rows-{self._store_seq}.tsv"
             actual = [a for _, a in pairs]
-            rows = RowStore(store_path, actual)
-            result = StreamResult()
+            store = _attempt_store(pairs, store_path, resume)
+            rows = store.rows
             # tshark blanks duplicated -e fields, so only prepend frame.number
             # when it is not already the first column.
             fields = actual if base else ["frame.number", *actual]
@@ -1066,26 +1235,22 @@ class PcapService:
             if inline is not None:
                 fields = [*fields, _COLOR_FIELD]
                 color_args = ["--color"]
-                inline.colors, inline.colored = array("B", [0]), 0
+                _reset_colors(inline)
             column_args = ["-o", _UNRESOLVED_FORMAT] if unresolved else []
             options = [*column_args, *color_args, *_fields_args(fields)]
-            store = _Store(rows, tuple(name for name, _ in pairs))
-            tracker = _PassProgress(ctx, store, on_rows, size, overhead)
-            try:
-                lines = _pass_lines(tshark, path, options, result, ctx, env, live, tracker)
-                bad_lines = _read_rows(
-                    lines or iter(()),
-                    rows,
-                    tracker,
-                    base=base,
-                    inline=inline,
-                    unresolved=unresolved,
-                )
-            finally:
-                rows.finish()
+            tracker = _PassProgress(ctx, store, on_rows, size, overhead, resume)
+            result, bad_lines = _stream_rows(
+                lambda result: _pass_lines(tshark, path, options, result, ctx, env, live, tracker),  # noqa: B023 - called at once
+                tracker,
+                base=base,
+                inline=inline,
+                unresolved=unresolved,
+            )
             # (A live pass that fails after its probe has no rejected fields to
             # retry without: the stream is read once.)
             if result.lines == 0 and result.returncode not in (0, None):
+                if resume is not None:  # (never delete the saved rows' copy)
+                    raise _ResumeMismatchError("tshark refused the saved columns")
                 rows.close()
                 store_path.unlink(missing_ok=True)
                 rejected = _rejected_fields(result.stderr)
@@ -1100,7 +1265,7 @@ class PcapService:
                     continue
                 raise _index_error(tshark, path, result)
             _finish_index_pass(info, result, bad_lines, len(rows), inline)
-            ctx.progress({"phase": "index", "frames": len(rows), "fraction": 1.0})
+            ctx.progress({"phase": "indexing", "frames": len(rows), "fraction": 1.0})
             # Columns are exposed under the names the caller asked for.
             return store
         raise ToolError("tshark rejected the requested columns")
@@ -1955,7 +2120,14 @@ class PcapService:
         pdml_argv = tshark.argv(*select, "-T", "pdml", capture=str(capture))
         hex_argv = tshark.argv(*select, "-x", capture=str(capture))
         hex_future = self._pool.submit(run, hex_argv, ctx.token)
-        pdml_res = run(pdml_argv, ctx.token)
+        try:
+            pdml_res = run(pdml_argv, ctx.token)
+        except BaseException:
+            # (A cancel.) Don't return while the -x run still reads the capture
+            # (a quick window is deleted right after): it stops at the same token.
+            if not hex_future.cancel():
+                wait([hex_future])
+            raise
         hex_res = hex_future.result()
         if not pdml_res.stdout.strip():
             raise tshark.error(
@@ -3163,6 +3335,69 @@ def _pass_lines(
     return stream_lines(argv, result, ctx.token, env=env, stdin=live.take_reader())
 
 
+def _pass_fields(
+    tshark: Tshark, custom: list[str], *, base: bool, resume: _Resume | None
+) -> tuple[list[tuple[str, str]], bool]:
+    """An index pass's (name the caller asked for, name passed to tshark)
+    pairs, and whether they end with the UNRESOLVED_FIELDS. A resumed pass
+    uses the fields its saved rows were indexed with."""
+    if resume is not None:
+        pairs = list(resume.pairs)
+        return pairs, UNRESOLVED_FIELDS[0] in {a for _, a in pairs}
+    pairs = [(c.field, c.field) for c in BASE_COLUMNS] if base else []
+    pairs += [(fld, fld) for fld in custom]
+    unresolved = base and tshark.options.resolves_addresses
+    if unresolved:
+        pairs += [(fld, fld) for fld in UNRESOLVED_FIELDS]
+    return pairs, unresolved
+
+
+def _attempt_store(pairs: list[tuple[str, str]], path: Path, resume: _Resume | None) -> _Store:
+    """The store an index pass attempt writes: a new one at ``path``, or a
+    resumed pass's saved rows (its fields must be the ones it was saved with)."""
+    actual = tuple(a for _, a in pairs)
+    names = tuple(name for name, _ in pairs)
+    if resume is None:
+        return _Store(RowStore(path, actual), names)
+    if actual != resume.store.rows.fields or names != resume.store.fields:
+        raise _ResumeMismatchError("the columns changed")
+    return resume.store
+
+
+def _reset_colors(inline: _InlineColoring) -> None:
+    """Forget the colors of an earlier attempt, in place (a resumed open
+    already shows this array)."""
+    del inline.colors[1:]
+    inline.colored = 0
+
+
+def _stream_rows(
+    start: Callable[[StreamResult], Iterable[bytes] | None],
+    tracker: _PassProgress,
+    *,
+    base: bool,
+    inline: _InlineColoring | None,
+    unresolved: bool,
+) -> tuple[StreamResult, int]:
+    """Run an index pass attempt (``start`` gives its output lines) into
+    ``tracker``'s store; returns tshark's result and the unparseable lines."""
+    result = StreamResult()
+    rows = tracker.store.rows
+    lines: Iterable[bytes] | None = None
+    try:
+        lines = start(result)
+        bad_lines = _read_rows(
+            lines or iter(()), rows, tracker, base=base, inline=inline, unresolved=unresolved
+        )
+    finally:
+        if isinstance(lines, Generator):
+            lines.close()  # (stops tshark when a resumed pass's rows didn't match)
+        rows.finish()
+    # A cancelled pass is never a finished one, however its output ended.
+    tracker.ctx.token.raise_if_cancelled()
+    return result, bad_lines
+
+
 def _finish_index_pass(
     info: CaptureInfo,
     result: StreamResult,
@@ -3171,6 +3406,12 @@ def _finish_index_pass(
     inline: _InlineColoring | None,
 ) -> None:
     """Warnings and coloring results of a finished index pass."""
+    if result.returncode is not None and result.returncode < 0:
+        # Killed by a signal (not by us: that raises CancelledError): its
+        # output ended early, so this is not the whole capture.
+        raise ToolError(
+            f"tshark was stopped (signal {-result.returncode}) after {frames:,} packets"
+        )
     if bad_lines:
         info.warnings.append(f"{bad_lines} unparseable line(s) in tshark output skipped")
     if result.stderr:
@@ -3386,6 +3627,13 @@ def _inline_coloring(raw: Any) -> _InlineColoring | None:
     return _InlineColoring(raw["rules"], rules, errors)
 
 
+def _sample_frames(known: int, count: int) -> list[int]:
+    """Frames 1…``known`` a resumed pass compares: ``count`` evenly spread,
+    always including the first and the last (``known``)."""
+    step = max(1, known // max(1, count))
+    return sorted({1, known, *range(step, known, step)})
+
+
 def _read_rows(
     lines: Iterable[bytes],
     rows: RowStore,
@@ -3398,9 +3646,19 @@ def _read_rows(
     """Store an index pass's rows (and colors); returns the unparseable lines.
 
     With ``unresolved``, the row ends with the UNRESOLVED_FIELDS, which are
-    blanked when they equal the Source/Destination shown (the usual case)."""
+    blanked when they equal the Source/Destination shown (the usual case).
+
+    A resumed pass (``tracker.resume``) doesn't store rows 1…``known`` again:
+    it compares the sampled ones with the saved rows and raises
+    _ResumeMismatchError if they differ, or if the capture ends before ``known``."""
     bad_lines = 0
+    resume = tracker.resume
+    known = resume.known if resume is not None else 0
+    token = tracker.ctx.token
+    last = 0
     for line in lines:
+        if token.cancelled:
+            break  # (tshark's buffered output would still come)
         parts = line.split(b"\t", 1)
         try:
             number = int(parts[0])
@@ -3414,8 +3672,18 @@ def _read_rows(
         if unresolved:
             row = _blank_same_addresses(row)
         rest = row if base else (parts[1] if len(parts) > 1 else b"")
+        last = number
+        if resume is not None and number <= known:
+            saved = resume.samples.get(number)
+            if saved is not None and rest != saved:
+                raise _ResumeMismatchError(f"packet {number} differs from its saved row")
+            resume.caught_up = number == known
+            tracker.row(number, rest)
+            continue
         rows.append(number, rest)
         tracker.row(number, rest)
+    if resume is not None and not resume.caught_up and not token.cancelled:
+        raise _ResumeMismatchError(f"the capture ended at packet {last:,}, before {known:,}")
     return bad_lines
 
 

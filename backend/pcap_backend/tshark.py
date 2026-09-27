@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import weakref
 from collections.abc import Generator, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -217,6 +218,9 @@ class ProcessRegistry:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._procs: set[subprocess.Popen[bytes]] = set()
+        # Children kill_all stopped: their output was cut off, not finished
+        # (weak, so a reaped child doesn't stay here).
+        self._killed: weakref.WeakSet[subprocess.Popen[bytes]] = weakref.WeakSet()
 
     def add(self, proc: subprocess.Popen[bytes]) -> None:
         with self._lock:
@@ -232,6 +236,7 @@ class ProcessRegistry:
         with self._lock:
             live = list(self._procs)
             self._procs.clear()
+            self._killed.update(live)
         for proc in live:
             if procs.kill_process(proc):
                 with contextlib.suppress(subprocess.TimeoutExpired):
@@ -240,6 +245,11 @@ class ProcessRegistry:
     def __len__(self) -> int:
         with self._lock:
             return sum(1 for p in self._procs if p.poll() is None)
+
+    def was_killed(self, proc: subprocess.Popen[bytes]) -> bool:
+        """Whether kill_all stopped ``proc`` (its output ended early)."""
+        with self._lock:
+            return proc in self._killed
 
 
 PROCESSES = ProcessRegistry()
@@ -306,6 +316,7 @@ def run(
     token = token or CancelToken()
     proc = _popen(argv, env)
     PROCESSES.add(proc)
+    finished = False
     try:
         token.register(proc)  # kills the process if the token is already cancelled
         try:
@@ -314,21 +325,21 @@ def run(
             while True:
                 try:
                     out, err = proc.communicate(timeout=procs.POLL_INTERVAL)
+                    finished = True
                     break
                 except subprocess.TimeoutExpired:
                     token.raise_if_cancelled()
         finally:
             token.unregister(proc)
     finally:
-        if proc.returncode is None:
-            # Cancelled: stop it, reap it and close its pipes.
-            if procs.kill_process(proc):
-                proc.communicate()
-                PROCESSES.discard(proc)
-            else:
-                procs.stop_process(proc, on_reaped=lambda: PROCESSES.discard(proc))
+        if finished:
+            PROCESSES.discard(proc)  # communicate() reaped it and closed its pipes
         else:
-            PROCESSES.discard(proc)
+            # Cancelled: stop it, reap it and close its pipes. Also when it has
+            # exited already: any poll() (the kill of a cancelled token,
+            # kill_all, len(PROCESSES)) can have reaped it, and its pipes are
+            # still open.
+            procs.stop_process(proc, on_reaped=lambda: PROCESSES.discard(proc))
     token.raise_if_cancelled()
     return RunResult(proc.returncode, out, clean_stderr(err.decode("utf-8", "replace")))
 
@@ -372,7 +383,9 @@ def stream_lines(
         procs.stop_process(proc, [collector], on_reaped=lambda: PROCESSES.discard(proc))
         result.returncode = proc.returncode
         result.stderr = collector.text
-    if token.cancelled:
+    # A child killed at shutdown ends its output early: that is not the end
+    # of the capture (an index pass must not be saved as complete).
+    if token.cancelled or PROCESSES.was_killed(proc):
         raise CancelledError("request cancelled")
 
 

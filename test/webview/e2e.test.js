@@ -1219,6 +1219,121 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     );
   });
 
+  test("the progress bar: indexing, indeterminate, resuming, done; with ARIA attributes", async () => {
+    // The host's index events, posted by hand (the backend has the whole capture already).
+    const info = await client.request(
+      "open",
+      { path: path.join(ROOT, "test", "fixtures", "http.pcap"), columns: ["tcp.stream"] },
+      { timeoutMs: 0 },
+    );
+    const bar = () =>
+      page.$eval("#busy-bar", (b) => ({
+        hidden: b.classList.contains("hidden"),
+        indeterminate: b.classList.contains("indeterminate"),
+        secondary: b.classList.contains("secondary"),
+        role: b.getAttribute("role"),
+        min: b.getAttribute("aria-valuemin"),
+        max: b.getAttribute("aria-valuemax"),
+        now: b.getAttribute("aria-valuenow"),
+        label: b.getAttribute("aria-label"),
+        width: /** @type {HTMLElement} */ (b.querySelector(".progress-fill")).style.width,
+        next: b.nextElementSibling?.id,
+        afterFilterBar: !!(
+          document.getElementById("filter-bar").compareDocumentPosition(b) &
+          b.DOCUMENT_POSITION_FOLLOWING
+        ),
+      }));
+    const status = () => page.textContent("#status-left");
+    // A resumed open: 4 saved rows shown at once, the pass re-reads them first.
+    await post({
+      type: "init",
+      info: { ...info, frames: 4, indexing: true, resumedAt: 4 },
+      columns: customCols,
+      layout,
+      timeFormat: "relative",
+      quickDetail: { after: 20000, window: 300 },
+      filter: "",
+      history: [],
+      savedFilters,
+      elapsedMs: 1,
+      names: "Names: MAC",
+    });
+    await page.waitForFunction(() =>
+      /Resuming/.test(document.getElementById("status-left").textContent),
+    );
+    let b = await bar();
+    assert.equal(b.hidden, false);
+    assert.equal(b.secondary, true, "a quieter bar while catching up");
+    assert.equal(b.indeterminate, true, "no fraction yet");
+    assert.equal(b.now, null, "no aria-valuenow while indeterminate");
+    assert.deepEqual(
+      [b.role, b.min, b.max, b.label],
+      ["progressbar", "0", "100", "Resuming indexing"],
+    );
+    assert.deepEqual(
+      [b.afterFilterBar, b.next],
+      [true, "main"],
+      "between the filter bar and the list",
+    );
+    assert.match(await status(), /Resuming… re-reading packets 1–4 \(already shown\)/);
+
+    await post({
+      type: "indexProgress",
+      frames: 4,
+      fraction: 0.2,
+      phase: "catching-up",
+      resumedAt: 4,
+    });
+    await page.waitForFunction(
+      () => document.getElementById("busy-bar").getAttribute("aria-valuenow") === "20",
+    );
+    b = await bar();
+    assert.deepEqual([b.secondary, b.indeterminate, b.width], [true, false, "20%"]);
+
+    // Past the saved rows: a normal determinate bar that advances.
+    await post({
+      type: "indexProgress",
+      frames: 6,
+      fraction: 0.42,
+      phase: "indexing",
+      resumedAt: 4,
+    });
+    await page.waitForFunction(
+      () => document.getElementById("busy-bar").getAttribute("aria-valuenow") === "42",
+    );
+    b = await bar();
+    assert.deepEqual(
+      [b.hidden, b.secondary, b.indeterminate, b.width, b.label],
+      [false, false, false, "42%", "Indexing packets"],
+    );
+    assert.match(await status(), /Indexing… 42% · 6 packets/);
+    await post({ type: "indexProgress", frames: 9, fraction: 0.8, phase: "indexing" });
+    await page.waitForFunction(
+      () => document.getElementById("busy-bar").getAttribute("aria-valuenow") === "80",
+    );
+    assert.equal((await bar()).width, "80%");
+
+    // Progress that can't be estimated (a compressed capture): indeterminate.
+    await post({ type: "indexProgress", frames: 10, fraction: null, phase: "indexing" });
+    await page.waitForFunction(() =>
+      document.getElementById("busy-bar").classList.contains("indeterminate"),
+    );
+    b = await bar();
+    assert.deepEqual([b.hidden, b.now, b.width], [false, null, ""]);
+    assert.match(await status(), /Indexing… 10 packets/);
+
+    await post({ type: "indexDone", info });
+    await page.waitForFunction(() =>
+      document.getElementById("busy-bar").classList.contains("hidden"),
+    );
+    b = await bar();
+    assert.deepEqual([b.indeterminate, b.secondary, b.now], [false, false, null]);
+    await page.waitForFunction(
+      () => document.querySelectorAll("#list-rows .list-row:not(.loading)").length === 11,
+    );
+    assert.doesNotMatch(await status(), /Indexing|Resuming/);
+  });
+
   test("late packets: a quick view first, marked approximate, then the exact view replaces it", async () => {
     // Reload the capture (as the host does): the backend's detail cache starts empty.
     const reopen = async (quickDetail) => {
@@ -1317,7 +1432,7 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     const status = () => page.textContent("#status-left");
     const notice = () => page.textContent("#filter-error");
     const stopButton = () => page.$eval("#filter-cancel", (b) => !b.classList.contains("hidden"));
-    /** The first number after `label` in the status bar. */
+    /** The first number after `label` (a regular expression) in the status bar. */
     const count = async (label) =>
       Number(new RegExp(`${label}([\\d,]+)`).exec(await status())?.[1].replace(/,/g, "") ?? NaN);
     /** Scroll to the end, so the last (short) page is cached, then wait for the list to grow past it. */
@@ -1406,7 +1521,7 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
         })),
       });
       await page.waitForFunction(() =>
-        /^Indexing… [\d,]+ packets so far/.test(
+        /^Indexing… (\d+% · )?[\d,]+ packets/.test(
           document.querySelector("#status-left")?.textContent ?? "",
         ),
       );
@@ -1422,7 +1537,7 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
       );
       assert.match(await status(), /^Indexing…/, "colored while still indexing");
       assert.doesNotMatch(await status(), /Coloring/, "no separate coloring pass");
-      await growsAtTheEnd("Indexing… ");
+      await growsAtTheEnd("Indexing… (?:\\d+% · )?");
       await page.evaluate(() => {
         /** @type {HTMLElement} */ (document.getElementById("list-viewport")).scrollTop = 0;
       });

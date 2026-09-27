@@ -50,6 +50,38 @@ class RowStore:
             self._pos = path.stat().st_size
             self._visible = len(offsets)
 
+    @classmethod
+    def resume(cls, path: Path, fields: Sequence[str], offsets: array[int]) -> RowStore:
+        """A store holding the rows of an unfinished saved index (``path`` must
+        be a private copy: it is appended to), readable at once, that goes on
+        with frame ``len(offsets) + 1``. Anything after row ``len(offsets)`` in
+        the file is cut off."""
+        store = cls(path, fields, offsets)
+        end = 0
+        if len(offsets):
+            with path.open("rb") as fh:
+                fh.seek(offsets[-1])
+                last = fh.readline()
+            if not last.endswith(b"\n"):
+                raise ValueError("the saved rows end in the middle of a row")
+            end = offsets[-1] + len(last)
+        with path.open("r+b") as fh:
+            fh.truncate(end)
+        store._pos = end
+        store._writer = path.open("ab")
+        return store
+
+    def raw(self, frame_numbers: Iterable[int]) -> dict[int, bytes]:
+        """The stored lines (without the line break) of published frames."""
+        out: dict[int, bytes] = {}
+        with self._lock:
+            fh = self._open_reader()
+            for n in frame_numbers:
+                if 1 <= n <= self._visible:
+                    fh.seek(self._offsets[n - 1])
+                    out[n] = fh.readline().rstrip(b"\n")
+        return out
+
     def append(self, frame_number: int, line: bytes) -> None:
         """Append the row for ``frame_number`` (``line`` without trailing newline)."""
         expected = len(self._offsets) + 1
