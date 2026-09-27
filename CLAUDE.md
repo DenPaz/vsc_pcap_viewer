@@ -77,10 +77,10 @@ wireshark`, `C:\Program Files\Wireshark` added to PATH): lint, backend and
 - `src/webview/` plain JS/CSS/HTML (no build step). `lib.js` = pure helpers
   shared with Node tests; `main.js` = UI. Type-checked via JSDoc +
   `tsconfig.webview.json`.
-- `src/panels/` statistics, follow-stream, coloring-rules and export-objects
-  webview panels (`panelHtml.ts` builds their CSP'd HTML); their UIs are
-  `src/webview/stats.js`, `follow.js`, `coloring.js` and `objects.js` with
-  `panel.css`.
+- `src/panels/` statistics, follow-stream, coloring-rules, export-objects,
+  flow-graph and TCP-graph webview panels (`panelHtml.ts` builds their CSP'd
+  HTML); their UIs are `src/webview/stats.js`, `follow.js`, `coloring.js`,
+  `objects.js`, `flowgraph.js` and `tcpgraph.js` with `panel.css`.
 - `backend/pcap_backend/` Python package run as `python -m pcap_backend`
   with `PYTHONPATH=backend`. `server.py` (JSON-RPC), `pcap_service.py`
   (methods), `tshark.py` (discovery/argv/process helpers), `cache.py`
@@ -89,7 +89,8 @@ wireshark`, `C:\Program Files\Wireshark` added to PATH): lint, backend and
   `coloring.py` (coloring rules → `colorfilters`), `navigation.py` (find
   expressions, hex parsing, frame-set filters, time formatting), `export.py` (destination
   checks, atomic output, CSV/JSON writers), `objects.py` (export objects:
-  linking files to packets, safe names), `protocol.py` (error codes,
+  linking files to packets, safe names), `comments.py` (pcapng packet
+  comments, editcap options), `protocol.py` (error codes,
   request context), `cancellation.py`, `index_cache.py` (saved indexes),
   `procs.py` (stopping children, also
   when the kill is refused), `sandbox.py` (AppArmor/Snap detection and hints).
@@ -498,6 +499,66 @@ transport,external}`, `open {names}`): `DissectionOptions.names` holds the
   (`lib.filterObjects`), sorts, and goes to the packet on double-click/Enter.
   `objects.pcap` (generate.py) has HTTP (PNG, gzip+chunked text, a POST body,
   a body served twice), a two-block TFTP read and an SMTP mail.
+- **Packet comments** (`comments.py`; `set_comments`, `packet_comments`,
+  `save_comments`; `PcapDocument`): tshark's field output splits a
+  multi-line comment into one occurrence per line plus the whole text, so
+  comments are read from the pcapng itself (`read_comments`: `opt_comment` of
+  EPB and obsolete PB, SPBs counted as frames, both byte orders, several
+  sections; gzip/zstd through the stdlib; LZ4 raises `UnreadableError`, which
+  `packet_comments` reports as `error` and `save_comments` refuses; pcap and
+  other formats have none), in the pool after open (~1 s per million
+  packets; a "comments" notification makes the viewer refresh). Rows carry
+  `comment` (a packet's comments joined with "\n") and `commentEdited`.
+  Writing uses editcap (`editcap_args`): `-a N:text` sets one comment per
+  packet (a second `-a` for the same frame replaces the first) and there is
+  no per-packet delete, so a deletion or an edit of a packet with several
+  comments means `--discard-packet-comments` plus `-a` for every remaining
+  comment (several joined into one); long option lists run in chained
+  editcap passes (MAX_FILTER_ARG, only the first discards). `inPlace: true`
+  writes a temp file next to the capture and replaces it under `_lock`
+  (`_replace` retries: Windows refuses while a tshark reads it), then clears
+  the detail/quick/filter caches; else `dest` via `atomic_output`. In place
+  only for plain pcapng (`open` → `comments.inPlace`). The host keeps the
+  unsaved edits in `PcapDocument` (frame → text, "" deletes):
+  `PcapEditorProvider` is a `CustomEditorProvider`, so each edit is a
+  `CustomDocumentEditEvent` (VS Code gives the dirty dot, undo/redo, save,
+  save as, revert and hot-exit backups: `backupCustomDocument` writes the
+  edits as JSON, `parseCommentBackup` restores them). Every session of the
+  document pushes the whole set to its backend (`set_comments`) and posts
+  `commentsChanged`; after an in-place save the other sessions send
+  `reload: true` to re-read the file. Saving a non-pcapng capture asks to
+  save a new `.pcapng` instead, opens it, and clears the edits here. The
+  webview shows a stripe on commented rows (warning color while unsaved),
+  the comment as the No. cell's tooltip, and a comment bar above the detail
+  tree (textarea: Ctrl+Enter applies, Esc cancels); `setComment` goes to the
+  host. `editPacketComment` (Ctrl+Alt+C) and `deletePacketComment` are
+  viewer commands; _Delete All Packet Comments_ is one edit on the host.
+  `comments.pcapng` (generate.py writes the pcapng by hand) has a comment, a
+  multi-line comment and a packet with two.
+- **Flow graph** (`flow_graph {offset, limit}`, `FlowGraphPanel`,
+  `flowgraph.js`): the current view's matches in capture order (never the
+  sort), nodes = Source/Destination values in order of first appearance
+  (streamed with `RowStore.column` through the sort-column cache, cached per
+  `filterId` in `_flow`), at most MAX_FLOW_NODES (200) columns, the rest
+  share an "other" column (`from`/`to` = -1, `more` counts them). Needs a
+  complete view (IndexingError while indexing or filtering). The panel
+  draws only the rows on screen (SVG, `lib.computeWindow`, pages of 200),
+  `lib.flowArrow` positions arrows, labels are centred when they fit, else
+  run right from the arrow's start (`lib.truncate`). It follows the capture's
+  filter: `PcapEditorSession.onDidChangeFilter` → "reset".
+- **TCP stream graphs** (`tcp_graph {stream | frame}`, `TcpGraphPanel`,
+  `tcpgraph.js`): one `-Y tcp.stream == N` pass (fields `_TCP_GRAPH_FIELDS`;
+  FT_NONE flags like `tcp.analysis.retransmission` print 1 when set) parsed
+  by `parse_tcp_graph` into compact points [frame, time, dir, seq, len, ack,
+  win, rtt, retrans, syn] (dir 0 = the first packet's source → the other;
+  tunnels: the innermost value), cached per stream (LRU 4). The webview
+  computes the four graphs (`lib.tcpGraphSeries`: Stevens segments with
+  retransmissions flagged; throughput as a moving average over a twentieth of
+  the stream (1 ms–1 s); RTT from the receiver's `ack_rtt`; the receiver's
+  window as a line plus bytes in flight), starts with the direction that
+  sent more data, draws at most 6000 marks, and puts the time axis around the
+  stream (`lib.niceRange`). One panel per editor; showing it again switches
+  stream. Opened from the command or the row menu (`tcpGraph` message).
 - **AI filter help** (`src/aiFilter.ts` pure, `src/ai.ts` host, `src/commands/ai.ts`):
   Copilot's inline completions can't reach the webview, so the host uses
   `vscode.lm.selectChatModels({ vendor: "copilot" })` (stable in 1.90 = our
@@ -649,4 +710,5 @@ Beyond the brief: navigation and customisation, multi-select, AI help for
 filters and explaining packets, a quick view for late packets in huge files,
 streaming open and filters with saved indexes, TLS decryption with a key log,
 export of packet dissections, merging captures, a coloring rules editor,
-Export Objects and name resolution.
+Export Objects, name resolution, packet comments, the flow graph and TCP
+stream graphs.

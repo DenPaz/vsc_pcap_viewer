@@ -515,6 +515,131 @@ maybe("statistics and follow panels (Chromium + real backend)", function () {
     }
   });
 
+  /** Open a panel script with a stand-in host that forwards `method` to the backend. */
+  async function openGraphPanel(script, onMessage) {
+    const { page, problems, post } = await newPage(browser);
+    const log = [];
+    await page.exposeFunction("__toHost", async (raw) => {
+      const msg = JSON.parse(raw);
+      log.push(msg);
+      await onMessage(msg, post);
+    });
+    await page.setContent(renderPanelHtml(origin, script), { waitUntil: "load" });
+    pages.push(problems);
+    return { page, log, post };
+  }
+
+  test("flow graph: endpoints, arrows, go to packet, follows the filter", async () => {
+    let filter = "";
+    const { page, log, post } = await openGraphPanel("flowgraph.js", async (msg, reply) => {
+      // A stand-in for FlowGraphPanel (src/panels/flowGraphPanel.ts).
+      if (msg.type === "ready") {
+        await reply({ type: "init", title: "Flow Graph · mixed.pcapng", filter });
+      } else if (msg.type === "query") {
+        const params = { offset: msg.offset, limit: msg.limit };
+        client.request("flow_graph", params, { timeoutMs: 0 }).then(
+          (pageData) => reply({ type: "page", id: msg.id, offset: msg.offset, page: pageData }),
+          (err) => reply({ type: "error", id: msg.id, message: err.message }),
+        );
+      }
+    });
+    await page.waitForFunction(() => document.querySelectorAll(".flow-row").length === 26);
+    const nodes = await page.$$eval(".flow-node", (els) => els.map((e) => e.textContent));
+    assert.deepEqual(nodes.slice(0, 3), ["02:00:00:00:00:01", "Broadcast", "192.168.1.10"]);
+    assert.equal(nodes.length, 8);
+    assert.match(
+      await page.textContent(".status, .toolbar span"),
+      /26 packets between 8 endpoints/,
+    );
+    const label = await page.textContent(".flow-row:nth-of-type(1) .flow-label");
+    assert.match(label, /^ARP: Who has 192\.168\.1\.1\?/);
+    await page.screenshot({
+      path: process.env.PCAP_SCREENSHOTS ? `${process.env.PCAP_SCREENSHOTS}/flow.png` : undefined,
+    });
+
+    await page.click(".flow-row:nth-of-type(4)");
+    assert.deepEqual(log.at(-1), { type: "goto", frame: 4 });
+    await page.focus(".flow-scroll");
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("Enter");
+    assert.deepEqual(log.at(-1), { type: "goto", frame: 5 });
+
+    // The capture's filter changes: the graph follows it.
+    await client.request("set_filter", { expr: "dns" });
+    filter = "dns";
+    await post({ type: "reset", filter });
+    await page.waitForFunction(() => document.querySelectorAll(".flow-row").length === 6);
+    assert.equal((await page.$$(".flow-node")).length, 2);
+    assert.match(await page.textContent(".toolbar span"), /6 packets matching dns between 2/);
+    await client.request("set_filter", { expr: "" });
+  });
+
+  test("TCP stream graph: the four graphs, direction, stepping, go to packet", async () => {
+    const { page, log } = await openGraphPanel("tcpgraph.js", async (msg, reply) => {
+      // A stand-in for TcpGraphPanel (src/panels/tcpGraphPanel.ts).
+      if (msg.type === "ready") {
+        await reply({ type: "init", frame: 14 });
+      } else if (msg.type === "query") {
+        const params = msg.stream !== undefined ? { stream: msg.stream } : { frame: msg.frame };
+        client.request("tcp_graph", params, { timeoutMs: 0 }).then(
+          (result) => reply({ type: "stream", id: msg.id, result }),
+          (err) => reply({ type: "error", id: msg.id, message: err.message }),
+        );
+      }
+    });
+    // mixed.pcapng: an HTTP exchange; the server sends the most data, so it's shown first.
+    await page.waitForFunction(() =>
+      /^TCP stream 0: 93\.184\.216\.34:80 → 192\.168\.1\.10:50000$/.test(
+        document.querySelector(".panel-title").textContent,
+      ),
+    );
+    assert.ok(
+      (await page.$$(".chart line.seg")).length >= 1,
+      "Stevens: one segment per data packet",
+    );
+    assert.match(await page.textContent(".status"), /data segments/);
+    await page.screenshot({
+      path: process.env.PCAP_SCREENSHOTS
+        ? `${process.env.PCAP_SCREENSHOTS}/tcp-stevens.png`
+        : undefined,
+    });
+
+    for (const [kind, selector] of [
+      ["throughput", ".chart path.series-line"],
+      ["rtt", ".chart circle.dot"],
+      ["window", ".chart path.series-line"],
+    ]) {
+      await page.selectOption("select", kind);
+      await page.waitForSelector(selector, { state: "attached" }); // (a flat line has no height)
+    }
+    await page.screenshot({
+      path: process.env.PCAP_SCREENSHOTS
+        ? `${process.env.PCAP_SCREENSHOTS}/tcp-window.png`
+        : undefined,
+    });
+
+    await page.selectOption("select", "stevens");
+    await page.click("#tcp-direction");
+    assert.match(await page.textContent(".panel-title"), /192\.168\.1\.10:50000 → 93\.184/);
+
+    const box = await page.locator(".chart svg").boundingBox();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.waitForFunction(() =>
+      /^Packet \d+/.test(document.querySelector(".chart .tooltip").textContent),
+    );
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    for (let i = 0; i < 50 && log.at(-1).type !== "goto"; i++) {
+      await page.waitForTimeout(20); // (the message reaches the stand-in host asynchronously)
+    }
+    assert.equal(log.at(-1).type, "goto");
+
+    await page.click("button[title='Next stream']");
+    await page.waitForFunction(() =>
+      /^TCP stream 1/.test(document.querySelector(".panel-title").textContent),
+    );
+    assert.match(await page.textContent(".status"), /No packets in this stream/);
+  });
+
   test("no script errors or CSP violations in any panel", () => {
     for (const p of pages) {
       assert.deepEqual(p.errors, []);

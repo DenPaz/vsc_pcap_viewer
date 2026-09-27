@@ -13,6 +13,7 @@ import { registerAiCommands } from "./commands/ai";
 import { registerIndexCacheCommands } from "./commands/indexCache";
 import { registerTlsCommands } from "./commands/tls";
 import { registerMergeCommands } from "./commands/merge";
+import { registerCommentCommands } from "./commands/comments";
 import { PcapEditorProvider } from "./pcapEditor";
 import { sameNameResolution } from "./settingsModel";
 
@@ -44,6 +45,7 @@ export function activate(context: vscode.ExtensionContext): PcapViewerApi {
   registerIndexCacheCommands(context);
   registerTlsCommands(context, p);
   registerMergeCommands(context, p, log);
+  registerCommentCommands(context, p);
   context.subscriptions.push(
     vscode.commands.registerCommand("pcapViewer.showLog", () => log.show()),
     vscode.workspace.onDidChangeConfiguration(async (e) => {

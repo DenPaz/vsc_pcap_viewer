@@ -471,6 +471,67 @@ button.icon:hover {
   border-bottom: 1px solid var(--border);
 }
 
+/* The selected packet's comment, above its detail tree. */
+#comment-bar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 4px 8px;
+  background: var(--vscode-editorWidget-background, var(--vscode-editor-background));
+  border-bottom: 1px solid var(--border);
+  border-left: 3px solid var(--vscode-editorInfo-foreground, var(--vscode-focusBorder));
+}
+
+#comment-view {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+}
+
+#comment-text {
+  flex: 1;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+#comment-edited {
+  font-size: 0.85em;
+  color: var(--vscode-editorWarning-foreground, var(--vscode-foreground));
+}
+
+#comment-input {
+  box-sizing: border-box;
+  width: 100%;
+  resize: vertical;
+  font: inherit;
+  color: var(--vscode-input-foreground);
+  background: var(--vscode-input-background);
+  border: 1px solid var(--vscode-input-border, var(--border));
+}
+
+.comment-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.comment-actions .hint {
+  font-size: 0.85em;
+  color: var(--vscode-descriptionForeground);
+}
+
+/* Packets with a comment: a stripe on the left (warning color while unsaved). */
+.list-row.has-comment {
+  box-shadow: inset 3px 0 0 var(--vscode-editorInfo-foreground, var(--vscode-focusBorder));
+}
+
+.list-row.comment-edited {
+  box-shadow: inset 3px 0 0 var(--vscode-editorWarning-foreground, var(--vscode-focusBorder));
+}
+
 #detail-note.loading::after {
   content: " …";
 }

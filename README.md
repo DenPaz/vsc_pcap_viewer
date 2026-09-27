@@ -172,6 +172,25 @@ reset?`). The answer streams in with _Go to packet_ buttons and _Apply
   two directions coloured and labelled. You can show one direction only, switch
   between ASCII, hex dump and raw hex, step to other streams, filter the capture
   to the stream, and save it (raw bytes or the text shown).
+- **Packet comments**: comments stored in pcapng files show as a stripe on
+  the packet's row (with the comment as the No. cell's tooltip) and above its
+  details. _Add or Edit Packet Comment…_ (`Ctrl+Alt+C`, or the row's
+  right-click menu) edits them in place, multi-line included; _Delete Packet
+  Comment_ and _PCAP: Delete All Packet Comments_ remove them. Edits work like
+  any unsaved change in VS Code: the tab shows it, `Ctrl+Z` undoes it, and
+  `Ctrl+S` writes the comments into the capture (with `editcap`). A capture
+  that isn't plain pcapng can't hold comments, so saving offers a new
+  `.pcapng` file instead.
+- **Flow graph**: _PCAP Statistics: Flow Graph_ draws the displayed packets
+  as arrows between their endpoints, in capture order, like Wireshark's flow
+  graph. It follows the display filter; click an arrow (or press `Enter`) to
+  go to the packet.
+- **TCP stream graphs**: _PCAP Statistics: TCP Stream Graph_ (or _TCP Stream
+  Graph_ in a packet's right-click menu) plots the selected packet's TCP
+  stream: sequence numbers over time (Stevens, retransmissions in red),
+  throughput, round-trip time and the receive window with the bytes in
+  flight. Switch the direction, step to the previous or next stream, hover for
+  the packet, click to go to it.
 - **Statistics**: Conversations and Endpoints (Ethernet, IPv4, IPv6, TCP, UDP),
   Protocol Hierarchy, I/O Graph (line chart plus table, adjustable interval),
   Expert Information and Capture File Properties. Each opens in a panel with
@@ -248,6 +267,10 @@ tshark built with them (`tshark --version` lists "with Zstandard", "with LZ4").
 | PCAP: Time Display Format…                                                                                            |                                       | Choose how the Time column is shown                                                                               |
 | PCAP: Follow TCP / UDP / TLS / HTTP Stream                                                                            |                                       | Follow the selected packet's stream (also in the packet list's right-click menu)                                  |
 | PCAP Statistics: Conversations, Endpoints, Protocol Hierarchy, I/O Graph, Expert Information, Capture File Properties |                                       | Open the report in a panel beside the capture                                                                     |
+| PCAP: Add or Edit Packet Comment… / Delete Packet Comment                                                             | `Ctrl+Alt+C`                          | Edit the selected packet's comment (saved with the capture, `Ctrl+S`)                                             |
+| PCAP: Delete All Packet Comments                                                                                      |                                       | Remove every comment (one undoable edit)                                                                          |
+| PCAP Statistics: Flow Graph                                                                                           |                                       | The displayed packets as arrows between their endpoints                                                           |
+| PCAP Statistics: TCP Stream Graph                                                                                     |                                       | Stevens, throughput, round-trip time and window graphs of the selected packet's TCP stream                        |
 | PCAP: Manage Custom Columns                                                                                           |                                       | Add or remove columns (searches tshark's field list)                                                              |
 | PCAP: Reload Capture                                                                                                  |                                       | Re-run tshark on the current capture                                                                              |
 | PCAP: Reload Dissectors                                                                                               |                                       | Check the Lua dissectors for errors, then re-index all open captures                                              |

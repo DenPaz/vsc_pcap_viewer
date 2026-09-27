@@ -1,7 +1,9 @@
 import * as vscode from "vscode";
 import { FOLLOW_LABELS, FollowPanel, FollowProto } from "../panels/followPanel";
+import { FlowGraphPanel } from "../panels/flowGraphPanel";
 import { ObjectsPanel } from "../panels/objectsPanel";
 import { StatsKind, StatsPanel } from "../panels/statsPanel";
+import { TcpGraphPanel } from "../panels/tcpGraphPanel";
 import type { PcapEditorProvider } from "../pcapEditor";
 import { requireSession } from "./filter";
 
@@ -60,6 +62,22 @@ export function registerAnalysisCommands(
         return session ? StatsPanel.show(context, session, kind) : undefined;
       }),
     ),
+    vscode.commands.registerCommand("pcapViewer.statistics.tcpStreamGraph", (frame?: number) => {
+      const session = requireSession(provider);
+      const target = typeof frame === "number" ? frame : session?.selectedFrame;
+      if (!session) {
+        return undefined;
+      }
+      if (target === null || target === undefined) {
+        void vscode.window.showInformationMessage("Select a packet of the TCP stream first.");
+        return undefined;
+      }
+      return TcpGraphPanel.show(context, session, target);
+    }),
+    vscode.commands.registerCommand("pcapViewer.statistics.flowGraph", () => {
+      const session = requireSession(provider);
+      return session ? FlowGraphPanel.show(context, session) : undefined;
+    }),
     vscode.commands.registerCommand("pcapViewer.exportObjects", () => {
       const session = requireSession(provider);
       return session ? ObjectsPanel.show(context, session) : undefined;

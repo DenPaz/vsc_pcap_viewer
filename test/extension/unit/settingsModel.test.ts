@@ -4,6 +4,7 @@ import {
   COLORIZE_PALETTE,
   DEFAULT_NAME_RESOLUTION,
   nameResolutionLabel,
+  parseCommentBackup,
   safeFileName,
   normalizeNameResolution,
   sameNameResolution,
@@ -299,5 +300,20 @@ suite("settingsModel: object file names", () => {
     assert.equal(safeFileName("nul.txt"), "_nul.txt");
     assert.equal(safeFileName(" .. "), "object");
     assert.equal(safeFileName("x".repeat(300)).length, 200);
+  });
+});
+
+suite("settingsModel: packet comment backups", () => {
+  test("parseCommentBackup restores unsaved edits, deletions included", () => {
+    const edits = parseCommentBackup('{"3": "a comment", "7": null, "x": "no", "0": "no", "9": 5}');
+    assert.deepEqual(
+      [...edits],
+      [
+        [3, "a comment"],
+        [7, ""],
+      ],
+    );
+    assert.equal(parseCommentBackup("null").size, 0);
+    assert.throws(() => parseCommentBackup("{not json"));
   });
 });

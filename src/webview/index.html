@@ -104,6 +104,29 @@
 
         <section id="bottom">
           <div id="detail" aria-label="Packet details">
+            <div id="comment-bar" class="hidden" aria-label="Packet comment">
+              <div id="comment-view">
+                <span id="comment-text"></span>
+                <span
+                  id="comment-edited"
+                  class="hidden"
+                  title="Save the capture (Ctrl+S) to keep it"
+                  >unsaved</span
+                >
+                <button id="comment-edit" type="button" class="status-link">Edit</button>
+                <button id="comment-delete" type="button" class="status-link">Delete</button>
+              </div>
+              <div id="comment-editor" class="hidden">
+                <textarea id="comment-input" rows="3" aria-label="Packet comment"></textarea>
+                <div class="comment-actions">
+                  <button id="comment-apply" type="button">Apply</button>
+                  <button id="comment-cancel" type="button" class="secondary">Cancel</button>
+                  <span class="hint"
+                    >Ctrl+Enter applies, Esc cancels; save the capture (Ctrl+S) to keep it</span
+                  >
+                </div>
+              </div>
+            </div>
             <div id="detail-note" class="hidden" role="status"></div>
             <div id="detail-tree" role="tree" tabindex="0"></div>
             <div id="detail-placeholder" class="placeholder">

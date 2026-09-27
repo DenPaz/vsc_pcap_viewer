@@ -704,6 +704,137 @@
   }
 
   /**
+   * Flow graph: x positions of an arrow between node columns `from` and `to`
+   * (-1 = a node past the limit, drawn in the "other" column after the
+   * `nodes` shown). `self`: both ends are the same node.
+   * @param {number} from @param {number} to @param {number} nodes
+   * @param {{gutter: number, column: number}} layout
+   * @returns {{x1: number, x2: number, self: boolean}}
+   */
+  function flowArrow(from, to, nodes, layout) {
+    const x = (/** @type {number} */ i) =>
+      layout.gutter + ((i < 0 ? nodes : i) + 0.5) * layout.column;
+    return { x1: x(from), x2: x(to), self: from === to };
+  }
+
+  /**
+   * Round axis ticks covering `min`..`max` (for axes that don't start at 0).
+   * @param {number} min @param {number} max @param {number} [target]
+   * @returns {number[]}
+   */
+  function niceRange(min, max, target = 4) {
+    if (!(max > min)) {
+      return niceTicks(max > 0 ? max : 1, target);
+    }
+    const ticks = niceTicks(max - min, target);
+    const step = ticks[1] - ticks[0];
+    const start = Math.floor(min / step) * step;
+    const out = [];
+    for (let v = start; v < max + step / 2; v += step) {
+      out.push(Math.round(v * 1e9) / 1e9);
+    }
+    if (out[out.length - 1] < max) {
+      out.push(Math.round((out[out.length - 1] + step) * 1e9) / 1e9);
+    }
+    return out;
+  }
+
+  /** TCP stream graphs (tcp_graph points): index of each field in a point. */
+  const TP = { frame: 0, time: 1, dir: 2, seq: 3, len: 4, ack: 5, win: 6, rtt: 7, retrans: 8 };
+
+  /**
+   * One TCP stream graph for the data sent in direction `dir` (0 = A→B):
+   * - "stevens": sequence number over time, one segment per data packet
+   *   (`y`..`y2`), retransmissions flagged;
+   * - "throughput": bytes per second over time, a moving average over `window`
+   *   seconds (default: a twentieth of the stream's duration, 1 ms to 1 s);
+   * - "rtt": round-trip times (ms) of the receiver's ACKs;
+   * - "window": the receiver's advertised window (the line) and the bytes in
+   *   flight (the dots) over time.
+   * @param {any[][]} points @param {0 | 1} dir
+   * @param {"stevens" | "throughput" | "rtt" | "window"} kind
+   * @param {{window?: number}} [opts]
+   * @returns {{points: {x: number, y: number, y2?: number, frame: number, flag?: boolean}[], line?: {x: number, y: number}[], xLabel: string, yLabel: string}}
+   */
+  function tcpGraphSeries(points, dir, kind, opts = {}) {
+    const data = points.filter((p) => p[TP.dir] === dir && p[TP.len] > 0);
+    const back = points.filter((p) => p[TP.dir] !== dir);
+    const time = "Time (s)";
+    if (kind === "stevens") {
+      return {
+        points: data.map((p) => ({
+          x: p[TP.time],
+          y: p[TP.seq],
+          y2: p[TP.seq] + p[TP.len],
+          frame: p[TP.frame],
+          flag: !!p[TP.retrans],
+        })),
+        xLabel: time,
+        yLabel: "Sequence number (bytes)",
+      };
+    }
+    if (kind === "throughput") {
+      const times = data.map((p) => p[TP.time]);
+      const span = times.length ? times[times.length - 1] - times[0] : 0;
+      const w = opts.window ?? Math.min(1, Math.max(0.001, span / 20));
+      let start = 0;
+      let bytes = 0;
+      const out = data.map((p, i) => {
+        bytes += p[TP.len];
+        while (data[start][TP.time] <= p[TP.time] - w && start < i) {
+          bytes -= data[start][TP.len];
+          start++;
+        }
+        return { x: p[TP.time], y: bytes / w, frame: p[TP.frame] };
+      });
+      return {
+        points: out,
+        line: out,
+        xLabel: time,
+        yLabel: `Throughput (bytes/s, ${w} s average)`,
+      };
+    }
+    if (kind === "rtt") {
+      return {
+        points: back
+          .filter((p) => typeof p[TP.rtt] === "number")
+          .map((p) => ({ x: p[TP.time], y: p[TP.rtt] * 1000, frame: p[TP.frame] })),
+        xLabel: time,
+        yLabel: "Round-trip time (ms)",
+      };
+    }
+    const line = back.map((p) => ({ x: p[TP.time], y: p[TP.win] }));
+    /** @type {{x: number, y: number, frame: number}[]} */
+    const flight = [];
+    let acked = null;
+    let j = 0;
+    for (const p of data) {
+      while (j < back.length && back[j][TP.time] <= p[TP.time]) {
+        acked = Math.max(acked ?? 0, back[j][TP.ack]);
+        j++;
+      }
+      const sent = p[TP.seq] + p[TP.len];
+      flight.push({
+        x: p[TP.time],
+        y: Math.max(0, sent - (acked ?? p[TP.seq])),
+        frame: p[TP.frame],
+      });
+    }
+    return { points: flight, line, xLabel: time, yLabel: "Bytes (window: line, in flight: dots)" };
+  }
+
+  /**
+   * `text` cut to `max` characters with an ellipsis.
+   * @param {string} text @param {number} max
+   */
+  function truncate(text, max) {
+    if (max <= 0) {
+      return "";
+    }
+    return text.length <= max ? text : `${text.slice(0, Math.max(0, max - 1))}…`;
+  }
+
+  /**
    * Export Objects rows shown for a protocol ("" = all) and a text that must
    * appear (case-insensitively) in the name, host or content type.
    * @template {{protocol: string, name: string, host: string, contentType: string}} T
@@ -910,6 +1041,10 @@
     cellFilter,
     cellAddress,
     filterObjects,
+    flowArrow,
+    niceRange,
+    tcpGraphSeries,
+    truncate,
     layoutColumns,
     moveColumn,
     parseHexBytes,
