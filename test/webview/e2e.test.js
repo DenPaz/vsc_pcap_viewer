@@ -355,8 +355,14 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
       { name: "HTTP", filter: "http", foreground: "#12272e", background: "#e4ffc7" },
       { name: "TCP", filter: "tcp", foreground: "#000000", background: "#e7e6ff" },
     ];
+    // A separate coloring pass shows its progress until the colors arrive.
+    await post({ type: "coloringProgress", fraction: null });
+    await page.waitForFunction(() => / · Coloring…$/.test(document.querySelector("#status-left")?.textContent ?? ""));
+    await post({ type: "coloringProgress", fraction: 0.4 });
+    await page.waitForFunction(() => / · Coloring… 40%$/.test(document.querySelector("#status-left")?.textContent ?? ""));
     const res = await client.request("set_coloring", { rules: rules.map(({ filter, foreground, background }) => ({ filter, foreground, background })) }, { timeoutMs: 0 });
     await post({ type: "coloring", coloringId: res.coloringId, rules: rules.map(({ name, foreground, background }) => ({ name, foreground, background })) });
+    await page.waitForFunction(() => !/Coloring/.test(document.querySelector("#status-left")?.textContent ?? ""));
     await page.waitForFunction(() => document.querySelector("#list-rows .list-row")?.classList.contains("colored"));
     const rows = await page.$$eval("#list-rows .list-row", (els) =>
       els.map((r) => ({ frame: r.children[0].textContent, selected: r.classList.contains("selected"), bg: r.style.backgroundColor })),
@@ -374,6 +380,9 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
 
     await post({ type: "coloring", coloringId: 0, rules: [] }); // coloring turned off
     await page.waitForFunction(() => !document.querySelector("#list-rows .list-row.colored"));
+    await post({ type: "coloringProgress", fraction: 0.1 });
+    await post({ type: "coloringProgress", fraction: null, done: true }); // failed or cancelled
+    await page.waitForFunction(() => !/Coloring/.test(document.querySelector("#status-left")?.textContent ?? ""));
   });
 
   const statusText = () => page.textContent("#status-left");
@@ -892,12 +901,23 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
       );
     });
     try {
-      const info = await client.request("open", { path: big, stream: true, prefs: { "tcp.analyze_sequence_numbers": false } }, { timeoutMs: 0 });
+      // Coloring rules go with open: the index pass evaluates them, so rows come colored.
+      const colorRules = [
+        { name: "DNS", filter: "dns", foreground: "#12272e", background: "#c8e2ff" },
+        { name: "TCP", filter: "tcp", foreground: "#000000", background: "#e7e6ff" },
+      ];
+      const coloring = { rules: colorRules.map(({ filter, foreground, background }) => ({ filter, foreground, background })) };
+      const info = await client.request("open", { path: big, stream: true, coloring, prefs: { "tcp.analyze_sequence_numbers": false } }, { timeoutMs: 0 });
       assert.equal(info.indexing, true);
       assert.ok(info.frames > 0 && info.frames < 150_000);
+      assert.ok(info.coloring?.coloringId > 0, "colored by the index pass");
       await post({ type: "init", info, columns: customCols, layout, timeFormat: "relative", quickDetail: { after: 20000, window: 300 }, filter: "", history: [], savedFilters, elapsedMs: 1 });
+      await post({ type: "coloring", coloringId: info.coloring.coloringId, rules: colorRules.map(({ name, foreground, background }) => ({ name, foreground, background })) });
       await page.waitForFunction(() => /^Indexing… [\d,]+ packets so far/.test(document.querySelector("#status-left")?.textContent ?? ""));
       await page.waitForFunction(() => document.querySelector("#list-rows .list-row:not(.loading)")?.children[0]?.textContent === "1");
+      await page.waitForFunction(() => document.querySelector("#list-rows .list-row:not(.loading)")?.style.backgroundColor === "rgb(200, 226, 255)");
+      assert.match(await status(), /^Indexing…/, "colored while still indexing");
+      assert.doesNotMatch(await status(), /Coloring/, "no separate coloring pass");
       await growsAtTheEnd("Indexing… ");
       await page.evaluate(() => {
         /** @type {HTMLElement} */ (document.getElementById("list-viewport")).scrollTop = 0;

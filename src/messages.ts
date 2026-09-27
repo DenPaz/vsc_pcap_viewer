@@ -27,6 +27,12 @@ export interface OpenResult {
   indexing?: boolean;
   /** Opened from a saved index (no index pass). */
   fromCache?: boolean;
+  /**
+   * The coloring rules sent with `open` were evaluated by the index pass (or
+   * their colors were saved with the index): rows come with colors of this
+   * `coloringId`. `colored`/`errors` once known (else in the "done" event).
+   */
+  coloring?: { coloringId: number; colored?: number; errors?: Record<string, string> };
 }
 
 /** Backend methods the webview may call directly (anything else is refused). */
@@ -138,6 +144,8 @@ export type HostToWebview =
   | { type: "savedFilters"; savedFilters: SavedFilter[] }
   /** Row `color` values of list_packets results with this `coloringId` index `rules`. */
   | { type: "coloring"; coloringId: number; rules: { name: string; foreground: string; background: string }[] }
+  /** A separate coloring pass is running (`fraction` when known), or it ended without new colors (`done`). */
+  | { type: "coloringProgress"; fraction: number | null; done?: boolean }
   /** Whether to show the "✨ Ask AI" action (a language model is available and allowed). */
   | { type: "aiAvailable"; available: boolean }
   /** Validated suggestions for an aiSuggest request (empty with a `message` when there are none). */

@@ -132,6 +132,8 @@
     /** @type {number | null} */ elapsedMs: null,
     /** Palette for rows whose list_packets result had this coloringId. */
     /** @type {{id: number, rules: ColorRule[]} | null} */ coloring: null,
+    /** A separate coloring pass is running (fraction, or null when unknown); undefined when not. */
+    /** @type {number | null | undefined} */ coloringProgress: undefined,
     /** Column order / hidden columns (pcapViewer.columnLayout). */
     /** @type {{order: string[], hidden: string[]}} */ layout: { order: [], hidden: [] },
     /** Time column format (pcapViewer.timeFormat) and time reference frame (Ctrl+T). */
@@ -273,7 +275,13 @@
         break;
       case "coloring":
         state.coloring = msg.rules.length ? { id: msg.coloringId, rules: msg.rules } : null;
+        state.coloringProgress = undefined;
         refreshRows();
+        updateStatus();
+        break;
+      case "coloringProgress":
+        state.coloringProgress = msg.done ? undefined : msg.fraction;
+        updateStatus();
         break;
       case "aiAvailable":
         setAiAvailable(!!msg.available);
@@ -307,6 +315,7 @@
     state.filterFraction = null;
     state.filterPartial = false;
     state.earlyFilterEvents.clear();
+    state.coloringProgress = undefined;
     state.ready = true;
     setHistory(msg.history);
     state.savedFilters = msg.savedFilters || [];
@@ -3066,6 +3075,10 @@
     }
     if (state.markCount) {
       parts.push(`Marked: ${state.markCount.toLocaleString()}`);
+    }
+    if (state.coloringProgress !== undefined) {
+      const pct = state.coloringProgress !== null ? ` ${Math.round(state.coloringProgress * 100)}%` : "";
+      parts.push(`Coloring…${pct}`);
     }
     if (state.timeRef !== null) {
       parts.push(`Time reference: ${state.timeRef}`);

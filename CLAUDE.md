@@ -385,10 +385,24 @@ UI behaviour stays in the Chromium test (`test/webview/e2e.test.js`).
   "Could not compile" stderr is mapped back to rule indexes. The result is one
   byte per frame (`array('B')`, max 255 rules); `list_packets` rows carry
   `color` plus the page's `coloringId`, and the webview only uses colors whose
-  `coloringId` matches its palette (it's part of the page cache key). The pass
-  runs in the background after open (an extra tshark pass, tradeoff: simpler
-  than folding it into the index pass, and rule edits never re-index). The
-  selected row keeps the theme's selection colors. Defaults in package.json
+  `coloringId` matches its palette (it's part of the page cache key).
+  *At open* the rules are evaluated by the index pass itself (`open {coloring:
+  {rules}}`, `_InlineColoring`): `--color` in the same `WIRESHARK_CONFIG_DIR`
+  setup (`work_dir/colorfilters`) and `frame.coloring_rule.name` as the last
+  `-e` field, split off each line before the row is stored (`_read_rows`,
+  `_add_color`), so the row store is unchanged and every published row
+  already has its color. Measured +2 s on 1M packets (34.6 → 36.7 s) instead
+  of a separate ~30 s pass that had to wait for indexing. `open` returns
+  `coloring: {coloringId}` (plus `colored`/`errors` when complete; else in
+  "done"); compile-error stderr blocks are rules' errors, not warnings. If
+  tshark rejects the field, the pass is retried without colors. The colors
+  are saved with the index (`save_colors` after `save`, same rules digest as
+  set_coloring), and a saved-index open loads them (else no `coloring` and
+  the host runs set_coloring). *Rule changes* still use `set_coloring`, a
+  separate pass (never re-indexes): the host defers it while indexing
+  (`coloringStale`, run on "done") and reports its progress to the webview
+  (`coloringProgress`: "Coloring… 40%" in the status bar). The selected row
+  keeps the theme's selection colors. Defaults in package.json
   are checked against tshark by `test_default_coloring_rules_compile`; note
   tshark 4.2 rejects space-separated sets (`{3 4}`), so they avoid sets.
 - **Export**: captures via `tshark [-Y f] -F pcapng|pcap -w tmp` (`-P -T
@@ -521,7 +535,7 @@ UI behaviour stays in the Chromium test (`test/webview/e2e.test.js`).
 ## Performance notes (test/perf/bench.py, 1M synthetic packets, 146 MB)
 
 With `-o tcp.analyze_sequence_numbers:FALSE`: open 29–36 s (first rows after
-0.5 s with streaming; reopening from the saved index 0.01 s, 104 MB), filter 26 s
+0.5 s with streaming, colored; +2 s with the 14 default coloring rules; reopening from the saved index 0.01 s, 104 MB), filter 26 s
 (first matches after 0.5 s when streaming), page
 fetch < 1 ms, sort 0.6 s, detail of last frame 20–26 s (quick view of any
 frame 0.25–0.3 s with a 300-packet window), backend RSS 125 MB,

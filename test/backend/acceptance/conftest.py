@@ -210,7 +210,9 @@ def given_filter(world: World, expr: str) -> None:
 
 
 @when(parsers.re(r'I open the capture "(?P<name>[^"]+)"$'))
-def open_capture(world: World, name: str, prefs: dict[str, Any] | None = None) -> None:
+def open_capture(
+    world: World, name: str, prefs: dict[str, Any] | None = None, **extra: Any
+) -> None:
     params: dict[str, Any] = {
         "path": str(FIXTURES / name),
         "lua": world.lua,
@@ -221,6 +223,7 @@ def open_capture(world: World, name: str, prefs: dict[str, Any] | None = None) -
         params["prefs"] = prefs
     if world.cache_dir is not None:
         params["cache"] = {"dir": str(world.cache_dir)}
+    params.update(extra)
     world.progress = []
     world.ctx.progress = lambda p: world.progress.append(dict(p))
     world.info = world.call(world.service.open, params)
@@ -959,6 +962,21 @@ def given_coloring(world: World, filters: str) -> None:
 @when(parsers.parse("I set the coloring rules {filters}"))
 def when_coloring(world: World, filters: str) -> None:
     _set_coloring(world, items(filters))
+
+
+@when(parsers.re(r'I open the capture "(?P<name>[^"]+)" with the coloring rules (?P<filters>.+)$'))
+def open_with_coloring(world: World, name: str, filters: str) -> None:
+    rules = [{"filter": f} for f in items(filters)]
+    open_capture(world, name, coloring={"rules": rules})
+    assert world.error is None, world.error
+    assert world.info is not None
+    world.coloring = world.info.get("coloring")
+
+
+@then("the colors came with the packet list")
+def colors_with_open(world: World) -> None:
+    assert world.coloring is not None, "the index pass evaluated the rules"
+    assert world.rows()["coloringId"] == world.coloring["coloringId"]
 
 
 @when("I clear the coloring rules")
