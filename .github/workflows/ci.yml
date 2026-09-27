@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   linux:
@@ -47,7 +48,7 @@ jobs:
         run: pnpm run package
 
   cross-platform:
-    name: ${{ matrix.os }} (backend + unit)
+    name: ${{ matrix.os }} (backend, unit, webview e2e, VS Code smoke)
     strategy:
       fail-fast: false
       matrix:
@@ -55,6 +56,18 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      # tshark, capinfos, editcap and mergecap, so the tshark tests run here too.
+      - name: Install Wireshark (macOS)
+        if: runner.os == 'macOS'
+        run: brew install --formula wireshark
+      - name: Install Wireshark (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install wireshark -y --no-progress
+          "C:\Program Files\Wireshark" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: tshark version
+        run: tshark --version
       - uses: actions/setup-python@v5
         with:
           python-version-file: .python-version
@@ -67,6 +80,11 @@ jobs:
       - run: uv sync --locked
       - run: pnpm install --frozen-lockfile
       - run: pnpm run lint
-      # tshark-dependent tests skip when Wireshark is not installed.
-      - run: uv run pytest
-      - run: pnpm run test:unit
+      - name: Backend tests
+        run: uv run pytest
+      - name: Install Chromium for webview e2e
+        run: pnpm exec playwright-core install chromium
+      - name: Unit + webview tests
+        run: pnpm run test:unit
+      - name: VS Code smoke test
+        run: pnpm run test:extension

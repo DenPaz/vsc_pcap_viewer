@@ -47,6 +47,12 @@ The `Makefile` wraps all of these (`make` lists the targets; `make check` = lint
 - Node tests that start the backend use `PCAP_VIEWER_PYTHON` if set, else the
   uv `.venv` interpreter, so they run on 3.14 even when the system `python3` is older.
 - pytest turns `ResourceWarning` into errors: leaked tshark pipes are bugs.
+- **CI** (`.github/workflows/ci.yml`) runs everything on Linux (apt tshark),
+  macOS (`brew install --formula wireshark`) and Windows (`choco install
+  wireshark`, `C:\Program Files\Wireshark` added to PATH): lint, backend and
+  acceptance tests with tshark, unit + Chromium e2e tests, and the VS Code
+  smoke test (Linux under xvfb). It runs on pull requests, pushes to main and
+  by hand (`workflow_dispatch`).
 
 ## Layout
 
