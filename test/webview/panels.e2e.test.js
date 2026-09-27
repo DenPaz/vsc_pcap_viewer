@@ -313,6 +313,74 @@ maybe("statistics and follow panels (Chromium + real backend)", function () {
     assert.equal(log.at(-1).type, "openSettings");
   });
 
+  test("export objects: list, filter, sort, go to packet and save", async () => {
+    const objects = await startBackend(deps);
+    try {
+      await objects.request("open", { path: path.join(FIXTURES, "objects.pcap") }, { timeoutMs: 0 });
+      const { page, problems, post } = await newPage(browser);
+      const log = [];
+      // A stand-in for ObjectsPanel (src/panels/objectsPanel.ts).
+      await page.exposeFunction("__toHost", async (raw) => {
+        const msg = JSON.parse(raw);
+        log.push(msg);
+        if (msg.type === "ready") {
+          await post({ type: "init", title: "Export Objects · objects.pcap" });
+        }
+        if (msg.type === "ready" || msg.type === "list") {
+          const onProgress = (p) => void post({ type: "progress", fraction: p.fraction ?? null });
+          objects.request("export_objects", {}, { timeoutMs: 0, onProgress }).then(
+            (res) => post({ type: "objects", objects: res.objects }),
+            (err) => post({ type: "error", message: err.message, cancelled: err.code === -32800 }),
+          );
+        }
+      });
+      await page.setContent(renderPanelHtml(origin, "objects.js"), { waitUntil: "load" });
+      pages.push(problems);
+      await waitRows(page, 7);
+      const all = await rows(page);
+      assert.deepEqual(all[0], ["6", "HTTP", "example.com", "image/png", "776 B", "logo.png"]);
+      assert.deepEqual(all.map((r) => r[5]), ["logo.png", "report", "upload", "dup.txt", "dup(1).txt", "config.bin", "Test report.eml"]);
+      assert.match(await page.textContent(".status"), /^7 objects, /);
+      assert.deepEqual(await page.$$eval("#objects-protocol option", (os) => os.map((o) => o.textContent)), ["All (7)", "HTTP (5)", "TFTP (1)", "IMF (1)"]);
+      assert.ok(await page.isDisabled("#objects-save"), "nothing selected yet");
+
+      await page.selectOption("#objects-protocol", "tftp");
+      await waitRows(page, 1);
+      assert.equal(await page.textContent("#objects-save-all"), "Save 1 Shown…");
+      await page.selectOption("#objects-protocol", "");
+      await page.fill("#objects-text", "DUP");
+      await waitRows(page, 2);
+      await page.fill("#objects-text", "");
+      await waitRows(page, 7);
+
+      await page.click("th:has-text('Size')"); // numeric: largest first
+      assert.deepEqual((await rows(page)).map((r) => r[5]).slice(0, 3), ["report", "logo.png", "config.bin"]);
+      await page.click("th:has-text('Size')");
+      assert.equal((await rows(page))[6][5], "report");
+
+      await page.click("table.stats tbody tr:has-text('config.bin')");
+      assert.ok(!(await page.isDisabled("#objects-save")));
+      await page.click("#objects-save");
+      assert.deepEqual(log.at(-1), { type: "save", id: 5 });
+      await page.click("#objects-goto");
+      assert.deepEqual(log.at(-1), { type: "goto", frame: 27 });
+      await page.focus("table.stats");
+      await page.keyboard.press("ArrowUp"); // (sorted by size, ascending: the mail comes before)
+      await page.keyboard.press("Enter");
+      assert.deepEqual(log.at(-1), { type: "goto", frame: 53 });
+      await page.dblclick("table.stats tbody tr:has-text('logo.png')");
+      assert.deepEqual(log.at(-1), { type: "goto", frame: 6 });
+      await page.click("#objects-save-all");
+      assert.deepEqual(log.at(-1).type, "saveAll");
+      assert.deepEqual([...log.at(-1).ids].sort(), [0, 1, 2, 3, 4, 5, 6]);
+
+      await page.click("button:has-text('Refresh')");
+      await page.waitForFunction(() => /^7 objects/.test(document.querySelector(".status")?.textContent ?? ""));
+    } finally {
+      await objects.dispose();
+    }
+  });
+
   test("no script errors or CSP violations in any panel", () => {
     for (const p of pages) {
       assert.deepEqual(p.errors, []);

@@ -65,9 +65,10 @@ The `Makefile` wraps all of these (`make` lists the targets; `make check` = lint
 - `src/webview/` plain JS/CSS/HTML (no build step). `lib.js` = pure helpers
   shared with Node tests; `main.js` = UI. Type-checked via JSDoc +
   `tsconfig.webview.json`.
-- `src/panels/` statistics, follow-stream and coloring-rules webview panels
-  (`panelHtml.ts` builds their CSP'd HTML); their UIs are `src/webview/stats.js`,
-  `follow.js` and `coloring.js` with `panel.css`.
+- `src/panels/` statistics, follow-stream, coloring-rules and export-objects
+  webview panels (`panelHtml.ts` builds their CSP'd HTML); their UIs are
+  `src/webview/stats.js`, `follow.js`, `coloring.js` and `objects.js` with
+  `panel.css`.
 - `backend/pcap_backend/` Python package run as `python -m pcap_backend`
   with `PYTHONPATH=backend`. `server.py` (JSON-RPC), `pcap_service.py`
   (methods), `tshark.py` (discovery/argv/process helpers), `cache.py`
@@ -75,7 +76,8 @@ The `Makefile` wraps all of these (`make` lists the targets; `make check` = lint
   `stats.py` (`-z` report and follow parsers), `fields.py` (field catalogue),
   `coloring.py` (coloring rules → `colorfilters`), `navigation.py` (find
   expressions, hex parsing, frame-set filters, time formatting), `export.py` (destination
-  checks, atomic output, CSV/JSON writers), `protocol.py` (error codes,
+  checks, atomic output, CSV/JSON writers), `objects.py` (export objects:
+  linking files to packets, safe names), `protocol.py` (error codes,
   request context), `cancellation.py`, `index_cache.py` (saved indexes),
   `procs.py` (stopping children, also
   when the kill is refused), `sandbox.py` (AppArmor/Snap detection and hints).
@@ -440,6 +442,50 @@ UI behaviour stays in the Chromium test (`test/webview/e2e.test.js`).
   tshark compile errors only mark the row (tshark skips such rules). "saved"
   carries the stored rules and the editor reloads them; a settings change
   while the editor has unsaved edits only says so (Revert loads it).
+- **Name resolution** (`pcapViewer.nameResolution.{mac,network,capturedDns,
+  transport,external}`, `open {names}`): `DissectionOptions.names` holds the
+  `-N` letters (`name_flags`: m, n, d, N, t; d and N only with n; none = `-n`;
+  `names` absent = tshark's own preferences, as before) and goes into every
+  dissecting pass, so the list, details, filters (`ip.src_host`) and coloring
+  agree. The `-z` passes (statistics, follow) add `-n` after it: their rows
+  become address filters (this also fixed MAC names like "Broadcast" from the
+  user's Wireshark preferences breaking eth endpoint filters). `-H` can't add
+  a hosts file (tshark only uses it when writing), so names come from the
+  capture's DNS answers, the system hosts file (fingerprinted in the index key,
+  `system_hosts_file`) and the personal `hosts` file (in the config
+  fingerprint). When names can replace addresses (m or n), the index pass sets
+  `gui.column.format` (titles = the legacy field names) so
+  `_ws.col.unres_src/unres_dst` exist, stores them after the custom columns,
+  blanked when equal to Source/Destination (`_blank_same_addresses`), and
+  `list_packets` rows carry `addresses: [src, dst]` when a name is shown
+  (`_add_addresses`); a tshark rejecting those fields just drops them. The
+  webview's `lib.cellAddress` gives cell filters the address and shows it as
+  the cell's tooltip. tshark leaves port names off the first packet of a pass
+  (the services table loads lazily); Wireshark shows it after re-dissecting.
+  The host sends the switches, reloads sessions whose `names` differ when the
+  settings change (debounced: *PCAP: Name Resolution…* writes several keys),
+  and posts the status-bar label (`nameResolutionLabel`) in `init`.
+  `external` is application-scoped (a workspace can't make you send lookups).
+- **Export Objects** (`export_objects`, `save_objects`, `objects.py`,
+  `ObjectsPanel`): one `tshark -2 --export-objects <p>,<dir>` pass for all six
+  protocols into `work_dir/objects/<p>/` (`-2`: TFTP transfers are only
+  written in two-pass mode), cached per open capture (`_objects`, keyed by
+  the `_Open`), and it runs while a streaming open still indexes. tshark
+  only writes files, so the same pass prints fields (`objects.FIELDS`,
+  aggregator `\x1e` since URIs contain commas) that `Linker` uses to link each
+  file to its packet: HTTP by sha256 of `http.file_data` (the decoded body
+  tshark saves: dechunked, gunzipped), else by name (URI's last segment, IMF
+  `subject.eml`, TFTP requested file's basename; `name(1).ext` duplicates
+  consume hints in order), and `object<N>.ext` names by N. Progress comes
+  from frame lengths in the second pass (the first prints nothing). Linking
+  fields tshark rejects are dropped and the pass retried. Saving copies from
+  the work dir through `atomic_output`: `dest` for one object (the host's
+  save dialog suggests `safeFileName`), `dir` for many (`safe_name`,
+  `unique_path` → `name (1).ext`, never overwriting); object bytes never pass
+  through JSON-RPC or the webview. The panel filters by protocol and text
+  (`lib.filterObjects`), sorts, and goes to the packet on double-click/Enter.
+  `objects.pcap` (generate.py) has HTTP (PNG, gzip+chunked text, a POST body,
+  a body served twice), a two-block TFTP read and an SMTP mail.
 - **AI filter help** (`src/aiFilter.ts` pure, `src/ai.ts` host, `src/commands/ai.ts`):
   Copilot's inline completions can't reach the webview, so the host uses
   `vscode.lm.selectChatModels({ vendor: "copilot" })` (stable in 1.90 = our
@@ -589,4 +635,6 @@ Step 7: coloring rules (defaults, Colorize with Filter, toggle), export
 
 Beyond the brief: navigation and customisation, multi-select, AI help for
 filters and explaining packets, a quick view for late packets in huge files,
-streaming open and filters with saved indexes, and TLS decryption with a key log.
+streaming open and filters with saved indexes, TLS decryption with a key log,
+export of packet dissections, merging captures, a coloring rules editor,
+Export Objects and name resolution.

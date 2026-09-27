@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- *PCAP: Export Objects…*: the files a capture carried over HTTP, SMB, TFTP,
+  IMF, DICOM and FTP-DATA, with the packet, host, content type and size of
+  each; filter, sort, go to the packet, and save one or all of them.
+- Name resolution (*PCAP: Name Resolution…*, the status bar's *Names* link,
+  `pcapViewer.nameResolution.*`): names for MAC addresses, IP addresses (from
+  the capture's DNS answers and hosts files; network lookups only if allowed)
+  and ports. Resolved names show their address as a tooltip and cell filters
+  use the address.
+- Fixed: statistics showed MAC names such as "Broadcast" from Wireshark's
+  preferences, and their rows then built filters that matched nothing; reports
+  now always show addresses.
 - *PCAP: Export Packet Dissections…*: the full packet details of the
   displayed, all, selected or marked packets as plain text, PDML or JSON,
   optionally with the packet bytes.

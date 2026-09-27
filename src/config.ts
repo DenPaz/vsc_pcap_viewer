@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { ColoringRule, ColumnLayout, ColumnSetting, QuickDetail, SavedFilter, TimeFormat, configTargetFor, normalizeColoringRules, normalizeColumnLayout, normalizeColumns, normalizeSavedFilters, normalizeTimeFormat, resolveLuaScripts, resolveSettingPath, withTlsKeyLog } from "./settingsModel";
+import { ColoringRule, ColumnLayout, ColumnSetting, NameResolution, QuickDetail, SavedFilter, TimeFormat, configTargetFor, normalizeColoringRules, normalizeColumnLayout, normalizeColumns, normalizeNameResolution, normalizeSavedFilters, normalizeTimeFormat, resolveLuaScripts, resolveSettingPath, withTlsKeyLog } from "./settingsModel";
 
 export const SECTION = "pcapViewer";
 
@@ -24,6 +24,7 @@ export interface Settings {
   quickDetail: QuickDetail;
   /** Saved packet-list indexes (reopening skips the index pass); 0 bytes = off. */
   indexCacheBytes: number;
+  nameResolution: NameResolution;
 }
 
 export function readQuickDetail(scope?: vscode.Uri): QuickDetail {
@@ -58,6 +59,7 @@ export function readSettings(scope?: vscode.Uri): Settings {
     requestTimeoutMs: cfg.get<number>("requestTimeoutSeconds", 60) * 1000,
     quickDetail: readQuickDetail(scope),
     indexCacheBytes: cfg.get<boolean>("indexCache.enabled", true) ? Math.max(0, cfg.get<number>("indexCache.maxSizeMB", 1024)) * 1024 * 1024 : 0,
+    nameResolution: normalizeNameResolution((key) => cfg.get<unknown>(`nameResolution.${key}`)),
   };
 }
 

@@ -68,6 +68,7 @@
     statusLeft: $("status-left"),
     statusRight: $("status-right"),
     statusTime: $("status-time"),
+    statusNames: $("status-names"),
     statusInfo: $("status-info"),
     findBar: $("find-bar"),
     findMode: /** @type {HTMLSelectElement} */ ($("find-mode")),
@@ -94,7 +95,7 @@
 
   /**
    * @typedef {{id: string, title: string, field: string, numeric?: boolean, custom?: boolean}} Column
-   * @typedef {{number: number, cells: string[], color?: number, cid?: number, marked?: boolean}} Row
+   * @typedef {{number: number, cells: string[], color?: number, cid?: number, marked?: boolean, addresses?: string[]}} Row
    * @typedef {{name: string, foreground: string, background: string}} ColorRule
    */
   const state = {
@@ -302,6 +303,7 @@
     state.customColumns = lib.acceptedColumns(msg.columns, msg.info.columns.slice(7));
     state.layout = msg.layout || { order: [], hidden: [] };
     state.timeFormat = msg.timeFormat || "relative";
+    el.statusNames.textContent = msg.names || "";
     state.quickDetail = msg.quickDetail || state.quickDetail;
     state.timeRef = null;
     state.markCount = 0;
@@ -780,6 +782,11 @@
         const text = row ? row.cells[cols[c].index] ?? "" : c === 0 ? "…" : "";
         if (cell.textContent !== text) {
           cell.textContent = text;
+        }
+        // A resolved name: the address as tooltip.
+        const address = (row && lib.cellAddress(cols[c].column, row)) ?? "";
+        if (cell.title !== address) {
+          cell.title = address;
         }
       }
     }
@@ -1736,7 +1743,8 @@
     // The clicked cell: Apply as Filter on its value (validated when applied).
     const cellEl = /** @type {HTMLElement | null} */ (/** @type {HTMLElement} */ (e.target).closest(".list-row > div"));
     const vis = cellEl ? visibleColumns()[[...rowEl.children].indexOf(cellEl)] : undefined;
-    const cellValue = vis ? row.cells[vis.index] ?? "" : "";
+    // (A resolved name filters on its address.)
+    const cellValue = vis ? lib.cellAddress(vis.column, row) ?? row.cells[vis.index] ?? "" : "";
     const filter = vis ? lib.cellFilter(vis.column, cellValue) : null;
     const current = state.appliedFilter;
     /** @type {[string, (() => void) | null][]} */
@@ -2752,6 +2760,7 @@
   });
 
   el.statusTime.addEventListener("click", () => vscode.postMessage({ type: "pickTimeFormat" }));
+  el.statusNames.addEventListener("click", () => vscode.postMessage({ type: "pickNameResolution" }));
 
   // ------------------------------------------------------------------ column header menu and drag
 
@@ -3051,6 +3060,7 @@
     const info = state.info;
     el.statusTime.textContent = TIME_LABELS[state.timeFormat] ?? "";
     el.statusTime.classList.toggle("hidden", !info);
+    el.statusNames.classList.toggle("hidden", !info);
     if (!info) {
       el.statusLeft.textContent = "";
       el.statusInfo.textContent = "";

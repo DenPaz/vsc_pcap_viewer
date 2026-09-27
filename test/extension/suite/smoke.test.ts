@@ -8,6 +8,7 @@ import * as vscode from "vscode";
 import type { PcapViewerApi } from "../../../src/extension";
 // Same module instances as the extension's (both load out/src/panels/*.js).
 import { FollowPanel } from "../../../src/panels/followPanel";
+import { ObjectsPanel } from "../../../src/panels/objectsPanel";
 import { StatsPanel } from "../../../src/panels/statsPanel";
 
 const FIXTURES = path.resolve(__dirname, "../../../../test/fixtures");
@@ -105,6 +106,8 @@ suite("PCAP Viewer smoke test", () => {
       "pcapViewer.setTlsKeyLogFile",
       "pcapViewer.exportDissections",
       "pcapViewer.mergeCaptures",
+      "pcapViewer.exportObjects",
+      "pcapViewer.nameResolution",
       "pcapViewer.toggleTimeReference",
       "pcapViewer.timeFormat",
     ]) {
@@ -120,6 +123,15 @@ suite("PCAP Viewer smoke test", () => {
     await vscode.commands.executeCommand("pcapViewer.statistics.conversations");
     const stats = await waitFor(() => StatsPanel.all.find((p) => p.kind === "conversations" && p.session === session));
 
+    // Export Objects lists what the capture carried (tshark's --export-objects).
+    session.reveal();
+    await vscode.commands.executeCommand("pcapViewer.exportObjects");
+    const objects = await waitFor(() => ObjectsPanel.all.find((p) => p.session === session)?.objects);
+    assert.deepEqual(
+      objects.map((o) => [o.name, o.frame]),
+      [["index.html", 7]],
+    );
+
     // With a second capture focused, focusing the first capture's panel must
     // make the first capture the target of capture commands again.
     const other = vscode.Uri.file(path.join(FIXTURES, "dns.pcap"));
@@ -131,6 +143,34 @@ suite("PCAP Viewer smoke test", () => {
     // Closing the editor must stop the backend process (and close its panels).
     await vscode.commands.executeCommand("workbench.action.closeAllEditors");
     await waitFor(() => (backend.running ? undefined : true), 10_000);
+  });
+
+  test("changing name resolution re-indexes open captures", async () => {
+    const ext = vscode.extensions.all.find((e) => e.packageJSON.name === "pcap-viewer");
+    const api = (await ext!.activate()) as PcapViewerApi;
+    const uri = vscode.Uri.file(path.join(FIXTURES, "http.pcap"));
+    await vscode.commands.executeCommand("vscode.openWith", uri, "pcapViewer.editor");
+    const session = await waitFor(() => api.provider.allSessions.find((s) => s.uri.fsPath === uri.fsPath && indexed(s)));
+    // The Info of frame 2, read from whichever backend the session has (it restarts on reload).
+    const info = async (): Promise<string | undefined> => {
+      try {
+        const page = await session.backend?.request<{ rows: { cells: string[] }[] }>("list_packets", { offset: 1, limit: 1 });
+        return page?.rows[0]?.cells[6];
+      } catch {
+        return undefined;
+      }
+    };
+    assert.match(await waitForAsync(info), /^80 → 50000 /);
+    const cfg = vscode.workspace.getConfiguration("pcapViewer");
+    await cfg.update("nameResolution.transport", true, vscode.ConfigurationTarget.Global);
+    try {
+      await waitForAsync(async () => ((await info())?.startsWith("http(80) → 50000") ? true : undefined));
+      assert.ok(session.names.transport);
+    } finally {
+      await cfg.update("nameResolution.transport", undefined, vscode.ConfigurationTarget.Global);
+    }
+    await vscode.commands.executeCommand("workbench.action.closeAllEditors");
+    await waitFor(() => (api.provider.allSessions.length ? undefined : true), 10_000);
   });
 
   test("file types: capture files open in the viewer, generic extensions only on request", async () => {

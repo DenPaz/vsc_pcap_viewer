@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { FOLLOW_LABELS, FollowPanel, FollowProto } from "../panels/followPanel";
+import { ObjectsPanel } from "../panels/objectsPanel";
 import { StatsKind, StatsPanel } from "../panels/statsPanel";
 import type { PcapEditorProvider } from "../pcapEditor";
 import { requireSession } from "./filter";
@@ -50,6 +51,10 @@ export function registerAnalysisCommands(context: vscode.ExtensionContext, provi
         return session ? StatsPanel.show(context, session, kind) : undefined;
       }),
     ),
+    vscode.commands.registerCommand("pcapViewer.exportObjects", () => {
+      const session = requireSession(provider);
+      return session ? ObjectsPanel.show(context, session) : undefined;
+    }),
   );
 }
 

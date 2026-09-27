@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import coloring, navigation, pdml, stats
+from . import coloring, navigation, objects, pdml, stats
 from .cache import FrameIndex, LruCache, RowStore, sort_frames, sort_frames_by_key
 from .cancellation import CancelledError, CancelToken
 from .export import (
@@ -50,6 +50,7 @@ from .export import (
 )
 from .fields import FieldCatalog, parse_field_list
 from .index_cache import IndexCache, folder_fingerprint, index_key, rules_key
+from .objects import ExportedObject
 from .protocol import (
     FilterError,
     IndexingError,
@@ -117,6 +118,15 @@ BASE_COLUMNS: tuple[Column, ...] = (
     Column("protocol", "Protocol", "_ws.col.protocol", "_ws.col.Protocol"),
     Column("length", "Length", "frame.len", "frame.len", numeric=True),
     Column("info", "Info", "_ws.col.info", "_ws.col.Info"),
+)
+# With name resolution, Source/Destination can show names; the index pass then
+# also stores the addresses (blank when the same as shown) for cell filters.
+# These column fields exist only for columns in gui.column.format, which must
+# then list every column field used (titles = the legacy field names).
+UNRESOLVED_FIELDS = ("_ws.col.unres_src", "_ws.col.unres_dst")
+_UNRESOLVED_FORMAT = (
+    'gui.column.format:"Source","%s","Destination","%d","Protocol","%p","Info","%i",'
+    '"unres_src","%us","unres_dst","%ud"'
 )
 _TIME_IDX = 1  # position of frame.time_relative in BASE_COLUMNS
 _LEN_IDX = 5  # position of frame.len in BASE_COLUMNS
@@ -345,6 +355,10 @@ class PcapService:
         self._file: _Open | None = None
         self._view: _View | None = None
         self._work_dir: Path | None = None
+        # Export Objects: (the capture they came from, the objects), and a lock
+        # so concurrent requests extract once.
+        self._objects: tuple[_Open, list[ExportedObject]] | None = None
+        self._objects_lock = threading.Lock()
         self._filter_seq = 0
         self._next_filter_id = 0
         self._store_seq = 0
@@ -413,6 +427,7 @@ class PcapService:
                 s.rows.close()
         self._file = None
         self._view = None
+        self._objects = None
         self._colors = None
         self._marks = set()
         for cache in (self._filters, self._sorts, self._sort_columns, self._details, self._quick):
@@ -521,6 +536,7 @@ class PcapService:
             str_list(params, "lua"),
             str_list(params, "decodeAs"),
             param(params, "prefs", dict, {}),
+            _names_param(params),
         )
         base_fields = {c.field for c in BASE_COLUMNS}
         columns = [
@@ -792,6 +808,7 @@ class PcapService:
                 prefs=dict(options.prefs),
                 columns=columns,
                 config=folder_fingerprint(folders),
+                names=options.names,
             )
         except (OSError, ToolError) as exc:
             print(f"pcap-viewer: index cache off for this capture: {exc}", file=sys.stderr)
@@ -843,6 +860,9 @@ class PcapService:
         # (name the caller asked for, name actually passed to tshark)
         pairs = [(c.field, c.field) for c in BASE_COLUMNS] if base else []
         pairs += [(fld, fld) for fld in custom]
+        unresolved = base and tshark.options.resolves_addresses
+        if unresolved:
+            pairs += [(fld, fld) for fld in UNRESOLVED_FIELDS]
         legacy = {c.field: c.legacy_field for c in BASE_COLUMNS}
         size = max(1, info.size)
         overhead = _RECORD_OVERHEAD.get(sniff_format(path) or "") if base else None
@@ -863,12 +883,15 @@ class PcapService:
                 fields = [*fields, _COLOR_FIELD]
                 color_args = ["--color"]
                 inline.colors, inline.colored = array("B", [0]), 0
-            argv = tshark.argv(*color_args, *_fields_args(fields), capture=str(path))
+            column_args = ["-o", _UNRESOLVED_FORMAT] if unresolved else []
+            argv = tshark.argv(*column_args, *color_args, *_fields_args(fields), capture=str(path))
             store = _Store(rows, tuple(name for name, _ in pairs))
             tracker = _PassProgress(ctx, store, on_rows, size, overhead)
             try:
                 lines = stream_lines(argv, result, ctx.token, env=env)
-                bad_lines = _read_rows(lines, rows, tracker, base=base, inline=inline)
+                bad_lines = _read_rows(
+                    lines, rows, tracker, base=base, inline=inline, unresolved=unresolved
+                )
             finally:
                 rows.finish()
             if result.lines == 0 and result.returncode not in (0, None):
@@ -878,17 +901,14 @@ class PcapService:
                 if inline is not None and _COLOR_FIELD in rejected:
                     inline.enabled, inline, env = False, None, None  # index without colors
                     continue
+                if unresolved and set(UNRESOLVED_FIELDS) & set(rejected):
+                    unresolved = False  # cell filters then only work on addresses shown
+                    pairs = [p for p in pairs if p[1] not in UNRESOLVED_FIELDS]
+                    continue
                 if rejected and _drop_rejected(pairs, rejected, legacy, custom, info.warnings):
                     continue
                 raise _index_error(tshark, path, result)
-            if bad_lines:
-                info.warnings.append(f"{bad_lines} unparseable line(s) in tshark output skipped")
-            if result.stderr:
-                info.warnings += _stderr_warnings(result.stderr)
-            if inline is not None:
-                inline.errors.update(coloring.parse_compile_errors(result.stderr))
-                while len(inline.colors) <= len(rows):  # one byte per frame, like set_coloring
-                    inline.colors.append(0)
+            _finish_index_pass(info, result, bad_lines, len(rows), inline)
             ctx.progress({"phase": "index", "frames": len(rows), "fraction": 1.0})
             # Columns are exposed under the names the caller asked for.
             return store
@@ -1209,6 +1229,7 @@ class PcapService:
             {"number": n, "cells": base_rows[i][:n_base] + [col[i] for col in extra_cols]}
             for i, n in enumerate(frames)
         ]
+        _add_addresses(f.base.fields, base_rows, rows)
         if "timeFormat" in params:
             fmt = param(params, "timeFormat", str)
             ref = params.get("timeRef")
@@ -1797,7 +1818,8 @@ class PcapService:
         else:
             stream = self._stream_of(f, proto, param(params, "frame", int), ctx)
 
-        argv = f.tshark.argv("-q", "-z", f"follow,{proto},raw,{stream}", capture=str(f.path))
+        # -n: node addresses stay addresses, whatever the list's name resolution.
+        argv = f.tshark.argv("-q", "-n", "-z", f"follow,{proto},raw,{stream}", capture=str(f.path))
         result = StreamResult()
         lines: list[str] = []
         size = 0
@@ -1903,7 +1925,8 @@ class PcapService:
         return result
 
     def _tap(self, f: _Open, spec: str, ctx: RequestContext) -> str:
-        res = run(f.tshark.argv("-q", "-z", spec, capture=str(f.path)), ctx.token)
+        # -n (after the name resolution options): report rows become address filters.
+        res = run(f.tshark.argv("-q", "-n", "-z", spec, capture=str(f.path)), ctx.token)
         text = res.stdout.decode("utf-8", "replace")
         if res.returncode != 0 and not text.strip():
             raise f.tshark.error(res.stderr, res.returncode, f"tshark -z {spec} failed")
@@ -2301,6 +2324,102 @@ class PcapService:
                 raise ToolError(res.stderr.strip() or "mergecap failed", res.stderr, res.returncode)
         return {"ok": True, "path": str(dest), "size": dest.stat().st_size, "inputs": len(inputs)}
 
+    # ------------------------------------------------------------------ objects
+
+    def export_objects(self, params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
+        """Files carried by HTTP, SMB, TFTP, IMF, DICOM and FTP-DATA (see
+        objects.py): ``objects`` with ``id``, ``protocol``, ``name``, ``size``,
+        and when known the ``frame`` that carried it, ``host`` and ``contentType``.
+        One tshark pass (two passes over the file) the first time, then cached;
+        works while a streaming open is still indexing."""
+        f = self._require_file()
+        with self._objects_lock:
+            if self._objects is None or self._objects[0] is not f:
+                self._objects = (f, self._extract_objects(f, ctx))
+            found = self._objects[1]
+        return {"objects": [o.to_json(i) for i, o in enumerate(found)]}
+
+    def _extract_objects(self, f: _Open, ctx: RequestContext) -> list[ExportedObject]:
+        with self._lock:
+            if self._work_dir is None:
+                raise NotOpenError()
+            folder = self._work_dir / "objects"
+        shutil.rmtree(folder, ignore_errors=True)  # (a cancelled earlier run)
+        folder.mkdir()
+        wanted = list(objects.FIELDS)
+        size = max(1, f.info.size)
+        overhead = _RECORD_OVERHEAD.get(sniff_format(f.path) or "")
+        for _attempt in range(len(wanted)):
+            eo = [a for p in objects.PROTOCOLS for a in ("--export-objects", f"{p},{folder / p}")]
+            argv = f.tshark.argv(
+                "-2", *eo, *_fields_args(wanted), "-E", f"aggregator={objects.AGGREGATOR}",
+                capture=str(f.path),
+            )  # fmt: skip
+            linker = objects.Linker()
+            result = StreamResult()
+            seen, last = 0, 0.0
+            # The first pass prints nothing; the second prints a line per packet.
+            ctx.progress({"phase": "objects", "fraction": None})
+            for line in stream_lines(argv, result, ctx.token):
+                values = dict(
+                    zip(wanted, line.decode("utf-8", "replace").split("\t"), strict=False)
+                )
+                linker.add(values)
+                if overhead is not None and values.get("frame.len", "").isdigit():
+                    seen += int(values["frame.len"]) + overhead
+                    now = time.monotonic()
+                    if now - last > 0.2:
+                        last = now
+                        ctx.progress({"phase": "objects", "fraction": min(1.0, seen / size)})
+            if result.returncode not in (0, None) and result.lines == 0:
+                rejected = [r for r in _rejected_fields(result.stderr) if r in wanted[2:]]
+                if rejected:  # (an older tshark without one of the linking fields)
+                    wanted = [w for w in wanted if w not in rejected]
+                    shutil.rmtree(folder, ignore_errors=True)
+                    folder.mkdir()
+                    continue
+                raise f.tshark.error(result.stderr, result.returncode, "extracting objects failed")
+            return objects.collect(folder, linker)
+        raise ToolError("tshark rejected the fields that link objects to packets")
+
+    def save_objects(self, params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
+        """Save exported objects (``ids`` from export_objects): one object to the
+        file ``dest``, or any number into the folder ``dir`` under their own
+        names (made safe; ``name (1).ext`` instead of overwriting). Each file
+        only appears once complete."""
+        f = self._require_file()
+        with self._objects_lock:
+            found = self._objects[1] if self._objects and self._objects[0] is f else None
+        if found is None:
+            raise InvalidParamsError("list the objects first (export_objects)")
+        ids = params.get("ids")
+        if not isinstance(ids, list) or not ids or not all(isinstance(i, int) for i in ids):
+            raise InvalidParamsError("ids must be a non-empty list of object ids")
+        if any(not 0 <= i < len(found) for i in ids):
+            raise InvalidParamsError("unknown object id")
+        chosen = [found[i] for i in dict.fromkeys(ids)]
+        if "dest" in params:
+            if len(chosen) != 1:
+                raise InvalidParamsError("dest takes one object; use dir for several")
+            targets = [check_destination(param(params, "dest", str), f.path)]
+        else:
+            folder = Path(param(params, "dir", str)).expanduser()
+            if not folder.is_absolute() or not folder.is_dir():
+                raise InvalidParamsError(f"not an existing folder: {folder}")
+            taken: set[str] = set()
+            targets = [
+                check_destination(
+                    str(objects.unique_path(folder, objects.safe_name(o.name), taken)), f.path
+                )
+                for o in chosen
+            ]
+        for i, (obj, dest) in enumerate(zip(chosen, targets, strict=True)):
+            ctx.token.raise_if_cancelled()
+            ctx.progress({"phase": "save", "fraction": i / len(chosen)})
+            with atomic_output(dest) as tmp:
+                shutil.copyfile(obj.path, tmp)
+        return {"saved": [str(t) for t in targets]}
+
     # ------------------------------------------------------------------ dissectors
 
     def check_dissectors(self, params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
@@ -2463,6 +2582,32 @@ def _drop_rejected(
     return changed
 
 
+def _finish_index_pass(
+    info: CaptureInfo,
+    result: StreamResult,
+    bad_lines: int,
+    frames: int,
+    inline: _InlineColoring | None,
+) -> None:
+    """Warnings and coloring results of a finished index pass."""
+    if bad_lines:
+        info.warnings.append(f"{bad_lines} unparseable line(s) in tshark output skipped")
+    if result.stderr:
+        info.warnings += _stderr_warnings(result.stderr)
+    if inline is not None:
+        inline.errors.update(coloring.parse_compile_errors(result.stderr))
+        while len(inline.colors) <= frames:  # one byte per frame, like set_coloring
+            inline.colors.append(0)
+
+
+def _names_param(params: dict[str, Any]) -> dict[str, Any] | None:
+    """The optional ``names`` switches (pcapViewer.nameResolution.*)."""
+    names = params.get("names")
+    if names is not None and not isinstance(names, dict):
+        raise InvalidParamsError("parameter 'names' must be dict")
+    return names
+
+
 def _rejected_fields(stderr: str) -> list[str]:
     m = _INVALID_FIELDS_RE.search(stderr)
     return m["names"].split() if m else []
@@ -2559,8 +2704,12 @@ def _read_rows(
     *,
     base: bool,
     inline: _InlineColoring | None,
+    unresolved: bool = False,
 ) -> int:
-    """Store an index pass's rows (and colors); returns the unparseable lines."""
+    """Store an index pass's rows (and colors); returns the unparseable lines.
+
+    With ``unresolved``, the row ends with the UNRESOLVED_FIELDS, which are
+    blanked when they equal the Source/Destination shown (the usual case)."""
     bad_lines = 0
     for line in lines:
         parts = line.split(b"\t", 1)
@@ -2573,10 +2722,36 @@ def _read_rows(
         if inline is not None:
             row, _sep, rule = line.rpartition(b"\t")
             _add_color(inline, number, rule)  # before the row is published
+        if unresolved:
+            row = _blank_same_addresses(row)
         rest = row if base else (parts[1] if len(parts) > 1 else b"")
         rows.append(number, rest)
         tracker.row(number, rest)
     return bad_lines
+
+
+def _add_addresses(
+    fields: Sequence[str], base_rows: Sequence[list[str]], rows: list[dict[str, Any]]
+) -> None:
+    """Give rows whose Source/Destination show names their ``addresses``
+    ([source, destination], for cell filters)."""
+    if UNRESOLVED_FIELDS[0] not in fields:
+        return
+    at = fields.index(UNRESOLVED_FIELDS[0])
+    for base_row, row in zip(base_rows, rows, strict=True):
+        src, dst = [*base_row[at : at + 2], "", ""][:2]
+        if src or dst:
+            cells = row["cells"]
+            row["addresses"] = [src or cells[2], dst or cells[3]]
+
+
+def _blank_same_addresses(row: bytes) -> bytes:
+    """Blank the trailing unresolved addresses that equal Source/Destination."""
+    head, src, dst = row.rsplit(b"\t", 2) if row.count(b"\t") >= 2 else (row, b"", b"")
+    cells = head.split(b"\t", 4)
+    if len(cells) < 4 or (src != cells[2] and dst != cells[3]):
+        return row
+    return b"\t".join((head, b"" if src == cells[2] else src, b"" if dst == cells[3] else dst))
 
 
 def _add_color(inline: _InlineColoring, number: int, rule: bytes) -> None:
@@ -2643,6 +2818,8 @@ def rpc_methods(service: PcapService) -> dict[str, Callable[[dict[str, Any], Req
         "field_types": service.field_types,
         "export": service.export,
         "merge": service.merge,
+        "export_objects": service.export_objects,
+        "save_objects": service.save_objects,
         "close": service.close,
     }
 

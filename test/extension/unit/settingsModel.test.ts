@@ -2,6 +2,11 @@ import * as assert from "node:assert/strict";
 import * as path from "node:path";
 import {
   COLORIZE_PALETTE,
+  DEFAULT_NAME_RESOLUTION,
+  nameResolutionLabel,
+  safeFileName,
+  normalizeNameResolution,
+  sameNameResolution,
   captureStem,
   coloringRulesSetting,
   configTargetFor,
@@ -185,5 +190,35 @@ suite("settingsModel", () => {
       { name: "Bad colors", filter: "icmp", foreground: "#000000", background: "#ffffff" },
     ]);
     assert.deepEqual(editableColoringRules("nope"), []);
+  });
+});
+
+suite("settingsModel: name resolution", () => {
+  test("reads the switches, keeping defaults for missing or invalid values", () => {
+    const values: Record<string, unknown> = { network: true, transport: "yes", external: false };
+    const n = normalizeNameResolution((key) => values[key]);
+    assert.deepEqual(n, { mac: true, network: true, capturedDns: true, transport: false, external: false });
+    assert.deepEqual(normalizeNameResolution(() => undefined), DEFAULT_NAME_RESOLUTION);
+    assert.ok(sameNameResolution(n, { ...n }));
+    assert.ok(!sameNameResolution(n, DEFAULT_NAME_RESOLUTION));
+  });
+
+  test("labels the status bar link", () => {
+    assert.equal(nameResolutionLabel(DEFAULT_NAME_RESOLUTION), "Names: MAC");
+    const all = { mac: true, network: true, capturedDns: true, transport: true, external: true };
+    assert.equal(nameResolutionLabel(all), "Names: MAC, network (capture, DNS server), ports");
+    assert.equal(nameResolutionLabel({ ...all, capturedDns: false, external: false, mac: false }), "Names: network, ports");
+    assert.equal(nameResolutionLabel({ ...all, mac: false, network: false, transport: false }), "Names: off");
+  });
+});
+
+suite("settingsModel: object file names", () => {
+  test("safeFileName makes capture-derived names safe to suggest", () => {
+    assert.equal(safeFileName("logo.png"), "logo.png");
+    assert.equal(safeFileName("../../etc/passwd"), ".._.._etc_passwd");
+    assert.equal(safeFileName('a:b*c?"d<e>|f\x01'), "a_b_c__d_e__f_");
+    assert.equal(safeFileName("nul.txt"), "_nul.txt");
+    assert.equal(safeFileName(" .. "), "object");
+    assert.equal(safeFileName("x".repeat(300)).length, 200);
   });
 });

@@ -9,7 +9,7 @@ import { ColoringResult, FilterEvent, HostToWebview, OpenResult, ViewCounts, Vie
 import { saveFilterInteractive, showSavedFilters } from "./commands/savedFilters";
 import { FollowPanel } from "./panels/followPanel";
 import { rotatedSiblings } from "./rotation";
-import { ColoringRule, ColumnLayout, ColumnSetting, QuickDetail, SavedFilter, TimeFormat, addColumn, normalizeColumns, pushHistory } from "./settingsModel";
+import { ColoringRule, ColumnLayout, ColumnSetting, DEFAULT_NAME_RESOLUTION, NameResolution, QuickDetail, SavedFilter, TimeFormat, addColumn, nameResolutionLabel, normalizeColumns, pushHistory } from "./settingsModel";
 
 const HISTORY_KEY = "pcapViewer.filterHistory";
 /** Coloring problems already shown in a notification (each is reported once per window). */
@@ -116,6 +116,8 @@ export class PcapEditorSession {
   markedCount = 0;
   /** TLS key log file this capture was last loaded with ("" = none). */
   keyLogFile = "";
+  /** Name resolution this capture was last loaded with. */
+  names: NameResolution = DEFAULT_NAME_RESOLUTION;
   private keyLogWatcher?: vscode.Disposable;
   /** Merging this rotated capture's pieces was offered (once per editor). */
   private mergeOffered = false;
@@ -184,6 +186,7 @@ export class PcapEditorSession {
     const seq = ++this.loadSeq;
     const settings = readSettings(this.uri);
     this.watchKeyLog(settings.tlsKeyLogFile);
+    this.names = settings.nameResolution;
     await this.stopBackend();
     if (this.disposed || seq !== this.loadSeq) {
       return;
@@ -254,6 +257,7 @@ export class PcapEditorSession {
         history: this.history(),
         savedFilters: settings.savedFilters,
         elapsedMs: Date.now() - started,
+        names: nameResolutionLabel(settings.nameResolution),
       });
       if (info.coloring) {
         // Colors come with the rows (or were saved with the index).
@@ -432,6 +436,7 @@ export class PcapEditorSession {
             lua: settings.luaScripts,
             decodeAs: settings.decodeAs,
             prefs: settings.prefs,
+            names: settings.nameResolution,
             columns: settings.columns.map((c) => c.field),
             // Show the first rows while the rest is indexed, and reuse saved indexes.
             stream: true,
@@ -571,6 +576,9 @@ export class PcapEditorSession {
         return;
       case "pickTimeFormat":
         await vscode.commands.executeCommand("pcapViewer.timeFormat");
+        return;
+      case "pickNameResolution":
+        await vscode.commands.executeCommand("pcapViewer.nameResolution");
         return;
       case "exportMarked":
         await vscode.commands.executeCommand("pcapViewer.exportMarked");

@@ -344,6 +344,14 @@ export function exportFileName(capturePath: string, suffix: string, ext: string)
   return path.join(path.dirname(capturePath), `${captureStem(capturePath)}-${suffix}.${ext}`);
 }
 
+/** A file name taken from a capture (untrusted), made safe to suggest in a save dialog. */
+export function safeFileName(name: string): string {
+  // eslint-disable-next-line no-control-regex
+  const cleaned = name.replace(/[\x00-\x1f\x7f<>:"/\\|?*]/g, "_").trim().replace(/[. ]+$/, "");
+  const safe = !cleaned || cleaned === "." || cleaned === ".." ? "object" : cleaned;
+  return (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i.test(safe) ? `_${safe}` : safe).slice(0, 200);
+}
+
 export type ConfigTarget = "workspaceFolder" | "workspace" | "global";
 
 /**
@@ -371,4 +379,55 @@ export function pushHistory(history: readonly string[], expr: string, max = 50):
 export interface QuickDetail {
   after: number;
   window: number;
+}
+
+/** Name resolution switches (pcapViewer.nameResolution.*), sent to the backend as `names`. */
+export interface NameResolution {
+  mac: boolean;
+  network: boolean;
+  capturedDns: boolean;
+  transport: boolean;
+  external: boolean;
+}
+
+export const DEFAULT_NAME_RESOLUTION: NameResolution = { mac: true, network: false, capturedDns: true, transport: false, external: false };
+
+/** The switches in the order PCAP: Name Resolution… lists them. */
+export const NAME_RESOLUTION_OPTIONS: readonly { key: keyof NameResolution; label: string; detail: string }[] = [
+  { key: "mac", label: "MAC addresses", detail: "Vendor and well-known names, e.g. Broadcast or Dell_12:34:56" },
+  { key: "network", label: "Network addresses", detail: "Host names for IP addresses, from hosts files and the capture's DNS answers" },
+  { key: "capturedDns", label: "Use the capture's DNS answers", detail: "Names learned from DNS responses in the capture (with network addresses)" },
+  { key: "transport", label: "Transport ports", detail: "Service names for ports, e.g. http(80)" },
+  { key: "external", label: "Ask your DNS server", detail: "One query per address (with network addresses): slower, and the server sees the addresses" },
+];
+
+export function normalizeNameResolution(get: (key: keyof NameResolution) => unknown): NameResolution {
+  const out = { ...DEFAULT_NAME_RESOLUTION };
+  for (const key of Object.keys(out) as (keyof NameResolution)[]) {
+    const v = get(key);
+    if (typeof v === "boolean") {
+      out[key] = v;
+    }
+  }
+  return out;
+}
+
+export function sameNameResolution(a: NameResolution, b: NameResolution): boolean {
+  return (Object.keys(a) as (keyof NameResolution)[]).every((k) => a[k] === b[k]);
+}
+
+/** Short status-bar text, e.g. "Names: MAC, network (DNS)". */
+export function nameResolutionLabel(n: NameResolution): string {
+  const parts: string[] = [];
+  if (n.mac) {
+    parts.push("MAC");
+  }
+  if (n.network) {
+    const sources = [n.capturedDns ? "capture" : "", n.external ? "DNS server" : ""].filter(Boolean);
+    parts.push(sources.length ? `network (${sources.join(", ")})` : "network");
+  }
+  if (n.transport) {
+    parts.push("ports");
+  }
+  return `Names: ${parts.length ? parts.join(", ") : "off"}`;
 }

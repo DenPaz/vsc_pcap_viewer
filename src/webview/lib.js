@@ -651,6 +651,34 @@
   }
 
   /**
+   * Export Objects rows shown for a protocol ("" = all) and a text that must
+   * appear (case-insensitively) in the name, host or content type.
+   * @template {{protocol: string, name: string, host: string, contentType: string}} T
+   * @param {T[]} objects @param {string} protocol @param {string} text
+   * @returns {T[]}
+   */
+  function filterObjects(objects, protocol, text) {
+    const needle = text.trim().toLowerCase();
+    return objects.filter(
+      (o) =>
+        (!protocol || o.protocol === protocol) &&
+        (!needle || [o.name, o.host, o.contentType].some((v) => v.toLowerCase().includes(needle))),
+    );
+  }
+
+  /**
+   * The address behind a Source/Destination cell that shows a name (name
+   * resolution: the row's `addresses`), else null.
+   * @param {{id: string}} column @param {{cells: string[], addresses?: string[]} | undefined} row
+   * @returns {string | null}
+   */
+  function cellAddress(column, row) {
+    const i = column.id === "source" ? 0 : column.id === "destination" ? 1 : -1;
+    const address = i >= 0 ? row?.addresses?.[i] : undefined;
+    return address && address !== row?.cells[2 + i] ? address : null;
+  }
+
+  /**
    * Visible columns in display order: ids in `layout.order` first, the rest in
    * their natural order; hidden ones left out (at least one always stays).
    * `index` is the column's position in `all` (= its cell index in a row).
@@ -817,6 +845,8 @@
     rowColors,
     protocolFilterName,
     cellFilter,
+    cellAddress,
+    filterObjects,
     layoutColumns,
     moveColumn,
     parseHexBytes,

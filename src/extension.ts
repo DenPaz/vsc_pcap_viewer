@@ -14,8 +14,10 @@ import { registerIndexCacheCommands } from "./commands/indexCache";
 import { registerTlsCommands } from "./commands/tls";
 import { registerMergeCommands } from "./commands/merge";
 import { PcapEditorProvider } from "./pcapEditor";
+import { sameNameResolution } from "./settingsModel";
 
 let provider: PcapEditorProvider | undefined;
+let namesTimer: ReturnType<typeof setTimeout> | undefined;
 
 export interface PcapViewerApi {
   /** Exposed for integration tests. */
@@ -75,6 +77,16 @@ export function activate(context: vscode.ExtensionContext): PcapViewerApi {
         for (const s of p.allSessions) {
           void s.applyColoring();
         }
+      }
+      if (e.affectsConfiguration(`${SECTION}.nameResolution`)) {
+        // Usually PCAP: Name Resolution…, which can change several keys: reload
+        // once they are all written (saved indexes make switching back instant).
+        clearTimeout(namesTimer);
+        namesTimer = setTimeout(() => {
+          for (const s of p.allSessions.filter((s) => !sameNameResolution(readSettings(s.uri).nameResolution, s.names))) {
+            void s.load();
+          }
+        }, 300);
       }
       if (e.affectsConfiguration(`${SECTION}.tlsKeyLogFile`)) {
         // Usually PCAP: Set TLS Key Log File…: reload the captures whose key log changed.

@@ -96,6 +96,7 @@ export type WebviewToHost =
   | { type: "renameColumn"; field: string }
   | { type: "columnLayout"; layout: ColumnLayout }
   | { type: "pickTimeFormat" }
+  | { type: "pickNameResolution" }
   | { type: "exportMarked" }
   | { type: "exportSelected" }
   /** "Ask Copilot About This Packet…" / "…About N Selected Packets". */
@@ -119,6 +120,8 @@ export type HostToWebview =
       history: string[];
       savedFilters: SavedFilter[];
       elapsedMs: number;
+      /** Status-bar text for the name resolution in effect, e.g. "Names: MAC". */
+      names: string;
     }
   | { type: "error"; message: string; canReload: boolean }
   | { type: "rpcResult"; id: number; result: unknown }

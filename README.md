@@ -144,6 +144,24 @@ by **tshark** (Wireshark's command-line tool), so results match Wireshark exactl
   Wireshark's *Export Packet Dissections*. The follow-stream panel saves
   stream data. Exports appear only once complete, so cancelling leaves no
   partial file, and the open capture can never be overwritten.
+- **Export Objects**: *PCAP: Export Objects…* lists the files the capture
+  carried over HTTP, SMB, TFTP, IMF (mail), DICOM and FTP-DATA, with the
+  packet that carried each one, its host, content type and size. Filter by
+  protocol or text, sort, double-click to go to the packet, and save one
+  object or all those shown. tshark extracts them (`--export-objects`, one
+  pass over the capture, then kept for the session); HTTP bodies are saved
+  decoded (chunked, gzip). Saved names are made safe and never overwrite an
+  existing file.
+- **Name resolution**: show names instead of addresses and port numbers, like
+  Wireshark's *View › Name Resolution*: MAC vendor and well-known names (on by
+  default), host names for IP addresses from the capture's own DNS answers,
+  the system's hosts file and a `hosts` file in Wireshark's personal
+  configuration folder, and service names for ports. Nothing is looked up on
+  the network unless you allow it (user settings only). Choose with
+  *PCAP: Name Resolution…* or the *Names* link in the status bar; the capture
+  is re-indexed (switching back is instant thanks to the saved index). A
+  resolved name shows its address as a tooltip, cell filters use the address,
+  and statistics always show addresses.
 - **Merge captures**: opening one piece of a rotated capture (`tcpdump -C`'s
   `trace.pcap`, `trace.pcap1`, …, or a Wireshark/dumpcap ring buffer's
   `name_00001_<time>.pcapng`, …) offers to merge all the pieces into one
@@ -242,6 +260,8 @@ tshark built with them (`tshark --version` lists "with Zstandard", "with LZ4").
 | PCAP: Export Packet Bytes… | | Raw bytes of the selected packet (or a reassembled source) |
 | PCAP: Export Packet Dissections… | | Full packet details as plain text, PDML or JSON |
 | PCAP: Merge Captures… | | Merge a rotated capture's pieces, or any captures, into one file and open it |
+| PCAP: Export Objects… | | Files carried over HTTP, SMB, TFTP, IMF, DICOM and FTP-DATA: list, go to packet, save |
+| PCAP: Name Resolution… | | Names for MAC addresses, IP addresses and ports (also the status bar's *Names* link) |
 | PCAP: Colorize with Filter… | | Add a coloring rule (also in the detail tree's right-click menu) |
 | PCAP: Toggle Packet Coloring / Edit Coloring Rules | | Turn coloring on or off / edit `pcapViewer.coloringRules` in a rules editor |
 | PCAP: Show Log | | Backend and tshark messages (Lua errors, warnings) |
@@ -264,6 +284,11 @@ the side bar or panel.
 | `pcapViewer.decodeAs` | Decode As rules, e.g. `"tcp.port==8080,http"` |
 | `pcapViewer.prefs` | Preference overrides, e.g. `{ "tcp.desegment_tcp_streams": false }` |
 | `pcapViewer.tlsKeyLogFile` | TLS key log file (`SSLKEYLOGFILE` format) for decryption, passed as the `tls.keylog_file` preference (per workspace folder) |
+| `pcapViewer.nameResolution.mac` | Names for MAC addresses, e.g. `Broadcast` (default `true`) |
+| `pcapViewer.nameResolution.network` | Host names for IP addresses, from the capture's DNS answers and hosts files (default `false`) |
+| `pcapViewer.nameResolution.capturedDns` | With network names, use the capture's DNS answers (default `true`) |
+| `pcapViewer.nameResolution.transport` | Service names for ports, e.g. `http(80)` (default `false`) |
+| `pcapViewer.nameResolution.external` | With network names, also ask your DNS server (default `false`; slower, the server sees the addresses; user settings only) |
 | `pcapViewer.columns` | Extra columns: `"tcp.stream"` or `{ "field": "http.host", "title": "Host" }` (per workspace folder) |
 | `pcapViewer.columnLayout` | Column order and hidden columns by id, e.g. `{ "order": ["protocol", "number"], "hidden": ["time"] }` (set by the header menu and dragging) |
 | `pcapViewer.timeFormat` | Time column: `relative` (default), `delta_displayed`, `delta_captured`, `absolute`, `utc` or `epoch` |

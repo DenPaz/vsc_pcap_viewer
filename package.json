@@ -209,6 +209,11 @@
         "category": "PCAP"
       },
       {
+        "command": "pcapViewer.nameResolution",
+        "title": "Name Resolution\u2026",
+        "category": "PCAP"
+      },
+      {
         "command": "pcapViewer.saveFilter",
         "title": "Save Display Filter\u2026",
         "category": "PCAP"
@@ -339,6 +344,11 @@
         "category": "PCAP"
       },
       {
+        "command": "pcapViewer.exportObjects",
+        "title": "Export Objects\u2026",
+        "category": "PCAP"
+      },
+      {
         "command": "pcapViewer.mergeCaptures",
         "title": "Merge Captures\u2026",
         "category": "PCAP"
@@ -455,6 +465,10 @@
         {
           "command": "pcapViewer.exportDissections",
           "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
+        },
+        {
+          "command": "pcapViewer.exportObjects",
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow || activeWebviewPanelId == pcapViewer.objects"
         },
         {
           "command": "pcapViewer.exportPacketBytes",
@@ -665,6 +679,36 @@
           },
           "default": {},
           "markdownDescription": "Wireshark preference overrides passed as `-o <name>:<value>`, e.g. `{ \"tcp.desegment_tcp_streams\": false }`."
+        },
+        "pcapViewer.nameResolution.mac": {
+          "type": "boolean",
+          "scope": "resource",
+          "default": true,
+          "markdownDescription": "Show names for MAC addresses in the packet list and details: vendor prefixes and well-known addresses (`Broadcast`, `Dell_12:34:56`). Set with **PCAP: Name Resolution\u2026** or the *Names* link in the viewer's status bar; a change re-indexes the captures it applies to (saved indexes make switching back instant)."
+        },
+        "pcapViewer.nameResolution.network": {
+          "type": "boolean",
+          "scope": "resource",
+          "default": false,
+          "markdownDescription": "Show host names for IP addresses. Names come from the capture's own DNS answers (`#pcapViewer.nameResolution.capturedDns#`), the system's hosts file and a `hosts` file in Wireshark's personal configuration folder; nothing is looked up unless `#pcapViewer.nameResolution.external#` is on. Cell filters and statistics keep using the addresses."
+        },
+        "pcapViewer.nameResolution.capturedDns": {
+          "type": "boolean",
+          "scope": "resource",
+          "default": true,
+          "markdownDescription": "With `#pcapViewer.nameResolution.network#`, use the names learned from DNS responses in the capture (packets after the response show the name)."
+        },
+        "pcapViewer.nameResolution.transport": {
+          "type": "boolean",
+          "scope": "resource",
+          "default": false,
+          "markdownDescription": "Show service names for TCP/UDP/SCTP ports, e.g. `http(80)` in the Info column and the details."
+        },
+        "pcapViewer.nameResolution.external": {
+          "type": "boolean",
+          "scope": "application",
+          "default": false,
+          "markdownDescription": "With `#pcapViewer.nameResolution.network#`, also ask your DNS server for the names of the capture's addresses. It sends a query per address (the server sees them) and makes opening and filtering slower. A workspace can't turn this on."
         },
         "pcapViewer.tlsKeyLogFile": {
           "type": "string",

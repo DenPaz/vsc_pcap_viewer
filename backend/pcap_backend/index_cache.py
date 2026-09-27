@@ -90,6 +90,14 @@ def _pref_file(value: Any) -> list[Any]:
     return fingerprint[1:] if fingerprint[1] is not None else []
 
 
+def system_hosts_file() -> Path:
+    """The operating system's hosts file, which tshark reads for network names."""
+    if sys.platform == "win32":
+        root = os.environ.get("SYSTEMROOT", r"C:\Windows")
+        return Path(root, "System32", "drivers", "etc", "hosts")
+    return Path("/etc/hosts")
+
+
 def index_key(
     *,
     capture: Path,
@@ -100,6 +108,7 @@ def index_key(
     prefs: Mapping[str, Any],
     columns: Sequence[str],
     config: Sequence[Any],
+    names: str | None = None,
 ) -> str:
     """The cache key of a capture's index (a hex digest), or raises OSError if
     the capture can't be read."""
@@ -114,6 +123,12 @@ def index_key(
         "prefs": sorted([str(k), str(v), *_pref_file(v)] for k, v in prefs.items()),
         "columns": list(columns),
         "config": list(config),
+        # Name resolution; network names also come from the system's hosts file
+        # (the personal one is in ``config``).
+        "names": [
+            names,
+            *(_file_fingerprint(system_hosts_file()) if names and "n" in names else []),
+        ],
     }
     blob = json.dumps(parts, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(blob).hexdigest()

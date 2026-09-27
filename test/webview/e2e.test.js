@@ -87,6 +87,7 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
           history: ["tcp.port == 80"],
           savedFilters,
           elapsedMs: 12,
+          names: "Names: MAC",
         });
       } else if (msg.type === "saveFilter") {
         // The real host asks for a name; the stand-in uses "Saved <n>".
@@ -113,7 +114,7 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
       } else if (msg.type === "columnLayout") {
         hostLog.push(msg);
         layout = msg.layout;
-      } else if (["marks", "pickTimeFormat", "renameColumn", "exportSelected", "copy", "askAboutPackets"].includes(msg.type)) {
+      } else if (["marks", "pickTimeFormat", "pickNameResolution", "renameColumn", "exportSelected", "copy", "askAboutPackets"].includes(msg.type)) {
         hostLog.push(msg);
       } else if (["manageSavedFilters", "filterApplied", "selection", "follow", "decodeAs", "colorize", "exportBytes"].includes(msg.type)) {
         hostLog.push(msg);
@@ -821,7 +822,7 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     // Reload the capture (as the host does): the backend's detail cache starts empty.
     const reopen = async (quickDetail) => {
       const info = await client.request("open", { path: path.join(ROOT, "test", "fixtures", "http.pcap"), columns: ["tcp.stream"] }, { timeoutMs: 0 });
-      await post({ type: "init", info, columns: customCols, layout, timeFormat: "relative", quickDetail, filter: "", history: [], savedFilters, elapsedMs: 1 });
+      await post({ type: "init", info, columns: customCols, layout, timeFormat: "relative", quickDetail, filter: "", history: [], savedFilters, elapsedMs: 1, names: "Names: MAC" });
       await page.waitForFunction(() => document.querySelectorAll("#list-rows .list-row:not(.loading)").length === 11);
     };
     const note = () => page.evaluate(() => { const n = document.getElementById("detail-note"); return n?.classList.contains("hidden") ? "" : (n?.textContent ?? ""); });
@@ -911,7 +912,7 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
       assert.equal(info.indexing, true);
       assert.ok(info.frames > 0 && info.frames < 150_000);
       assert.ok(info.coloring?.coloringId > 0, "colored by the index pass");
-      await post({ type: "init", info, columns: customCols, layout, timeFormat: "relative", quickDetail: { after: 20000, window: 300 }, filter: "", history: [], savedFilters, elapsedMs: 1 });
+      await post({ type: "init", info, columns: customCols, layout, timeFormat: "relative", quickDetail: { after: 20000, window: 300 }, filter: "", history: [], savedFilters, elapsedMs: 1, names: "Names: MAC" });
       await post({ type: "coloring", coloringId: info.coloring.coloringId, rules: colorRules.map(({ name, foreground, background }) => ({ name, foreground, background })) });
       await page.waitForFunction(() => /^Indexing… [\d,]+ packets so far/.test(document.querySelector("#status-left")?.textContent ?? ""));
       await page.waitForFunction(() => document.querySelector("#list-rows .list-row:not(.loading)")?.children[0]?.textContent === "1");
@@ -967,9 +968,42 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     }
     // Back to the small capture for the other tests.
     const info = await client.request("open", { path: path.join(ROOT, "test", "fixtures", "http.pcap"), columns: ["tcp.stream"] }, { timeoutMs: 0 });
-    await post({ type: "init", info, columns: customCols, layout, timeFormat: "relative", quickDetail: { after: 20000, window: 300 }, filter: "", history: [], savedFilters, elapsedMs: 1 });
+    await post({ type: "init", info, columns: customCols, layout, timeFormat: "relative", quickDetail: { after: 20000, window: 300 }, filter: "", history: [], savedFilters, elapsedMs: 1, names: "Names: MAC" });
     await page.fill("#filter-input", "");
     await page.waitForFunction(() => document.querySelectorAll("#list-rows .list-row:not(.loading)").length === 11);
+  });
+
+  test("name resolution: status link, addresses as tooltips and in cell filters", async () => {
+    await cleanView();
+    assert.equal(await page.textContent("#status-names"), "Names: MAC");
+    await page.click("#status-names");
+    assert.deepEqual(hostLog.at(-1), { type: "pickNameResolution" });
+    const names = { mac: true, network: true, capturedDns: true, transport: true };
+    const reopen = async (file, extra, label) => {
+      const info = await client.request("open", { path: path.join(ROOT, "test", "fixtures", file), columns: ["tcp.stream"], ...extra }, { timeoutMs: 0 });
+      await post({ type: "init", info, columns: customCols, layout, timeFormat: "relative", quickDetail: { after: 20000, window: 300 }, filter: "", history: [], savedFilters, elapsedMs: 1, names: label });
+      await page.waitForFunction((n) => document.querySelector("#status-left").textContent.includes(`Packets: ${n}`), info.frames);
+      await page.waitForFunction(() => document.querySelectorAll("#list-rows .list-row:not(.loading)").length >= 11);
+    };
+    try {
+      await reopen("mixed.pcapng", { names }, "Names: MAC, network (capture), ports");
+      assert.equal(await page.textContent("#status-names"), "Names: MAC, network (capture), ports");
+      const source = rowEl(11).locator("div").nth(2);
+      assert.equal(await source.textContent(), "example.com");
+      assert.equal(await source.getAttribute("title"), "93.184.216.34");
+      assert.ok(!(await rowEl(12).locator("div").nth(2).getAttribute("title")), "an address: no tooltip");
+      await source.click({ button: "right" });
+      await page.click("#context-menu .item:text-is('Prepare as Filter')");
+      assert.equal(await page.inputValue("#filter-input"), "ip.src == 93.184.216.34");
+      const broadcast = rowEl(1).locator("div").nth(3);
+      assert.equal(await broadcast.textContent(), "Broadcast");
+      await broadcast.click({ button: "right" });
+      await page.click("#context-menu .item:text-is('Prepare as Filter')");
+      assert.equal(await page.inputValue("#filter-input"), "eth.dst == ff:ff:ff:ff:ff:ff");
+    } finally {
+      await page.fill("#filter-input", "");
+      await reopen("http.pcap", {}, "Names: MAC");
+    }
   });
 
   test("no script errors or CSP violations", () => {

@@ -305,6 +305,32 @@ suite("webview lib: coloring", () => {
 suite("webview lib: navigation and customisation", () => {
   const col = (id, extra = {}) => ({ id, field: id, ...extra });
 
+  test("filterObjects filters Export Objects rows by protocol and text", () => {
+    const objs = [
+      { id: 0, protocol: "http", name: "logo.png", host: "example.com", contentType: "image/png" },
+      { id: 1, protocol: "tftp", name: "config.bin", host: "", contentType: "application/octet-stream" },
+      { id: 2, protocol: "http", name: "report", host: "cdn.example.org", contentType: "text/plain" },
+    ];
+    const ids = (/** @type {{id: number}[]} */ list) => list.map((o) => o.id);
+    assert.deepEqual(ids(lib.filterObjects(objs, "", "")), [0, 1, 2]);
+    assert.deepEqual(ids(lib.filterObjects(objs, "http", "")), [0, 2]);
+    assert.deepEqual(ids(lib.filterObjects(objs, "", "  PNG ")), [0]);
+    assert.deepEqual(ids(lib.filterObjects(objs, "", "example")), [0, 2]);
+    assert.deepEqual(ids(lib.filterObjects(objs, "tftp", "example")), []);
+  });
+
+  test("cellAddress finds the address behind a resolved name", () => {
+    const row = { cells: ["1", "0", "example.com", "Broadcast", "ARP"], addresses: ["93.184.216.34", "ff:ff:ff:ff:ff:ff"] };
+    assert.equal(lib.cellAddress(col("source"), row), "93.184.216.34");
+    assert.equal(lib.cellAddress(col("destination"), row), "ff:ff:ff:ff:ff:ff");
+    assert.equal(lib.cellFilter(col("destination"), lib.cellAddress(col("destination"), row)), "eth.dst == ff:ff:ff:ff:ff:ff");
+    assert.equal(lib.cellAddress(col("protocol"), row), null);
+    const same = { cells: ["1", "0", "10.0.0.1", "example.com"], addresses: ["10.0.0.1", "93.184.216.34"] };
+    assert.equal(lib.cellAddress(col("source"), same), null, "the cell already shows the address");
+    assert.equal(lib.cellAddress(col("source"), { cells: ["1", "0", "10.0.0.1"] }), null);
+    assert.equal(lib.cellAddress(col("source"), undefined), null);
+  });
+
   test("cellFilter builds filters from packet-list cells", () => {
     assert.equal(lib.cellFilter(col("source"), "192.168.1.10"), "ip.src == 192.168.1.10");
     assert.equal(lib.cellFilter(col("destination"), "93.184.216.34"), "ip.dst == 93.184.216.34");
