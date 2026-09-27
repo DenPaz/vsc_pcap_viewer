@@ -8,10 +8,12 @@ import {
   CAPTURE_OPENED,
   FILTER_APPLIED,
   offerSetupHelp,
+  openCopy,
   setEnvironmentContext,
 } from "./commands/setup";
 import type { CaptureLimits } from "./captureModel";
 import { discardTemporaryCapture, isTemporaryCapture } from "./tempCaptures";
+import { copyName, isOnDisk } from "./remote";
 import { Settings, getSetting, readQuickDetail, readSettings, updateSetting } from "./config";
 import type {
   AnomalyRequest,
@@ -594,6 +596,10 @@ export class PcapEditorSession {
       this.reloadWhenCaptured = true;
       return;
     }
+    if (!isOnDisk(this.uri)) {
+      this.notOnDisk();
+      return;
+    }
     const seq = ++this.loadSeq;
     const settings = readSettings(this.uri);
     this.watchKeyLog(settings.tlsKeyLogFile);
@@ -973,6 +979,34 @@ export class PcapEditorSession {
   }
 
   /** tshark doesn't recognise the file (e.g. a text *.log opened with "Reopen Editor With…"). */
+  /**
+   * tshark reads files, and this capture is somewhere else (Live Share, an
+   * archive or another virtual file system): offer to open a copy, which is
+   * an unsaved capture (saving it asks where).
+   */
+  private notOnDisk(): void {
+    const name = copyName(this.uri);
+    const message =
+      `${name} isn't a file on disk (${this.uri.scheme}:), and tshark can only read files.\n\n` +
+      'Use "Open a Copy" to open a copy of it; saving the copy asks where to keep it.';
+    this.log.warn(`${this.uri.toString()}: not a file on disk`);
+    this.post({ type: "error", message, canReload: false });
+    void vscode.window
+      .showWarningMessage(`PCAP Viewer: ${name} isn't a file on disk.`, "Open a Copy")
+      .then(async (choice) => {
+        if (!choice) {
+          return;
+        }
+        try {
+          await openCopy(this.context, this.uri);
+        } catch (err) {
+          void vscode.window.showErrorMessage(
+            `PCAP Viewer: could not copy ${name}: ${describeError(err)}`,
+          );
+        }
+      });
+  }
+
   private unsupportedFormat(err: RpcError): void {
     const name = path.basename(this.uri.fsPath);
     const stderr = (err.data as { stderr?: string } | undefined)?.stderr;

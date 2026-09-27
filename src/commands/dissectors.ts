@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as vscode from "vscode";
+import { revealFile } from "./reveal";
 import { SECTION, getSetting, readSettings, updateSetting } from "../config";
 import { luaDissectorTemplate, validatePort, validateProtocolName } from "../luaTemplate";
 import type { PcapEditorProvider, PcapEditorSession } from "../pcapEditor";
@@ -254,13 +255,7 @@ export async function openDissectorsFolder(): Promise<void> {
     }
     fs.mkdirSync(folder, { recursive: true });
   }
-  const uri = vscode.Uri.file(folder);
-  const ws = workspaceDir();
-  if (ws && !path.relative(ws, folder).startsWith("..")) {
-    await vscode.commands.executeCommand("revealInExplorer", uri);
-  } else {
-    await vscode.commands.executeCommand("revealFileInOS", uri);
-  }
+  await revealFile(folder, true);
 }
 
 // ---------------------------------------------------------------------- Decode As

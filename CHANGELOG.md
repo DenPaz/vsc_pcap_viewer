@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Remote windows (WSL, SSH, Dev Containers, Codespaces): PCAP Viewer runs on
+  the remote machine, next to the captures and the tools, and says so when
+  Python or tshark is missing there. Saved files are shown in the Explorer
+  view (or their path is offered) instead of the local file manager. The
+  README has a Dev Container example.
+- Captures that aren't files on disk (Live Share, archives, virtual file
+  systems) offer to open a copy.
+- Restricted Mode: the extension now works in untrusted workspaces, where the
+  Python and tshark paths and the Lua dissectors come from user settings only.
+
 - **Get Started with PCAP Viewer** walkthrough (_Help › Welcome_, or _PCAP:
   Get Started_): checks Python and tshark and says how to install what's
   missing on your system, opens a sample capture, and introduces filters,

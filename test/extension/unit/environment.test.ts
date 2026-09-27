@@ -78,6 +78,19 @@ suite("environment check", () => {
     assert.match(environmentSummary(status), /^Python 3\.14\.0 is fine, but TShark isn't: tshark/);
   });
 
+  test("in a remote window, the tools are installed there", async () => {
+    const ok = await checkEnvironment(SETTINGS, deps());
+    assert.match(environmentSummary(ok, "WSL"), /^Ready in WSL: Python 3\.14\.0/);
+    const missing = await checkEnvironment(
+      SETTINGS,
+      deps({ findPython: () => ({ error: "No Python 3.14+ interpreter found." }) }),
+    );
+    assert.equal(
+      environmentSummary(missing, "the SSH host"),
+      "No Python 3.14+ interpreter found. PCAP Viewer runs in the SSH host: install it there.",
+    );
+  });
+
   test("tshark versions from its banner", () => {
     assert.equal(
       tsharkVersion("TShark (Wireshark) 4.2.2 (Git v4.2.2 packaged as 4.2.2-1)"),

@@ -25,6 +25,13 @@ nothing to `pip install`). It needs **Python 3.14 or newer** and looks for
   [uv](https://docs.astral.sh/uv/), which puts `python3.14` in
   `~/.local/bin`.
 
+## In a remote window
+
+In WSL, over SSH, in a Dev Container or a Codespace, PCAP Viewer runs on the
+remote machine: install Python **there** (the instructions above for its
+system), not on your own computer. Set the path in **Remote** settings
+(_Preferences: Open Remote Settings_): local user settings don't apply there.
+
 ## Installed somewhere else?
 
 Set **PCAP Viewer › Python Path** (`pcapViewer.pythonPath`) to the

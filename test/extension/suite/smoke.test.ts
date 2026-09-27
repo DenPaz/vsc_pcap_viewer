@@ -354,6 +354,50 @@ suite("PCAP Viewer smoke test", () => {
     await vscode.commands.executeCommand("workbench.action.closeAllEditors");
   });
 
+  test("a capture that isn't on disk opens as an unsaved copy", async () => {
+    const ext = vscode.extensions.all.find((e) => e.packageJSON.name === "pcap-viewer");
+    const api = (await ext!.activate()) as PcapViewerApi;
+    // A read-only file system like Live Share's or an archive's (scheme "pcaptest").
+    const bytes = fs.readFileSync(path.join(FIXTURES, "http.pcap"));
+    const changed = new vscode.EventEmitter<vscode.FileChangeEvent[]>();
+    const provider: vscode.FileSystemProvider = {
+      onDidChangeFile: changed.event,
+      watch: () => new vscode.Disposable(() => undefined),
+      stat: () => ({ type: vscode.FileType.File, ctime: 0, mtime: 0, size: bytes.length }),
+      readFile: () => bytes,
+      readDirectory: () => [],
+      createDirectory: () => undefined,
+      writeFile: () => {
+        throw vscode.FileSystemError.NoPermissions();
+      },
+      delete: () => undefined,
+      rename: () => undefined,
+    };
+    const registration = vscode.workspace.registerFileSystemProvider("pcaptest", provider, {
+      isReadonly: true,
+    });
+    const remote = vscode.Uri.parse("pcaptest:/shared/http.pcap");
+    await vscode.commands.executeCommand("vscode.openWith", remote, "pcapViewer.editor");
+    const original = await waitFor(() =>
+      api.provider.allSessions.find((s) => s.uri.toString() === remote.toString()),
+    );
+    assert.equal(original.backend, undefined, "no backend for a file tshark can't read");
+
+    const copy = await vscode.commands.executeCommand<vscode.Uri>("pcapViewer.openCopy", remote);
+    assert.equal(path.basename(copy.fsPath), "http.pcap");
+    const session = await waitFor(() =>
+      api.provider.allSessions.find((s) => s.uri.fsPath === copy.fsPath),
+    );
+    assert.ok(session.document.temporary, "the copy is an unsaved capture");
+    const info = await waitFor(() => (indexed(session) ? session.openInfo : undefined));
+    assert.equal(info.frames, 11);
+
+    await vscode.commands.executeCommand("workbench.action.revertAndCloseActiveEditor");
+    await vscode.commands.executeCommand("workbench.action.closeAllEditors");
+    registration.dispose();
+    changed.dispose();
+  });
+
   test("changing name resolution re-indexes open captures", async () => {
     const ext = vscode.extensions.all.find((e) => e.packageJSON.name === "pcap-viewer");
     const api = (await ext!.activate()) as PcapViewerApi;

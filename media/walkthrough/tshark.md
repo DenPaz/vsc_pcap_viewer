@@ -31,6 +31,13 @@ some features.
   can't be read, the error message says which local rule to add.
 - Live capture: `sudo usermod -aG wireshark $USER`, then log in again.
 
+## In a remote window
+
+In WSL, over SSH, in a Dev Container or a Codespace, PCAP Viewer runs on the
+remote machine: install TShark **there** (the instructions above for its
+system), not on your own computer. Set the path in **Remote** settings
+(_Preferences: Open Remote Settings_): local user settings don't apply there.
+
 ## Installed somewhere else?
 
 Set **PCAP Viewer › Tshark Path** (`pcapViewer.tsharkPath`) to the `tshark`

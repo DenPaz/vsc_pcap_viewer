@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import * as vscode from "vscode";
+import { revealFile, revealLabel } from "../commands/reveal";
 import { ErrorCodes, RpcError } from "../backendClient";
 import type { PcapEditorSession } from "../pcapEditor";
 import { safeFileName } from "../settingsModel";
@@ -190,7 +191,7 @@ export class ObjectsPanel {
           }),
       );
       const where = many ? (params.dir ?? "") : saved[0];
-      const reveal = "Reveal in File Explorer";
+      const reveal = revealLabel();
       const choice = await vscode.window.showInformationMessage(
         many
           ? `Saved ${saved.length} ${saved.length === 1 ? "object" : "objects"} to ${where}`
@@ -198,7 +199,7 @@ export class ObjectsPanel {
         reveal,
       );
       if (choice === reveal) {
-        await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(saved[0]));
+        await revealFile(saved[0]);
       }
     } catch (err) {
       if (!(err instanceof RpcError && err.cancelled)) {

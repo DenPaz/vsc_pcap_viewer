@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import * as vscode from "vscode";
+import { revealFile, revealLabel } from "./reveal";
 import { RpcError } from "../backendClient";
 import { readSettings } from "../config";
 import { PcapEditorProvider, PcapEditorSession, describeError } from "../pcapEditor";
@@ -84,7 +85,8 @@ async function runExport(
 
 async function reportExport(result: ExportResult, what: string, canOpen: boolean): Promise<void> {
   const name = path.basename(result.path);
-  const actions = canOpen ? ["Open", "Reveal"] : ["Reveal"];
+  const reveal = revealLabel();
+  const actions = canOpen ? ["Open", reveal] : [reveal];
   const warning = result.warnings?.length ? ` (${result.warnings[0]})` : "";
   const choice = await vscode.window.showInformationMessage(
     `Exported ${what} to ${name}${warning}`,
@@ -93,8 +95,8 @@ async function reportExport(result: ExportResult, what: string, canOpen: boolean
   const uri = vscode.Uri.file(result.path);
   if (choice === "Open") {
     await vscode.commands.executeCommand("vscode.openWith", uri, PcapEditorProvider.viewType);
-  } else if (choice === "Reveal") {
-    await vscode.commands.executeCommand("revealFileInOS", uri);
+  } else if (choice === reveal) {
+    await revealFile(result.path);
   }
 }
 
