@@ -26,6 +26,9 @@ async function waitFor<T>(fn: () => T | undefined, timeoutMs = 30_000): Promise<
   }
 }
 
+/** The open result once indexing is done (a streaming open first reports the rows published so far). */
+const indexed = (s: { openInfo?: { indexing?: boolean } }): boolean => !!s.openInfo && !s.openInfo.indexing;
+
 async function waitForAsync<T>(fn: () => Promise<T | undefined>, timeoutMs = 30_000): Promise<T> {
   const start = Date.now();
   for (;;) {
@@ -50,7 +53,7 @@ suite("PCAP Viewer smoke test", () => {
     await vscode.commands.executeCommand("vscode.openWith", uri, "pcapViewer.editor");
 
     const session = await waitFor(() => api.provider.allSessions.find((s) => s.uri.fsPath === uri.fsPath));
-    const info = await waitFor(() => session.openInfo);
+    const info = await waitFor(() => (indexed(session) ? session.openInfo : undefined));
     assert.equal(info.frames, 11);
 
     const backend = session.backend;
@@ -159,13 +162,13 @@ suite("PCAP Viewer smoke test", () => {
     // A compressed capture is indexed like any other.
     const gz = vscode.Uri.file(path.join(formats, "http.pcap.gz"));
     await vscode.commands.executeCommand("vscode.open", gz);
-    const gzSession = await waitFor(() => api.provider.allSessions.find((s) => s.uri.fsPath === gz.fsPath && s.openInfo));
+    const gzSession = await waitFor(() => api.provider.allSessions.find((s) => s.uri.fsPath === gz.fsPath && indexed(s)));
     assert.equal(gzSession.openInfo?.frames, 11);
 
     // "Reopen Editor With…" offers the viewer for generic extensions.
     const log = vscode.Uri.file(path.join(formats, "capture.log"));
     await vscode.commands.executeCommand("vscode.openWith", log, "pcapViewer.editorOptional");
-    const logSession = await waitFor(() => api.provider.allSessions.find((s) => s.uri.fsPath === log.fsPath && s.openInfo));
+    const logSession = await waitFor(() => api.provider.allSessions.find((s) => s.uri.fsPath === log.fsPath && indexed(s)));
     assert.equal(logSession.openInfo?.frames, 26);
 
     await vscode.commands.executeCommand("workbench.action.closeAllEditors");
