@@ -10,7 +10,8 @@ user-facing description.
 | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Install dev deps          | `uv sync` and `pnpm install`                                                                                                                             |
 | Build extension           | `pnpm run compile` (tsc → `out/`)                                                                                                                        |
-| Lint everything           | `pnpm run lint && uv run ruff check && uv run ruff format --check && uv run mypy`                                                                        |
+| Lint everything           | `pnpm run lint && pnpm run format:check && uv run ruff check && uv run ruff format --check && uv run mypy`                                               |
+| Format                    | `make format` (ruff --fix, ruff format, eslint --fix, Prettier)                                                                                          |
 | Backend tests             | `uv run pytest` (tshark tests skip if tshark is missing)                                                                                                 |
 | Acceptance scenarios only | `uv run pytest test/backend/acceptance` (pytest-bdd, Gherkin in `features/`)                                                                             |
 | TS unit + webview tests   | `pnpm run test:unit` (mocha; includes the Chromium e2e test of the webview)                                                                              |
@@ -47,6 +48,17 @@ The `Makefile` wraps all of these (`make` lists the targets; `make check` = lint
 - Node tests that start the backend use `PCAP_VIEWER_PYTHON` if set, else the
   uv `.venv` interpreter, so they run on 3.14 even when the system `python3` is older.
 - pytest turns `ResourceWarning` into errors: leaked tshark pipes are bugs.
+- **Formatting and lint rules**: Prettier (`.prettierrc.json`: 100 columns
+  like ruff, 80 for Markdown, double quotes, trailing commas, LF) formats
+  TS/JS/CSS/HTML/JSON/YAML/Markdown; `eslint-config-prettier` (last in
+  `eslint.config.mjs`) turns off the ESLint style rules. Python goes through
+  ruff (`[tool.ruff]`: pycodestyle, pyflakes, isort, naming, pyupgrade,
+  bugbear, bandit, pylint, pytest-style, logging, T20 because the backend's
+  stdout is the protocol, …; deliberate stderr prints and catch-alls carry
+  `noqa` with a reason). `.editorconfig` and `.gitattributes` (LF everywhere,
+  captures binary) cover the rest. CI checks formatting once, on Linux.
+  Mass-reformat commits go in `.git-blame-ignore-revs`. Prettier needed two
+  passes on `main.js` once; run it again if `format:check` still complains.
 - **CI** (`.github/workflows/ci.yml`) runs everything on Linux (apt tshark),
   macOS (`brew install --formula wireshark`) and Windows (`choco install
 wireshark`, `C:\Program Files\Wireshark` added to PATH): lint, backend and

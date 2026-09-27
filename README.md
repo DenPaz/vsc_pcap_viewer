@@ -461,8 +461,14 @@ _PCAP: Show Log_ (the "PCAP Viewer" output channel).
 ```sh
 uv run pytest                  # backend tests + Gherkin acceptance scenarios (skip without tshark)
 pnpm run test:unit             # extension unit tests + webview tests
-pnpm run lint && uv run ruff check && uv run ruff format --check && uv run mypy
+pnpm run lint && pnpm run format:check && uv run ruff check && uv run ruff format --check && uv run mypy
+make format                    # fix formatting: ruff, ESLint --fix and Prettier
 ```
+
+- Formatting is automatic: Prettier for TypeScript, JavaScript, CSS, HTML,
+  JSON, YAML and Markdown (`.prettierrc.json`), ruff for Python
+  (`pyproject.toml`), and `.editorconfig` for the basics. With the recommended
+  extensions, VS Code formats on save.
 
 - The webview end-to-end test drives the real UI in headless Chromium. If
   it reports no Chromium, install one with
