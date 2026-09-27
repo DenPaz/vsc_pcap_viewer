@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from pcap_backend import pcap_service, pdml
+from pcap_backend import pcap_service, pdml, procs
 from pcap_backend import tshark as ts
 from pcap_backend.cancellation import CancelledError
 from pcap_backend.pcap_service import PcapService
@@ -179,6 +179,9 @@ def test_cancel_race_leaves_no_pipe_open(
         proc = real_popen(argv, env, stdin)
         started.append(proc)
         if cancel_at in Path(argv[0]).name:
+            # Killed first: nothing reads its stdout yet, and a child blocked on
+            # a full pipe (a few KiB on Windows) would never exit.
+            procs.kill_process(proc)
             proc.wait()
             ctx.token.cancel()
         return proc
