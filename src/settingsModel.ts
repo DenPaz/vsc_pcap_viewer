@@ -36,7 +36,10 @@ export function normalizeColumns(raw: unknown): ColumnSetting[] {
       continue;
     }
     seen.add(field as string);
-    out.push({ field: field as string, title: typeof title === "string" && title.trim() ? title.trim() : (field as string) });
+    out.push({
+      field: field as string,
+      title: typeof title === "string" && title.trim() ? title.trim() : (field as string),
+    });
   }
   return out;
 }
@@ -105,7 +108,13 @@ export function normalizeSavedFilters(raw: unknown): SavedFilter[] {
     }
     const name = (item as { name?: unknown }).name;
     const filter = (item as { filter?: unknown }).filter;
-    if (typeof name !== "string" || typeof filter !== "string" || !name.trim() || !filter.trim() || seen.has(name.trim())) {
+    if (
+      typeof name !== "string" ||
+      typeof filter !== "string" ||
+      !name.trim() ||
+      !filter.trim() ||
+      seen.has(name.trim())
+    ) {
       continue;
     }
     seen.add(name.trim());
@@ -153,12 +162,17 @@ export function upsertDecodeAsRule(rules: readonly string[], rule: DecodeAsRule)
 }
 
 /** Resolve a path setting like the Lua scripts (relative to the workspace, ~ expanded). */
-export function resolveSettingPath(setting: string | undefined, baseDir: string | undefined): string | undefined {
+export function resolveSettingPath(
+  setting: string | undefined,
+  baseDir: string | undefined,
+): string | undefined {
   if (!setting || !setting.trim()) {
     return undefined;
   }
   const expanded = expandHome(setting.trim());
-  return path.normalize(path.isAbsolute(expanded) ? expanded : baseDir ? path.join(baseDir, expanded) : expanded);
+  return path.normalize(
+    path.isAbsolute(expanded) ? expanded : baseDir ? path.join(baseDir, expanded) : expanded,
+  );
 }
 
 /** Resolve `pcapViewer.dissectorsFolder` (see resolveSettingPath). */
@@ -168,11 +182,15 @@ export const resolveDissectorsFolder = resolveSettingPath;
 export const TLS_KEYLOG_PREF = "tls.keylog_file";
 
 /** The preferences to pass: `prefs` with `pcapViewer.tlsKeyLogFile` (already resolved) as tls.keylog_file. */
-export function withTlsKeyLog<T>(prefs: Record<string, T>, keyLogFile: string | undefined): Record<string, T | string> {
+export function withTlsKeyLog<T>(
+  prefs: Record<string, T>,
+  keyLogFile: string | undefined,
+): Record<string, T | string> {
   return keyLogFile ? { ...prefs, [TLS_KEYLOG_PREF]: keyLogFile } : { ...prefs };
 }
 
-const KEYLOG_LINE = /^(CLIENT_RANDOM|RSA|(CLIENT|SERVER)_(HANDSHAKE_TRAFFIC_SECRET|TRAFFIC_SECRET_\d+)|CLIENT_EARLY_TRAFFIC_SECRET|(EARLY_)?EXPORTER_SECRET) [0-9A-Fa-f]+ [0-9A-Fa-f]+\s*$/;
+const KEYLOG_LINE =
+  /^(CLIENT_RANDOM|RSA|(CLIENT|SERVER)_(HANDSHAKE_TRAFFIC_SECRET|TRAFFIC_SECRET_\d+)|CLIENT_EARLY_TRAFFIC_SECRET|(EARLY_)?EXPORTER_SECRET) [0-9A-Fa-f]+ [0-9A-Fa-f]+\s*$/;
 
 /**
  * Whether the start of a file looks like an SSLKEYLOGFILE key log: an empty file
@@ -219,16 +237,24 @@ export interface ColumnLayout {
   hidden: string[];
 }
 
-const COLUMN_ID_RE = /^(number|time|source|destination|protocol|length|info|custom:[A-Za-z0-9_][A-Za-z0-9_.-]*)$/;
+const COLUMN_ID_RE =
+  /^(number|time|source|destination|protocol|length|info|custom:[A-Za-z0-9_][A-Za-z0-9_.-]*)$/;
 
 export function normalizeColumnLayout(raw: unknown): ColumnLayout {
-  const ids = (v: unknown) => (Array.isArray(v) ? [...new Set(v.filter((x): x is string => typeof x === "string" && COLUMN_ID_RE.test(x)))] : []);
+  const ids = (v: unknown) =>
+    Array.isArray(v)
+      ? [...new Set(v.filter((x): x is string => typeof x === "string" && COLUMN_ID_RE.test(x)))]
+      : [];
   const obj = raw && typeof raw === "object" ? (raw as { order?: unknown; hidden?: unknown }) : {};
   return { order: ids(obj.order), hidden: ids(obj.hidden) };
 }
 
 /** Add a column for `field` ("Apply as Column"); unchanged if it is already there. */
-export function addColumn(columns: readonly ColumnSetting[], field: string, title: string): ColumnSetting[] {
+export function addColumn(
+  columns: readonly ColumnSetting[],
+  field: string,
+  title: string,
+): ColumnSetting[] {
   if (columns.some((c) => c.field === field)) {
     return [...columns];
   }
@@ -288,7 +314,8 @@ export function editableColoringRules(raw: unknown): EditableColoringRule[] {
     return [];
   }
   const text = (v: unknown) => (typeof v === "string" ? v.trim() : "");
-  const color = (v: unknown, fallback: string) => (typeof v === "string" && COLOR_RE.test(v) ? v.toLowerCase() : fallback);
+  const color = (v: unknown, fallback: string) =>
+    typeof v === "string" && COLOR_RE.test(v) ? v.toLowerCase() : fallback;
   return raw
     .filter((item): item is Record<string, unknown> => !!item && typeof item === "object")
     .map((item) => ({
@@ -301,7 +328,9 @@ export function editableColoringRules(raw: unknown): EditableColoringRule[] {
 }
 
 /** The editor's rules as the setting stores them (`enabled` only when false). */
-export function coloringRulesSetting(rules: readonly EditableColoringRule[]): Record<string, unknown>[] {
+export function coloringRulesSetting(
+  rules: readonly EditableColoringRule[],
+): Record<string, unknown>[] {
   return rules.map((r) => ({
     name: r.name.trim() || r.filter.trim(),
     filter: r.filter.trim(),
@@ -344,12 +373,18 @@ export function exportFileName(capturePath: string, suffix: string, ext: string)
   return path.join(path.dirname(capturePath), `${captureStem(capturePath)}-${suffix}.${ext}`);
 }
 
+// eslint-disable-next-line no-control-regex -- control characters are what it removes
+const UNSAFE_FILE_NAME_CHARS = /[\x00-\x1f\x7f<>:"/\\|?*]/g;
+const WINDOWS_RESERVED_NAME = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i;
+
 /** A file name taken from a capture (untrusted), made safe to suggest in a save dialog. */
 export function safeFileName(name: string): string {
-  // eslint-disable-next-line no-control-regex
-  const cleaned = name.replace(/[\x00-\x1f\x7f<>:"/\\|?*]/g, "_").trim().replace(/[. ]+$/, "");
+  const cleaned = name
+    .replace(UNSAFE_FILE_NAME_CHARS, "_")
+    .trim()
+    .replace(/[. ]+$/, "");
   const safe = !cleaned || cleaned === "." || cleaned === ".." ? "object" : cleaned;
-  return (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i.test(safe) ? `_${safe}` : safe).slice(0, 200);
+  return (WINDOWS_RESERVED_NAME.test(safe) ? `_${safe}` : safe).slice(0, 200);
 }
 
 export type ConfigTarget = "workspaceFolder" | "workspace" | "global";
@@ -359,7 +394,10 @@ export type ConfigTarget = "workspaceFolder" | "workspace" | "global";
  * scope that currently defines it (a folder override would otherwise keep
  * shadowing a workspace or user value). Folder scope needs a resource scope.
  */
-export function configTargetFor(inspected: { workspaceFolderValue?: unknown; workspaceValue?: unknown } | undefined, scoped: boolean): ConfigTarget {
+export function configTargetFor(
+  inspected: { workspaceFolderValue?: unknown; workspaceValue?: unknown } | undefined,
+  scoped: boolean,
+): ConfigTarget {
   if (scoped && inspected?.workspaceFolderValue !== undefined) {
     return "workspaceFolder";
   }
@@ -390,18 +428,47 @@ export interface NameResolution {
   external: boolean;
 }
 
-export const DEFAULT_NAME_RESOLUTION: NameResolution = { mac: true, network: false, capturedDns: true, transport: false, external: false };
+export const DEFAULT_NAME_RESOLUTION: NameResolution = {
+  mac: true,
+  network: false,
+  capturedDns: true,
+  transport: false,
+  external: false,
+};
 
 /** The switches in the order PCAP: Name Resolution… lists them. */
-export const NAME_RESOLUTION_OPTIONS: readonly { key: keyof NameResolution; label: string; detail: string }[] = [
-  { key: "mac", label: "MAC addresses", detail: "Vendor and well-known names, e.g. Broadcast or Dell_12:34:56" },
-  { key: "network", label: "Network addresses", detail: "Host names for IP addresses, from hosts files and the capture's DNS answers" },
-  { key: "capturedDns", label: "Use the capture's DNS answers", detail: "Names learned from DNS responses in the capture (with network addresses)" },
+export const NAME_RESOLUTION_OPTIONS: readonly {
+  key: keyof NameResolution;
+  label: string;
+  detail: string;
+}[] = [
+  {
+    key: "mac",
+    label: "MAC addresses",
+    detail: "Vendor and well-known names, e.g. Broadcast or Dell_12:34:56",
+  },
+  {
+    key: "network",
+    label: "Network addresses",
+    detail: "Host names for IP addresses, from hosts files and the capture's DNS answers",
+  },
+  {
+    key: "capturedDns",
+    label: "Use the capture's DNS answers",
+    detail: "Names learned from DNS responses in the capture (with network addresses)",
+  },
   { key: "transport", label: "Transport ports", detail: "Service names for ports, e.g. http(80)" },
-  { key: "external", label: "Ask your DNS server", detail: "One query per address (with network addresses): slower, and the server sees the addresses" },
+  {
+    key: "external",
+    label: "Ask your DNS server",
+    detail:
+      "One query per address (with network addresses): slower, and the server sees the addresses",
+  },
 ];
 
-export function normalizeNameResolution(get: (key: keyof NameResolution) => unknown): NameResolution {
+export function normalizeNameResolution(
+  get: (key: keyof NameResolution) => unknown,
+): NameResolution {
   const out = { ...DEFAULT_NAME_RESOLUTION };
   for (const key of Object.keys(out) as (keyof NameResolution)[]) {
     const v = get(key);
@@ -423,7 +490,9 @@ export function nameResolutionLabel(n: NameResolution): string {
     parts.push("MAC");
   }
   if (n.network) {
-    const sources = [n.capturedDns ? "capture" : "", n.external ? "DNS server" : ""].filter(Boolean);
+    const sources = [n.capturedDns ? "capture" : "", n.external ? "DNS server" : ""].filter(
+      Boolean,
+    );
     parts.push(sources.length ? `network (${sources.join(", ")})` : "network");
   }
   if (n.transport) {
