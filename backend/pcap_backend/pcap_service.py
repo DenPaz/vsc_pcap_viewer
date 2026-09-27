@@ -12,7 +12,9 @@ process per open editor). All heavy lifting is delegated to tshark:
   to that frame (``-c N``) so dissection state from earlier packets (TCP
   reassembly etc.) is still correct.
 * ``set_coloring`` runs one ``--color`` pass and keeps a one-byte rule index
-  per frame; ``list_packets`` rows then carry their ``color``.
+  per frame; ``list_packets`` rows then carry their ``color``. ``open`` can
+  evaluate the rules in its own pass instead (``coloring``), so colors come
+  with the rows.
 * ``export`` writes filtered captures with tshark (``-Y … -w``) and the packet
   list (CSV/JSON) straight from the row store.
 """
@@ -258,6 +260,29 @@ class _PassProgress:
 
 
 @dataclass(slots=True)
+class _InlineColoring:
+    """Coloring rules evaluated by the index pass itself (``open {coloring}``):
+    ``--color`` and ``frame.coloring_rule.name`` as a last field, so every row
+    comes with its color. About 6% on the index pass instead of a second pass."""
+
+    raw: list[Any]  # the rules as given (their digest names the saved colors)
+    rules: list[coloring.ColorRule | str]
+    errors: dict[int, str]  # malformed rules, then tshark's compile errors
+    # Rule index + 1 per frame (0 = none), index 0 unused; grows with the rows.
+    colors: array[int] = field(default_factory=lambda: array("B", [0]))
+    colored: int = 0
+    coloring_id: int = 0
+    enabled: bool = True  # False if tshark rejected the field (the pass ran without)
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "coloringId": self.coloring_id,
+            "colored": self.colored,
+            "errors": {str(i): m for i, m in sorted(self.errors.items())},
+        }
+
+
+@dataclass(slots=True)
 class _Indexing:
     """A (streaming) index pass running in the background."""
 
@@ -270,6 +295,7 @@ class _Indexing:
     future: Future[None] | None = None
     # `open` returned while the pass was running: finishing it updates the capture.
     attached: bool = False
+    inline: _InlineColoring | None = None
 
 
 @dataclass(slots=True)
@@ -480,18 +506,15 @@ class PcapService:
         the pass goes on in the background and "index" notifications report
         its progress and end ("progress", then "done" with the final result,
         or "failed"). Until then the unfiltered list grows as rows arrive, and
-        what needs every row (filters, sorting, find…) raises IndexingError.
+        what needs every row (sorting, find…) raises IndexingError.
+
+        ``coloring: {rules}`` (as for set_coloring) evaluates the coloring rules
+        in the index pass, so rows come with their ``color``; the result (and
+        "done") then carries ``coloring: {coloringId, colored, errors}``. From a
+        saved index, the colors saved for these rules are used, if any (else no
+        ``coloring``: run set_coloring).
         """
-        path = Path(param(params, "path", str)).expanduser()
-        if not path.is_file():
-            raise InvalidParamsError(f"capture file not found: {path}")
-        try:
-            with path.open("rb") as fh:
-                fh.read(1)
-        except PermissionError as exc:
-            raise InvalidParamsError(
-                f"cannot read {path}: permission denied (check the file's permissions)"
-            ) from exc
+        path = _readable_capture(param(params, "path", str))
         options = DissectionOptions.from_params(
             str_list(params, "lua"),
             str_list(params, "decodeAs"),
@@ -505,6 +528,7 @@ class PcapService:
         tshark = self._require_tshark().with_options(options)
         stream = bool(params.get("stream"))
         cache = _cache_from(params.get("cache"))
+        inline = _inline_coloring(params.get("coloring"))
 
         with self._lock:
             self._close_file()
@@ -517,10 +541,10 @@ class PcapService:
         if cache is not None and key is not None:
             hit = cache.load(key)
             if hit is not None:
-                return self._open_cached(path, tshark, hit, work_dir, cache, key)
+                return self._open_cached(path, tshark, hit, work_dir, cache, key, inline)
 
         info_future = self._pool.submit(self._capinfos, tshark, path, ctx.token)
-        indexing = _Indexing(token=CancelToken(), report=ctx.progress)
+        indexing = _Indexing(token=CancelToken(), report=ctx.progress, inline=inline)
         ctx.token.on_cancel(indexing.token.cancel)
         indexing.future = self._pool.submit(
             self._run_index, tshark, path, work_dir, columns, info, info_future, indexing,
@@ -553,7 +577,20 @@ class PcapService:
             self._next_filter_id += 1
             everything = FrameIndex.all(info.frames)
             self._view = _View(self._next_filter_id, "", everything, None, everything)
-            return self._open_result(self._file, indexing=not complete)
+            result = self._open_result(self._file, indexing=not complete)
+            if inline is not None and inline.enabled:
+                self._show_colors(inline, inline.colors)
+                # (The pass keeps appending to inline.colors: published rows have theirs.)
+                result["coloring"] = (
+                    inline.summary() if complete else {"coloringId": inline.coloring_id}
+                )
+            return result
+
+    def _show_colors(self, inline: _InlineColoring, colors: array[int]) -> None:
+        """Make ``colors`` the list's coloring (under the lock)."""
+        self._coloring_id += 1
+        inline.coloring_id = self._coloring_id
+        self._colors = colors
 
     def _open_result(self, f: _Open, *, indexing: bool = False) -> dict[str, Any]:
         result = f.info.to_json()
@@ -586,8 +623,9 @@ class PcapService:
 
         try:
             base = self._index_pass(
-                tshark, path, work_dir, columns, info, ctx, base=True, on_rows=rows_ready
-            )
+                tshark, path, work_dir, columns, info, ctx, base=True, on_rows=rows_ready,
+                inline=indexing.inline,
+            )  # fmt: skip
             indexing.store = base
             meta = info_future.result()
             for name in ("start_time", "end_time", "link_type", "file_type"):
@@ -623,6 +661,10 @@ class PcapService:
                     "columns": columns,
                 },
             )
+            inline = indexing.inline
+            if inline is not None and inline.enabled:
+                extra = {"colored": inline.colored, "errors": inline.summary()["errors"]}
+                cache.save_colors(key, rules_key(inline.raw), inline.colors, extra)
 
     def _index_progress(self, progress: Any) -> None:
         """A streaming open's "index" progress notification. With a filter
@@ -664,6 +706,9 @@ class PcapService:
         if view is not None and not view.expr and view.sort is None:
             view.matched = view.ordered = FrameIndex.all(f.info.frames)
         done: dict[str, Any] = {"event": "done", "info": self._open_result(f)}
+        inline = indexing.inline
+        if inline is not None and inline.enabled and inline.coloring_id == self._coloring_id:
+            done["coloring"] = inline.summary()
         counts = self._view_counts()
         if counts is not None:
             done["view"] = counts
@@ -677,8 +722,10 @@ class PcapService:
         work_dir: Path,
         cache: IndexCache,
         key: str,
+        inline: _InlineColoring | None = None,
     ) -> dict[str, Any]:
-        """Open from a saved index: no tshark pass at all."""
+        """Open from a saved index: no tshark pass at all (and the colors saved
+        for these coloring rules, if any)."""
         meta = hit.meta
         rows_path = work_dir / "rows-cached.tsv"
         try:
@@ -706,6 +753,15 @@ class PcapService:
             everything = FrameIndex.all(info.frames)
             self._view = _View(self._next_filter_id, "", everything, None, everything)
             result = self._open_result(self._file)
+            saved_colors = (
+                cache.load_colors(key, rules_key(inline.raw), info.frames) if inline else None
+            )
+            if inline is not None and saved_colors is not None:
+                colors, extra = saved_colors
+                self._show_colors(inline, colors)
+                inline.colored = int(extra.get("colored", 0))
+                inline.errors.update({int(i): str(m) for i, m in extra.get("errors", {}).items()})
+                result["coloring"] = inline.summary()
         result["fromCache"] = True
         return result
 
@@ -771,13 +827,16 @@ class PcapService:
         *,
         base: bool,
         on_rows: Callable[[_Store], None] | None = None,
+        inline: _InlineColoring | None = None,
     ) -> _Store:
         """Run one ``-T fields`` pass, writing every frame's row to a RowStore.
 
         Retries without fields tshark rejects (unknown custom columns, or the
         column field names of older tshark versions). Rows are published as
         they come; ``on_rows`` gets the store once the first ones are readable
-        (FIRST_BATCH rows, or FIRST_BATCH_S with at least one).
+        (FIRST_BATCH rows, or FIRST_BATCH_S with at least one). With ``inline``
+        (base pass only), the coloring rules are evaluated too: the last field
+        is the matching rule, kept in ``inline.colors`` (not in the row store).
         """
         # (name the caller asked for, name actually passed to tshark)
         pairs = [(c.field, c.field) for c in BASE_COLUMNS] if base else []
@@ -785,7 +844,10 @@ class PcapService:
         legacy = {c.field: c.legacy_field for c in BASE_COLUMNS}
         size = max(1, info.size)
         overhead = _RECORD_OVERHEAD.get(sniff_format(path) or "") if base else None
-        for _attempt in range(3):
+        if not base:
+            inline = None
+        env = self._coloring_env(tshark, work_dir, inline, ctx) if inline else None
+        for _attempt in range(4):
             self._store_seq += 1
             store_path = work_dir / f"rows-{self._store_seq}.tsv"
             actual = [a for _, a in pairs]
@@ -794,27 +856,26 @@ class PcapService:
             # tshark blanks duplicated -e fields, so only prepend frame.number
             # when it is not already the first column.
             fields = actual if base else ["frame.number", *actual]
-            argv = tshark.argv(*_fields_args(fields), capture=str(path))
-            bad_lines = 0
+            color_args: list[str] = []
+            if inline is not None:
+                fields = [*fields, _COLOR_FIELD]
+                color_args = ["--color"]
+                inline.colors, inline.colored = array("B", [0]), 0
+            argv = tshark.argv(*color_args, *_fields_args(fields), capture=str(path))
             store = _Store(rows, tuple(name for name, _ in pairs))
             tracker = _PassProgress(ctx, store, on_rows, size, overhead)
             try:
-                for line in stream_lines(argv, result, ctx.token):
-                    parts = line.split(b"\t", 1)
-                    try:
-                        number = int(parts[0])
-                    except ValueError:
-                        bad_lines += 1
-                        continue
-                    rest = line if base else (parts[1] if len(parts) > 1 else b"")
-                    rows.append(number, rest)
-                    tracker.row(number, rest)
+                lines = stream_lines(argv, result, ctx.token, env=env)
+                bad_lines = _read_rows(lines, rows, tracker, base=base, inline=inline)
             finally:
                 rows.finish()
             if result.lines == 0 and result.returncode not in (0, None):
                 rows.close()
                 store_path.unlink(missing_ok=True)
                 rejected = _rejected_fields(result.stderr)
+                if inline is not None and _COLOR_FIELD in rejected:
+                    inline.enabled, inline, env = False, None, None  # index without colors
+                    continue
                 if rejected and _drop_rejected(pairs, rejected, legacy, custom, info.warnings):
                     continue
                 raise _index_error(tshark, path, result)
@@ -822,10 +883,26 @@ class PcapService:
                 info.warnings.append(f"{bad_lines} unparseable line(s) in tshark output skipped")
             if result.stderr:
                 info.warnings += _stderr_warnings(result.stderr)
+            if inline is not None:
+                inline.errors.update(coloring.parse_compile_errors(result.stderr))
+                while len(inline.colors) <= len(rows):  # one byte per frame, like set_coloring
+                    inline.colors.append(0)
             ctx.progress({"phase": "index", "frames": len(rows), "fraction": 1.0})
             # Columns are exposed under the names the caller asked for.
             return store
         raise ToolError("tshark rejected the requested columns")
+
+    @staticmethod
+    def _coloring_env(
+        tshark: Tshark, work_dir: Path, inline: _InlineColoring, ctx: RequestContext
+    ) -> dict[str, str]:
+        """Environment for a pass that evaluates ``inline``'s rules: tshark reads
+        them only from its personal config folder (see coloring.py)."""
+        color_dir = work_dir / "colorfilters"
+        color_dir.mkdir(exist_ok=True)
+        personal = coloring.personal_config_dir(tshark.folders(ctx.token))
+        coloring.prepare_config_dir(color_dir, inline.rules, personal)
+        return {**os.environ, "WIRESHARK_CONFIG_DIR": str(color_dir)}
 
     def _capinfos(self, tshark: Tshark, path: Path, token: CancelToken) -> dict[str, Any]:
         if tshark.capinfos is None:
@@ -1850,9 +1927,7 @@ class PcapService:
         with self._lock:
             self._coloring_seq += 1
             seq = self._coloring_seq
-        rules = [coloring.parse_rule(r) for r in raw[: coloring.MAX_RULES]]
-        errors = {i: r for i, r in enumerate(rules) if isinstance(r, str)}
-        errors.update({i: "too many coloring rules" for i in range(coloring.MAX_RULES, len(raw))})
+        rules, errors = _parse_rules(raw)
         valid = sum(isinstance(r, coloring.ColorRule) for r in rules)
         colors: array[int] | None = None
         colored = 0
@@ -2320,13 +2395,93 @@ def parse_decode_as_choices(stderr: str) -> list[dict[str, str]]:
 
 
 def _stderr_warnings(stderr: str) -> list[str]:
-    """Group tshark stderr into user-facing warnings (Lua errors, truncation...)."""
+    """Group tshark stderr into user-facing warnings (Lua errors, truncation...).
+    Coloring rules that don't compile are reported per rule instead."""
     out: list[str] = []
     for block in re.split(r"\n(?=tshark: )", stderr.strip()):
         text = block.strip()
-        if text:
+        if text and "in colorfilters file" not in text:
             out.append(text.removeprefix("tshark: "))
     return out
+
+
+def _readable_capture(raw: str) -> Path:
+    """The capture's path, once we could read from it ourselves (a sandboxed
+    tshark's permission errors are explained separately)."""
+    path = Path(raw).expanduser()
+    if not path.is_file():
+        raise InvalidParamsError(f"capture file not found: {path}")
+    try:
+        with path.open("rb") as fh:
+            fh.read(1)
+    except PermissionError as exc:
+        raise InvalidParamsError(
+            f"cannot read {path}: permission denied (check the file's permissions)"
+        ) from exc
+    return path
+
+
+_COLOR_FIELD = "frame.coloring_rule.name"
+
+
+def _parse_rules(raw: list[Any]) -> tuple[list[coloring.ColorRule | str], dict[int, str]]:
+    """Coloring rules (at most MAX_RULES) and the reasons some can't be used."""
+    rules = [coloring.parse_rule(r) for r in raw[: coloring.MAX_RULES]]
+    errors = {i: r for i, r in enumerate(rules) if isinstance(r, str)}
+    errors.update({i: "too many coloring rules" for i in range(coloring.MAX_RULES, len(raw))})
+    return rules, errors
+
+
+def _inline_coloring(raw: Any) -> _InlineColoring | None:
+    """``open``'s ``coloring: {rules}`` (None without valid rules)."""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict) or not isinstance(raw.get("rules"), list):
+        raise InvalidParamsError("parameter 'coloring' must be {rules: [...]}")
+    rules, errors = _parse_rules(raw["rules"])
+    if not any(isinstance(r, coloring.ColorRule) for r in rules):
+        return None
+    return _InlineColoring(raw["rules"], rules, errors)
+
+
+def _read_rows(
+    lines: Iterable[bytes],
+    rows: RowStore,
+    tracker: _PassProgress,
+    *,
+    base: bool,
+    inline: _InlineColoring | None,
+) -> int:
+    """Store an index pass's rows (and colors); returns the unparseable lines."""
+    bad_lines = 0
+    for line in lines:
+        parts = line.split(b"\t", 1)
+        try:
+            number = int(parts[0])
+        except ValueError:
+            bad_lines += 1
+            continue
+        row = line
+        if inline is not None:
+            row, _sep, rule = line.rpartition(b"\t")
+            _add_color(inline, number, rule)  # before the row is published
+        rest = row if base else (parts[1] if len(parts) > 1 else b"")
+        rows.append(number, rest)
+        tracker.row(number, rest)
+    return bad_lines
+
+
+def _add_color(inline: _InlineColoring, number: int, rule: bytes) -> None:
+    """Record frame ``number``'s matching rule (tshark names rules by index)."""
+    colors = inline.colors
+    while len(colors) < number:  # (frames are dense; pad like the row store would)
+        colors.append(0)
+    idx = int(rule) if rule.isdigit() else -1
+    if 0 <= idx < len(inline.rules):
+        colors.append(idx + 1)
+        inline.colored += 1
+    else:
+        colors.append(0)
 
 
 def parse_capinfos(text: str) -> dict[str, Any]:

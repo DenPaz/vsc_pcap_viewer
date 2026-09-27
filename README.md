@@ -124,7 +124,12 @@ by **tshark** (Wireshark's command-line tool), so results match Wireshark exactl
   extension. Rules live in `pcapViewer.coloringRules`, so they can be edited,
   disabled (`"enabled": false`) or shared per workspace. *Colorize with Filter…*
   adds a rule on top, *PCAP: Toggle Packet Coloring* turns coloring off.
-  Changing rules recolors open captures in the background without re-indexing.
+  Colors come with the packets: opening a capture evaluates the rules in the
+  same tshark pass that builds the packet list (about 6% slower than without
+  colors), so even a big capture shows colored rows within half a second, and
+  the colors are saved with the capture's index. Changing rules recolors open
+  captures in the background without re-indexing ("Coloring… 40%" in the
+  status bar).
 - **Export**: *PCAP: Export Specified Packets…* writes the displayed packets,
   all packets or the selected packets to a new **pcapng** or **pcap** file.
   *PCAP: Export Packet List as CSV/JSON…* saves the displayed (or selected)
@@ -293,11 +298,13 @@ Webview (HTML/JS)  --postMessage-->  Extension host (TypeScript)
   up to it into a small temporary file (it reads records without dissecting
   them), tshark dissects only those, and the frame numbers in the tree are
   shifted back to the capture's.
-- Coloring runs one `tshark --color` pass in the background and keeps one
-  byte per packet (the matching rule). tshark reads coloring rules only from
-  its configuration folder, so the pass points `WIRESHARK_CONFIG_DIR` at a
-  temporary folder with the generated rules and copies of your other
-  Wireshark settings.
+- Coloring keeps one byte per packet (the matching rule). When a capture is
+  opened, the index pass also runs with `--color` and reports each packet's
+  rule as one more field, so colors arrive with the rows; changed rules run
+  one separate `tshark --color` pass in the background. tshark reads coloring
+  rules only from its configuration folder, so these passes point
+  `WIRESHARK_CONFIG_DIR` at a temporary folder with the generated rules and
+  copies of your other Wireshark settings.
 - Exporting packets runs `tshark -Y <filter> -w <file>`; the packet list and
   packet bytes are written from the backend's own index and detail cache.
 
@@ -308,7 +315,8 @@ Measured with `test/perf/bench.py` on 1,000,000 synthetic packets (146 MB,
 
 | Operation | Time |
 |---|---|
-| Open (index pass) | 29–36 s (tshark-bound); the first rows show after 0.5 s |
+| Open (index pass) | 29–36 s (tshark-bound); the first rows show after 0.5 s, already colored |
+| Coloring with the 14 default rules | +2 s on the index pass (a separate pass, used when rules change: ~30 s) |
 | Reopen an unchanged capture (saved index) | 0.01 s |
 | Fetch a 200-row page (any position) | < 1 ms |
 | 1000 random scroll pages | 0.09 s total |

@@ -8,11 +8,21 @@ import type { ExplainOutcome, ExplainSink, FilterAssistant, SuggestOutcome } fro
 import { ColoringResult, FilterEvent, HostToWebview, OpenResult, ViewCounts, ViewerCommand, WEBVIEW_RPC_METHODS, WebviewToHost } from "./messages";
 import { saveFilterInteractive, showSavedFilters } from "./commands/savedFilters";
 import { FollowPanel } from "./panels/followPanel";
-import { ColumnLayout, ColumnSetting, QuickDetail, SavedFilter, TimeFormat, addColumn, normalizeColumns, pushHistory } from "./settingsModel";
+import { ColoringRule, ColumnLayout, ColumnSetting, QuickDetail, SavedFilter, TimeFormat, addColumn, normalizeColumns, pushHistory } from "./settingsModel";
 
 const HISTORY_KEY = "pcapViewer.filterHistory";
 /** Coloring problems already shown in a notification (each is reported once per window). */
 const reportedColoringErrors = new Set<string>();
+
+/** The coloring rules to apply ([] when coloring is off). */
+function coloringRules(settings: Settings): ColoringRule[] {
+  return settings.colorize ? settings.coloringRules : [];
+}
+
+/** Rules as the backend takes them (open's `coloring` and set_coloring: the same list, so saved colors match). */
+function coloringPayload(rules: ColoringRule[]): { filter: string; foreground: string; background: string }[] {
+  return rules.map((r) => ({ filter: r.filter, foreground: r.foreground, background: r.background }));
+}
 
 class PcapDocument implements vscode.CustomDocument {
   constructor(readonly uri: vscode.Uri) {}
@@ -122,6 +132,10 @@ export class PcapEditorSession {
   private disposed = false;
   private loadSeq = 0;
   private coloring?: { id: number; client: BackendClient };
+  /** A streaming open is still indexing (coloring rules evaluated by the index pass). */
+  private indexing = false;
+  /** The coloring rules changed while indexing: run a coloring pass when it's done. */
+  private coloringStale = false;
   /** In-flight "Ask AI" requests from the webview, by webview request id. */
   private readonly aiRequests = new Map<number, vscode.CancellationTokenSource>();
   private readonly ready: Promise<void>;
@@ -224,6 +238,8 @@ export class PcapEditorSession {
         this.log.info(`${this.uri.fsPath}: opened from the saved index (no index pass)`);
       }
       this.reportWarnings([...settings.luaWarnings, ...info.warnings]);
+      this.indexing = !!info.indexing;
+      this.coloringStale = false;
       this.post({
         type: "init",
         info,
@@ -236,6 +252,10 @@ export class PcapEditorSession {
         savedFilters: settings.savedFilters,
         elapsedMs: Date.now() - started,
       });
+      if (info.coloring) {
+        // Colors come with the rows (or were saved with the index).
+        this.showColoring({ colored: 0, errors: {}, ...info.coloring }, coloringRules(settings));
+      }
       if (info.indexing) {
         const known = info.warnings.length;
         onIndex = (p) => {
@@ -246,7 +266,9 @@ export class PcapEditorSession {
         early.splice(0).forEach(onIndex);
       } else {
         stopIndexEvents();
-        void this.applyColoring();
+        if (!info.coloring) {
+          void this.applyColoring();
+        }
       }
       void this.postAiAvailability();
     } catch (err) {
@@ -356,9 +378,16 @@ export class PcapEditorSession {
     if (error) {
       this.log.warn(`${this.uri.fsPath}: indexing stopped: ${error}`);
     }
+    this.indexing = false;
     if (this.info) {
       this.post({ type: "indexDone", info: this.info, error, view: p.view as ViewCounts | undefined });
-      void this.applyColoring();
+      const coloring = p.coloring as ColoringResult | undefined;
+      if (coloring && !this.coloringStale) {
+        this.showColoring(coloring, coloringRules(readSettings(this.uri))); // compile errors are known now
+      } else {
+        void this.applyColoring(); // no colors yet, or the rules changed meanwhile
+      }
+      this.coloringStale = false;
     }
     return true;
   }
@@ -377,6 +406,8 @@ export class PcapEditorSession {
             columns: settings.columns.map((c) => c.field),
             // Show the first rows while the rest is indexed, and reuse saved indexes.
             stream: true,
+            // Colors come with the rows: the index pass evaluates the coloring rules.
+            coloring: coloringRules(settings).length ? { rules: coloringPayload(coloringRules(settings)) } : undefined,
             cache: settings.indexCacheBytes > 0 ? { dir: indexCacheDir(this.context), maxBytes: settings.indexCacheBytes } : undefined,
           },
           {
@@ -577,15 +608,24 @@ export class PcapEditorSession {
     if (!client?.running || !this.info) {
       return;
     }
+    if (this.indexing) {
+      this.coloringStale = true; // a coloring pass needs every packet: when indexing is done
+      return;
+    }
     if (this.coloring?.client === client) {
       client.cancel(this.coloring.id);
     }
-    const settings = readSettings(this.uri);
-    const rules = settings.colorize ? settings.coloringRules : [];
+    const rules = coloringRules(readSettings(this.uri));
+    if (rules.length) {
+      this.post({ type: "coloringProgress", fraction: null });
+    }
     const pending = client.send<ColoringResult>(
       "set_coloring",
-      { rules: rules.map((r) => ({ filter: r.filter, foreground: r.foreground, background: r.background })) },
-      { timeoutMs: 0 },
+      { rules: coloringPayload(rules) },
+      {
+        timeoutMs: 0,
+        onProgress: (p) => this.post({ type: "coloringProgress", fraction: typeof p.fraction === "number" ? p.fraction : null }),
+      },
     );
     const coloring = { id: pending.id, client };
     this.coloring = coloring;
@@ -598,6 +638,9 @@ export class PcapEditorSession {
       if (!(err instanceof RpcError && err.cancelled) && this.client === client) {
         this.log.warn(`${this.uri.fsPath}: coloring failed: ${describeError(err)}`);
       }
+      if (this.coloring === coloring) {
+        this.post({ type: "coloringProgress", fraction: null, done: true });
+      }
       return;
     } finally {
       if (this.coloring === coloring) {
@@ -607,6 +650,11 @@ export class PcapEditorSession {
     if (this.client !== client || this.disposed) {
       return;
     }
+    this.showColoring(result, rules);
+  }
+
+  /** Report rules that were skipped, and give the viewer the palette of `result`'s colors. */
+  private showColoring(result: ColoringResult, rules: ColoringRule[]): void {
     const problems = Object.entries(result.errors).map(([i, message]) => `Coloring rule "${rules[Number(i)]?.name ?? i}" skipped: ${message}`);
     for (const p of problems) {
       this.log.warn(p);

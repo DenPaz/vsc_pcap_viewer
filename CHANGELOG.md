@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Colors come with the packets: opening a capture evaluates the coloring rules
+  in the same tshark pass that builds the packet list, so rows are colored as
+  soon as they show (0.5 s on a million packets) instead of after indexing and
+  a second full pass (about a minute). It adds about 6% to the pass, and the
+  colors are saved with the index. A coloring pass after changing rules shows
+  "Coloring… N%" in the status bar.
 - Fixed: after scrolling to the end of the list while a big capture was still
   being indexed (or a filter was still running), the list stopped growing.
 - Streaming filters: on big captures the matches show as tshark finds them,

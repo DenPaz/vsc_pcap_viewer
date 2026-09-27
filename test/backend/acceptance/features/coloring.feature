@@ -18,6 +18,19 @@ Feature: Coloring rules
     Then coloring rule 1 is reported as invalid
     And the "ICMP" packets are colored by rule 2
 
+  Scenario: Opening a capture with coloring rules colors it in the same pass
+    When I open the capture "mixed.pcapng" with the coloring rules "dns", "udp" and "tcp"
+    Then the colors came with the packet list
+    And the "DNS" packets are colored by rule 1
+    And the "UDP" packets are colored by rule 2
+    And the "HTTP" packets are colored by rule 3
+    And the "ARP" packets are not colored
+
+  Scenario: A rule that does not compile is reported when opening
+    When I open the capture "mixed.pcapng" with the coloring rules "nosuch.field" and "icmp"
+    Then coloring rule 1 is reported as invalid
+    And the "ICMP" packets are colored by rule 2
+
   Scenario: Coloring can be turned off
     Given the coloring rules "tcp" are set
     When I clear the coloring rules
