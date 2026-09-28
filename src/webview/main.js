@@ -105,6 +105,7 @@
     statusRight: $("status-right"),
     statusTime: $("status-time"),
     statusNames: $("status-names"),
+    statusLua: $("status-lua"),
     statusInfo: $("status-info"),
     statusCapture: $("status-capture"),
     captureText: $("capture-text"),
@@ -387,6 +388,7 @@
     state.layout = msg.layout || { order: [], hidden: [] };
     state.timeFormat = msg.timeFormat || "relative";
     el.statusNames.textContent = msg.names || "";
+    el.statusLua.textContent = msg.lua || "";
     state.quickDetail = msg.quickDetail || state.quickDetail;
     state.timeRef = null;
     state.markCount = 0;
@@ -3635,6 +3637,7 @@
   el.statusNames.addEventListener("click", () =>
     vscode.postMessage({ type: "pickNameResolution" }),
   );
+  el.statusLua.addEventListener("click", () => vscode.postMessage({ type: "pickLuaDissectors" }));
 
   // ------------------------------------------------------------------ column header menu and drag
 
@@ -4058,6 +4061,7 @@
     el.statusTime.textContent = TIME_LABELS[state.timeFormat] ?? "";
     el.statusTime.classList.toggle("hidden", !info);
     el.statusNames.classList.toggle("hidden", !info);
+    el.statusLua.classList.toggle("hidden", !info || !el.statusLua.textContent);
     if (!info) {
       el.statusLeft.textContent = "";
       el.statusInfo.textContent = "";

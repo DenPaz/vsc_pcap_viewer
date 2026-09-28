@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { initLuaChoices } from "./luaChoice";
 import { registerAnalysisCommands } from "./commands/analysis";
 import { registerColoringCommands } from "./commands/coloring";
 import { registerColumnCommands } from "./commands/columns";
@@ -32,6 +33,8 @@ export interface PcapViewerApi {
 }
 
 export function activate(context: vscode.ExtensionContext): PcapViewerApi {
+  // Before any capture loads: readSettings applies each capture's Lua choice.
+  initLuaChoices(context.workspaceState);
   const log = vscode.window.createOutputChannel("PCAP Viewer", { log: true });
   context.subscriptions.push(log);
   const assistant = new FilterAssistant(log);

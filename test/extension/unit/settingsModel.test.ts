@@ -25,6 +25,8 @@ import {
   MAX_FILTER_BUTTONS,
   pushHistory,
   resolveLuaScripts,
+  applyLuaChoice,
+  luaLabel,
   resolveSettingPath,
   upsertSavedFilter,
   withTlsKeyLog,
@@ -75,6 +77,27 @@ suite("settingsModel", () => {
     });
     assert.equal(res.scripts.length, 0);
     assert.match(res.warnings[0], /ENOENT/);
+  });
+
+  test("applyLuaChoice: all configured scripts unless a choice was made", () => {
+    const a = path.resolve("/d/a.lua");
+    const b = path.resolve("/d/b.lua");
+    const gone = path.resolve("/old/x.lua");
+    assert.deepEqual(applyLuaChoice([a, b], undefined), { scripts: [a, b], missing: [] });
+    assert.deepEqual(applyLuaChoice([a, b], []), { scripts: [], missing: [] }, "none");
+    // Configured order wins; a chosen script that isn't configured any more is left out.
+    assert.deepEqual(applyLuaChoice([a, b], [b, gone, a]), { scripts: [a, b], missing: [gone] });
+    assert.deepEqual(applyLuaChoice([a, b], [path.resolve("/d/./b.lua")]).scripts, [b]);
+  });
+
+  test("luaLabel: the status-bar text for the Lua dissectors in effect", () => {
+    const [a, b, c] = ["/d/a.lua", "/d/b.lua", "/d/c.lua"].map((f) => path.resolve(f));
+    assert.equal(luaLabel([], [], false), "", "nothing configured: no label");
+    assert.equal(luaLabel([a], [a], false), "Lua: a.lua");
+    assert.equal(luaLabel([a, b, c], [a, b, c], false), "Lua: all 3");
+    assert.equal(luaLabel([a, b], [a, b, c], true), "Lua: a.lua, b.lua");
+    assert.equal(luaLabel([a, b, c], [a, b, c], true), "Lua: 3 of 3");
+    assert.equal(luaLabel([], [a, b], true), "Lua: none");
   });
 
   test("pushHistory de-duplicates and caps", () => {

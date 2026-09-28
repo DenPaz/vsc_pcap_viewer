@@ -487,6 +487,38 @@ suite("PCAP Viewer smoke test", () => {
     await waitFor(() => (api.provider.allSessions.length ? undefined : true), 10_000);
   });
 
+  test("Lua dissectors: a capture's own choice, remembered across reloads", async () => {
+    const ext = vscode.extensions.all.find((e) => e.packageJSON.name === "pcap-viewer");
+    const api = (await ext!.activate()) as PcapViewerApi;
+    const example = path.resolve(FIXTURES, "../../backend/dissectors/example.lua");
+    const cfg = vscode.workspace.getConfiguration("pcapViewer");
+    await cfg.update("luaScripts", [example], vscode.ConfigurationTarget.Global);
+    const uri = vscode.Uri.file(path.join(FIXTURES, "http.pcap"));
+    try {
+      await vscode.commands.executeCommand("vscode.openWith", uri, "pcapViewer.editor");
+      const session = await waitFor(() =>
+        api.provider.allSessions.find((s) => s.uri.fsPath === uri.fsPath && indexed(s)),
+      );
+      await waitFor(() => (session.lua.length === 1 ? true : undefined));
+      // None for this capture: it reloads without Lua, and a reload keeps the choice.
+      await vscode.commands.executeCommand("pcapViewer.chooseLuaDissectors", { scripts: [] });
+      await waitFor(() => (session.lua.length === 0 && indexed(session) ? true : undefined));
+      await session.load();
+      await waitFor(() => (indexed(session) ? true : undefined));
+      assert.deepEqual(session.lua, [], "the choice is remembered");
+      // All checked is the default again.
+      await vscode.commands.executeCommand("pcapViewer.chooseLuaDissectors", {
+        scripts: ["example.lua"],
+      });
+      await waitFor(() => (session.lua.length === 1 && indexed(session) ? true : undefined));
+      assert.equal(path.normalize(session.lua[0]), path.normalize(example));
+    } finally {
+      await cfg.update("luaScripts", undefined, vscode.ConfigurationTarget.Global);
+      await vscode.commands.executeCommand("workbench.action.closeAllEditors");
+      await waitFor(() => (api.provider.allSessions.length ? undefined : true), 10_000);
+    }
+  });
+
   test("file types: capture files open in the viewer, generic extensions only on request", async () => {
     const ext = vscode.extensions.all.find((e) => e.packageJSON.name === "pcap-viewer");
     const api = (await ext!.activate()) as PcapViewerApi;

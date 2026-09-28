@@ -8,6 +8,7 @@ import {
   QuickDetail,
   SavedFilter,
   TimeFormat,
+  applyLuaChoice,
   configTargetFor,
   normalizeColoringRules,
   normalizeColumnLayout,
@@ -20,13 +21,19 @@ import {
   resolveSettingPath,
   withTlsKeyLog,
 } from "./settingsModel";
+import { luaChoiceFor } from "./luaChoice";
 
 export const SECTION = "pcapViewer";
 
 export interface Settings {
   pythonPath: string;
   tsharkPath: string;
+  /** The Lua scripts this capture loads: `luaAvailable`, or the ones chosen for it. */
   luaScripts: string[];
+  /** Every configured script (`luaScripts` + `dissectorsFolder`). */
+  luaAvailable: string[];
+  /** Whether a choice was made for this capture (_PCAP: Lua Dissectors…_). */
+  luaChosen: boolean;
   luaWarnings: string[];
   decodeAs: string[];
   /** Includes tls.keylog_file when `tlsKeyLogFile` is set. */
@@ -68,12 +75,21 @@ export function readSettings(scope?: vscode.Uri): Settings {
     cfg.get<string>("dissectorsFolder", ""),
     baseDir,
   );
+  const chosen = luaChoiceFor(scope);
+  const applied = applyLuaChoice(lua.scripts, chosen);
   const keyLog = resolveSettingPath(cfg.get<string>("tlsKeyLogFile", ""), baseDir) ?? "";
   return {
     pythonPath: cfg.get<string>("pythonPath", "").trim(),
     tsharkPath: cfg.get<string>("tsharkPath", "").trim(),
-    luaScripts: lua.scripts,
-    luaWarnings: lua.warnings,
+    luaScripts: applied.scripts,
+    luaAvailable: lua.scripts,
+    luaChosen: chosen !== undefined,
+    luaWarnings: [
+      ...lua.warnings,
+      ...applied.missing.map(
+        (f) => `Lua dissector ${f} was chosen for this capture but is no longer configured`,
+      ),
+    ],
     decodeAs: cfg.get<string[]>("decodeAs", []).filter((r) => typeof r === "string" && r.trim()),
     prefs: withTlsKeyLog(cfg.get<Record<string, string | number | boolean>>("prefs", {}), keyLog),
     tlsKeyLogFile: keyLog,

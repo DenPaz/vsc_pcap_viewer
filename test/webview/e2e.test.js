@@ -165,6 +165,7 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
           "marks",
           "pickTimeFormat",
           "pickNameResolution",
+          "pickLuaDissectors",
           "renameColumn",
           "exportSelected",
           "copy",
@@ -694,7 +695,7 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     page.$$eval("#list-header > div", (cells) => cells.map((c) => c.dataset.id));
 
   /** Open another capture in the viewer, as the host would after a reload. */
-  async function reopenCapture(file, extra = {}, label = "Names: MAC") {
+  async function reopenCapture(file, extra = {}, label = "Names: MAC", lua = "") {
     const info = await client.request(
       "open",
       { path: path.join(ROOT, "test", "fixtures", file), columns: ["tcp.stream"], ...extra },
@@ -712,6 +713,7 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
       savedFilters,
       elapsedMs: 1,
       names: label,
+      lua,
     });
     await page.waitForFunction(
       (n) => document.querySelector("#status-left").textContent.includes(`Packets: ${n}`),
@@ -2032,6 +2034,21 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     await page.waitForFunction(
       () => document.querySelectorAll("#list-rows .list-row:not(.loading)").length === 11,
     );
+  });
+
+  test("Lua dissectors: the status link shows the capture's scripts and opens the picker", async () => {
+    await cleanView();
+    assert.equal(await page.isVisible("#status-lua"), false, "hidden: no scripts configured");
+    try {
+      await reopenCapture("http.pcap", {}, "Names: MAC", "Lua: asn1.lua");
+      assert.equal(await page.textContent("#status-lua"), "Lua: asn1.lua");
+      assert.ok(await page.isVisible("#status-lua"));
+      await page.click("#status-lua");
+      await expectHostLast({ type: "pickLuaDissectors" });
+    } finally {
+      await reopenCapture("http.pcap");
+    }
+    assert.equal(await page.isVisible("#status-lua"), false);
   });
 
   test("name resolution: status link, addresses as tooltips and in cell filters", async () => {

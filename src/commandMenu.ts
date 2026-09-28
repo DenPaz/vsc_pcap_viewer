@@ -96,6 +96,7 @@ const GROUP_OF: Readonly<Record<string, CommandGroup>> = {
   "pcapViewer.truncatePackets": "Editing",
   "pcapViewer.splitCapture": "Editing",
   "pcapViewer.embedTlsKeys": "Editing",
+  "pcapViewer.chooseLuaDissectors": "Dissectors",
   "pcapViewer.reloadDissectors": "Dissectors",
   "pcapViewer.newLuaDissector": "Dissectors",
   "pcapViewer.openDissectorsFolder": "Dissectors",

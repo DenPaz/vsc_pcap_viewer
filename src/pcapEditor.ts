@@ -50,6 +50,7 @@ import {
   SavedFilter,
   TimeFormat,
   addColumn,
+  luaLabel,
   nameResolutionLabel,
   normalizeColumns,
   exportFileName,
@@ -503,6 +504,8 @@ export class PcapEditorSession {
   keyLogFile = "";
   /** Name resolution this capture was last loaded with. */
   names: NameResolution = DEFAULT_NAME_RESOLUTION;
+  /** The Lua scripts of the latest load (settings, or this capture's choice). */
+  lua: string[] = [];
   private keyLogWatcher?: vscode.Disposable;
   /** Merging this rotated capture's pieces was offered (once per editor). */
   private mergeOffered = false;
@@ -618,6 +621,7 @@ export class PcapEditorSession {
     const settings = readSettings(this.uri);
     this.watchKeyLog(settings.tlsKeyLogFile);
     this.names = settings.nameResolution;
+    this.lua = settings.luaScripts;
     await this.stopBackend();
     if (this.disposed || seq !== this.loadSeq) {
       return;
@@ -715,6 +719,7 @@ export class PcapEditorSession {
         savedFilters: settings.savedFilters,
         elapsedMs: Date.now() - started,
         names: nameResolutionLabel(settings.nameResolution),
+        lua: luaLabel(settings.luaScripts, settings.luaAvailable, settings.luaChosen),
       });
       if (info.coloring) {
         // Colors come with the rows (or were saved with the index).
@@ -1170,6 +1175,10 @@ export class PcapEditorSession {
         return;
       case "pickNameResolution":
         await vscode.commands.executeCommand("pcapViewer.nameResolution");
+        return;
+      case "pickLuaDissectors":
+        this.activate(); // (the command acts on the active capture)
+        await vscode.commands.executeCommand("pcapViewer.chooseLuaDissectors");
         return;
       case "setComment":
         this.editComments(
