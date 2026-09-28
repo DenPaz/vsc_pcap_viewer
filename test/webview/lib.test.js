@@ -740,4 +740,75 @@ suite("webview lib: navigation and customisation", () => {
       { frame: 52, text: "Payload type changed at seq 1025" },
     ]);
   });
+
+  test("groupCommands: headings in order, commands in their order, unknown groups under Other", () => {
+    const c = (id, group) => ({ id, title: id, category: "PCAP", group });
+    const groups = lib.groupCommands([
+      c("other1", "Other"),
+      c("stats1", "Statistics"),
+      c("filter1", "Filters"),
+      c("odd", "Something New"),
+      c("stats2", "Statistics"),
+      c("ai1", "AI"),
+    ]);
+    assert.deepEqual(
+      groups.map((g) => [g.group, g.commands.map((x) => x.id)]),
+      [
+        ["Filters", ["filter1"]],
+        ["Statistics", ["stats1", "stats2"]],
+        ["AI", ["ai1"]],
+        ["Other", ["other1", "odd"]],
+      ],
+    );
+    assert.deepEqual(lib.groupCommands([]), []);
+    assert.deepEqual(lib.COMMAND_GROUP_ORDER.slice(0, 3), ["Filters", "Packets", "Statistics"]);
+  });
+
+  test("filterCommands: every word, case-insensitive, in the title, heading or category", () => {
+    const commands = [
+      { id: "a", title: "Conversations", category: "PCAP Statistics", group: "Statistics" },
+      { id: "b", title: "Export Objects…", category: "PCAP", group: "Export" },
+      { id: "c", title: "Follow TCP Stream", category: "PCAP", group: "Statistics" },
+    ];
+    const ids = (text) => lib.filterCommands(commands, text).map((c) => c.id);
+    assert.deepEqual(ids(""), ["a", "b", "c"]);
+    assert.deepEqual(ids("   "), ["a", "b", "c"]);
+    assert.deepEqual(ids("CONV"), ["a"]);
+    assert.deepEqual(ids("statistics"), ["a", "c"], "heading or category");
+    assert.deepEqual(ids("pcap statistics tcp"), ["c"]);
+    assert.deepEqual(ids("export"), ["b"]);
+    assert.deepEqual(ids("nothing"), []);
+  });
+
+  test("formatKeybinding: Ctrl+… on Windows and Linux, symbols (the mac binding) on macOS", () => {
+    const f = lib.formatKeybinding;
+    assert.equal(f({ key: "ctrl+/", mac: "cmd+/" }, false), "Ctrl+/");
+    assert.equal(f({ key: "ctrl+/", mac: "cmd+/" }, true), "⌘/");
+    assert.equal(f({ key: "ctrl+shift+n", mac: "cmd+shift+n" }, false), "Ctrl+Shift+N");
+    assert.equal(f({ key: "ctrl+shift+n", mac: "cmd+shift+n" }, true), "⌘⇧N");
+    assert.equal(f({ key: "ctrl+alt+c", mac: "cmd+alt+c" }, true), "⌘⌥C");
+    assert.equal(f({ key: "alt+left", mac: "alt+left" }, false), "Alt+Left");
+    assert.equal(f({ key: "alt+left", mac: "alt+left" }, true), "⌥←");
+    assert.equal(f({ key: "ctrl+g" }, true), "⌃G", "no mac binding: the key binding, in symbols");
+    assert.equal(f({ key: "ctrl+k ctrl+s" }, false), "Ctrl+K Ctrl+S", "chords");
+    assert.equal(f(undefined, false), "");
+  });
+
+  test("commandUnavailable: the first unmet requirement's reason, or null", () => {
+    const ctx = { selected: false, marks: 0, filter: false, capturing: false, ai: false };
+    const cmd = (requires) => ({ id: "x", title: "X", category: "PCAP", group: "Other", requires });
+    assert.equal(lib.commandUnavailable(cmd(undefined), ctx), null);
+    assert.equal(lib.commandUnavailable(cmd(["selection"]), ctx), "Select a packet first");
+    assert.equal(lib.commandUnavailable(cmd(["selection"]), { ...ctx, selected: true }), null);
+    assert.equal(lib.commandUnavailable(cmd(["marks"]), ctx), "No packets are marked");
+    assert.equal(lib.commandUnavailable(cmd(["marks"]), { ...ctx, marks: 2 }), null);
+    assert.equal(lib.commandUnavailable(cmd(["filter"]), ctx), "No display filter is applied");
+    assert.equal(lib.commandUnavailable(cmd(["capturing"]), ctx), "No capture is running");
+    assert.match(lib.commandUnavailable(cmd(["ai", "selection"]), ctx), /^AI help isn't available/);
+    assert.equal(
+      lib.commandUnavailable(cmd(["ai", "selection"]), { ...ctx, ai: true }),
+      "Select a packet first",
+    );
+    assert.equal(lib.commandUnavailable(cmd(["something new"]), ctx), null, "unknown: allowed");
+  });
 });

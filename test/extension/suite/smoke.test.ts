@@ -240,6 +240,26 @@ suite("PCAP Viewer smoke test", () => {
     const voip = await waitFor(() => VoipPanel.all.find((p) => p.session === session)?.calls);
     assert.deepEqual(voip, { calls: [], streams: [], heuristic: false });
 
+    // The ☰ menu: a listed command runs on this capture; anything else is ignored.
+    assert.ok(session.menuCommands.some((c) => c.id === "pcapViewer.statistics.endpoints"));
+    assert.equal(await session.runMenuCommand("pcapViewer.statistics.endpoints"), true);
+    const endpoints = await waitFor(() =>
+      StatsPanel.all.find((p) => p.kind === "endpoints" && p.session === session),
+    );
+    assert.equal(endpoints.session, session);
+    const editors = vscode.window.tabGroups.all.flatMap((g) => g.tabs).length;
+    for (const id of ["workbench.action.closeAllEditors", "pcapViewer.savedFilters", 42]) {
+      assert.equal(await session.runMenuCommand(id), false, `${String(id)} is not run`);
+    }
+    assert.equal(
+      vscode.window.tabGroups.all.flatMap((g) => g.tabs).length,
+      editors,
+      "nothing was closed",
+    );
+    // Leave the window as the later tests expect it: just the capture editor.
+    endpoints.panel.dispose();
+    await waitFor(() => (StatsPanel.all.includes(endpoints) ? undefined : true));
+
     await vscode.commands.executeCommand("workbench.action.closeAllEditors");
     await waitFor(() => (api.provider.allSessions.length ? undefined : true), 10_000);
     fs.rmSync(dir, { recursive: true, force: true });

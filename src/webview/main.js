@@ -73,6 +73,7 @@
     filterCancel: $("filter-cancel"),
     filterError: $("filter-error"),
     filterSaved: $("filter-saved"),
+    filterMenu: $("filter-menu"),
     filterAi: $("filter-ai"),
     filterField: $("filter-field"),
     suggest: $("suggest"),
@@ -208,6 +209,8 @@
     /** Field name → {type, desc} from the backend's field catalogue (frame links, Apply as Column). */
     /** @type {Map<string, {type: string, desc: string}>} */ fieldTypes: new Map(),
     /** "✨ Ask AI": available (host says a model can be used), asking (the input holds a description). */
+    /** The ☰ menu's commands (host "commands" message). @type {any[]} */
+    commands: [],
     ai: {
       available: false,
       asking: false,
@@ -352,6 +355,9 @@
         break;
       case "aiAvailable":
         setAiAvailable(!!msg.available);
+        break;
+      case "commands":
+        state.commands = Array.isArray(msg.commands) ? msg.commands : [];
         break;
       case "aiSuggestions":
         onAiSuggestions(msg);
@@ -2388,6 +2394,223 @@
     }
   });
   window.addEventListener("blur", hideMenu);
+
+  // ------------------------------------------------------------------ commands menu (☰)
+
+  /**
+   * Every PCAP Viewer command, grouped under headings, filtered as you type
+   * (lib.groupCommands/filterCommands). Focus stays in the filter box: ↑/↓,
+   * Home/End move the active entry (aria-activedescendant), Enter runs it,
+   * Esc or Tab closes. Entries that can't run now stay listed but disabled,
+   * with the reason as their tooltip and in the hint line.
+   */
+  const commandsMenu = (() => {
+    const root = document.createElement("div");
+    root.id = "commands-menu";
+    root.className = "context-menu command-menu hidden";
+    const filter = document.createElement("input");
+    filter.id = "commands-filter";
+    filter.type = "text";
+    filter.spellcheck = false;
+    filter.autocomplete = "off";
+    filter.placeholder = "Filter commands";
+    filter.setAttribute("aria-label", "Filter commands");
+    filter.setAttribute("aria-controls", "commands-list");
+    const list = document.createElement("div");
+    list.id = "commands-list";
+    list.setAttribute("role", "menu");
+    list.setAttribute("aria-label", "PCAP commands");
+    const hint = document.createElement("div");
+    hint.className = "command-hint hidden";
+    hint.setAttribute("aria-live", "polite");
+    root.append(filter, list, hint);
+    document.body.append(root);
+    return { root, filter, list, hint };
+  })();
+  const isMac = /Mac|iPhone|iPad/i.test(window.navigator.platform || window.navigator.userAgent);
+  /** @type {{items: {command: any, node: HTMLElement, reason: string | null}[], active: number}} */
+  const menuView = { items: [], active: -1 };
+
+  function commandContext() {
+    return {
+      selected: state.selectedFrame !== null,
+      marks: state.markCount,
+      filter: !!state.appliedFilter,
+      capturing: !!state.capture?.running,
+      ai: state.ai.available,
+    };
+  }
+
+  function renderCommandsMenu() {
+    const ctx = commandContext();
+    const shown = lib.filterCommands(state.commands, commandsMenu.filter.value);
+    menuView.items = [];
+    const groups = lib
+      .groupCommands(shown)
+      .map((/** @type {{group: string, commands: any[]}} */ g) => {
+        const group = document.createElement("div");
+        group.setAttribute("role", "group");
+        group.setAttribute("aria-label", g.group);
+        const heading = document.createElement("div");
+        heading.className = "heading";
+        heading.setAttribute("aria-hidden", "true");
+        heading.textContent = g.group;
+        group.append(heading);
+        for (const command of g.commands) {
+          const reason = lib.commandUnavailable(command, ctx);
+          const node = document.createElement("div");
+          const index = menuView.items.length;
+          node.id = `command-item-${index}`;
+          node.className = "item";
+          node.setAttribute("role", "menuitem");
+          node.dataset.id = command.id;
+          const title = document.createElement("span");
+          title.className = "title";
+          title.textContent = command.title;
+          const keys = document.createElement("span");
+          keys.className = "keys";
+          keys.textContent = lib.formatKeybinding(command.keys, isMac);
+          node.append(title, keys);
+          if (reason) {
+            node.setAttribute("aria-disabled", "true");
+            node.title = reason;
+          }
+          node.addEventListener("mousemove", () => setActiveCommand(index));
+          node.addEventListener("mousedown", (e) => e.preventDefault()); // (keep focus in the box)
+          node.addEventListener("click", () => runMenuEntry(index));
+          group.append(node);
+          menuView.items.push({ command, node, reason });
+        }
+        return group;
+      });
+    commandsMenu.list.replaceChildren(...groups);
+    const first = menuView.items.findIndex((i) => !i.reason);
+    setActiveCommand(menuView.items.length ? Math.max(0, first) : -1);
+  }
+
+  /** @param {number} index */
+  function setActiveCommand(index) {
+    menuView.items[menuView.active]?.node.classList.remove("active");
+    menuView.active = index;
+    const item = menuView.items[index];
+    if (item) {
+      item.node.classList.add("active");
+      item.node.scrollIntoView({ block: "nearest" });
+      commandsMenu.filter.setAttribute("aria-activedescendant", item.node.id);
+    } else {
+      commandsMenu.filter.removeAttribute("aria-activedescendant");
+    }
+    const text = !menuView.items.length
+      ? "No matching commands"
+      : item?.reason
+        ? `${item.command.title}: ${item.reason}`
+        : "";
+    commandsMenu.hint.textContent = text;
+    commandsMenu.hint.classList.toggle("hidden", !text);
+  }
+
+  function commandsMenuOpen() {
+    return !commandsMenu.root.classList.contains("hidden");
+  }
+
+  function openCommandsMenu() {
+    hideMenu();
+    commandsMenu.filter.value = "";
+    commandsMenu.root.classList.remove("hidden");
+    el.filterMenu.setAttribute("aria-expanded", "true");
+    renderCommandsMenu();
+    // Below the button, its right edge on the button's, inside the window.
+    const button = el.filterMenu.getBoundingClientRect();
+    const menu = commandsMenu.root.getBoundingClientRect();
+    const left = Math.max(
+      4,
+      Math.min(button.right - menu.width, window.innerWidth - menu.width - 4),
+    );
+    commandsMenu.root.style.left = `${left}px`;
+    commandsMenu.root.style.top = `${button.bottom + 2}px`;
+    commandsMenu.root.style.maxHeight = `${Math.max(120, window.innerHeight - button.bottom - 8)}px`;
+    commandsMenu.filter.focus();
+  }
+
+  /** @param {boolean} [refocus] give the focus back to the ☰ button */
+  function closeCommandsMenu(refocus = false) {
+    if (!commandsMenuOpen()) {
+      return;
+    }
+    commandsMenu.root.classList.add("hidden");
+    el.filterMenu.setAttribute("aria-expanded", "false");
+    if (refocus) {
+      el.filterMenu.focus();
+    }
+  }
+
+  /** Run an enabled entry on this capture (the host checks the id against its list). @param {number} index */
+  function runMenuEntry(index) {
+    const item = menuView.items[index];
+    if (!item) {
+      return;
+    }
+    if (item.reason) {
+      setActiveCommand(index); // (shows why in the hint line)
+      return;
+    }
+    closeCommandsMenu(true);
+    vscode.postMessage({ type: "runCommand", id: item.command.id });
+  }
+
+  /** @param {number} from @param {number} step */
+  function moveActiveCommand(from, step) {
+    const n = menuView.items.length;
+    if (n) {
+      setActiveCommand((((from + step) % n) + n) % n);
+    }
+  }
+
+  el.filterMenu.addEventListener("click", () =>
+    commandsMenuOpen() ? closeCommandsMenu(true) : openCommandsMenu(),
+  );
+  el.filterMenu.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown" && !commandsMenuOpen()) {
+      e.preventDefault();
+      openCommandsMenu();
+    }
+  });
+  commandsMenu.filter.addEventListener("input", renderCommandsMenu);
+  commandsMenu.filter.addEventListener("keydown", (e) => {
+    switch (e.key) {
+      case "ArrowDown":
+        moveActiveCommand(menuView.active, 1);
+        break;
+      case "ArrowUp":
+        moveActiveCommand(menuView.active < 0 ? 0 : menuView.active, -1);
+        break;
+      case "Home":
+        setActiveCommand(menuView.items.length ? 0 : -1);
+        break;
+      case "End":
+        setActiveCommand(menuView.items.length - 1);
+        break;
+      case "Enter":
+        runMenuEntry(menuView.active);
+        break;
+      case "Escape":
+      case "Tab":
+        closeCommandsMenu(true);
+        break;
+      default:
+        e.stopPropagation(); // (typing filters; the viewer's own keys stay out of it)
+        return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+  });
+  window.addEventListener("mousedown", (e) => {
+    const t = /** @type {Node} */ (e.target);
+    if (commandsMenuOpen() && !commandsMenu.root.contains(t) && !el.filterMenu.contains(t)) {
+      closeCommandsMenu();
+    }
+  });
+  window.addEventListener("blur", () => closeCommandsMenu());
 
   // ------------------------------------------------------------------ filter bar
 

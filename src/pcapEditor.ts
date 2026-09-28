@@ -37,6 +37,7 @@ import {
 import { saveFilterInteractive, showSavedFilters } from "./commands/savedFilters";
 import { FollowPanel } from "./panels/followPanel";
 import { rotatedSiblings } from "./rotation";
+import { MenuCommand, buildCommandMenu } from "./commandMenu";
 import {
   ColoringRule,
   ColumnLayout,
@@ -87,6 +88,14 @@ export interface CaptureRequest {
   filter: string;
   limits: CaptureLimits;
   promiscuous: boolean;
+}
+
+let menuCache: MenuCommand[] | undefined;
+
+/** The ☰ menu's commands, built once from the extension's package.json. */
+function commandMenu(context: vscode.ExtensionContext): MenuCommand[] {
+  menuCache ??= buildCommandMenu(context.extension.packageJSON);
+  return menuCache;
 }
 
 /**
@@ -552,6 +561,8 @@ export class PcapEditorSession {
       panel.webview.onDidReceiveMessage((msg: WebviewToHost) => {
         if (msg.type === "ready") {
           markReady();
+          // (Before the capture loads: Reload or Show Log help when it fails.)
+          this.post({ type: "commands", commands: this.menuCommands });
         }
         void this.onMessage(msg);
       }),
@@ -1055,6 +1066,9 @@ export class PcapEditorSession {
     switch (msg.type) {
       case "ready":
         return;
+      case "runCommand":
+        await this.runMenuCommand(msg.id);
+        return;
       case "rpc":
         return this.forwardRpc(msg.id, msg.method, msg.params);
       case "cancel": {
@@ -1534,6 +1548,31 @@ export class PcapEditorSession {
   /** Called by this capture's panels when they gain focus. */
   activate(): void {
     this.activateEmitter.fire();
+  }
+
+  /** The ☰ menu's commands, as sent to this webview. */
+  get menuCommands(): MenuCommand[] {
+    return commandMenu(this.context);
+  }
+
+  /**
+   * Run a ☰ menu entry on this capture: only a `pcapViewer.*` id from the list
+   * this webview was sent (anything else is ignored), with this session made
+   * the active one first, since commands act on `provider.activeSession`.
+   * Returns whether it ran.
+   */
+  async runMenuCommand(id: unknown): Promise<boolean> {
+    if (typeof id !== "string" || !this.menuCommands.some((c) => c.id === id)) {
+      this.log.warn(`ignored a request to run ${JSON.stringify(id)} from the viewer`);
+      return false;
+    }
+    this.activate();
+    try {
+      await vscode.commands.executeCommand(id);
+    } catch (err) {
+      this.log.error(`${id} failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    return true;
   }
 
   /** Bring the capture editor to the front (e.g. after a panel applied a filter). */

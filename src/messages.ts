@@ -2,6 +2,7 @@
  * Message protocol between the extension host and the webview
  * (src/webview/main.js). Keep both sides in sync.
  */
+import type { MenuCommand } from "./commandMenu";
 import type {
   ColumnLayout,
   ColumnSetting,
@@ -124,6 +125,8 @@ export type WebviewToHost =
   | { type: "saveFilter"; expr: string }
   /** The focused packet (detail pane) and, for a multi-selection, every selected frame. */
   | { type: "selection"; frame: number | null; frames?: number[] }
+  /** Run a command from the ☰ menu on this capture (only ids sent in "commands"). */
+  | { type: "runCommand"; id: string }
   | { type: "decodeAs"; frame: number }
   | { type: "follow"; proto: "tcp" | "udp" | "tls" | "http"; frame: number }
   | { type: "manageSavedFilters" }
@@ -177,6 +180,8 @@ export type HostToWebview =
       /** Status-bar text for the name resolution in effect, e.g. "Names: MAC". */
       names: string;
     }
+  /** The ☰ menu's commands (sent on "ready", before the capture loads). */
+  | { type: "commands"; commands: MenuCommand[] }
   | { type: "error"; message: string; canReload: boolean }
   | { type: "rpcResult"; id: number; result: unknown }
   | { type: "rpcError"; id: number; error: { code: number; message: string; data?: unknown } }

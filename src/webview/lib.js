@@ -1092,6 +1092,143 @@
     return { visible: false, fraction: null, secondary: false, label: "" };
   }
 
+  // ------------------------------------------------------------------ commands menu (☰)
+
+  /** The menu's headings in order (src/commandMenu.ts COMMAND_GROUPS). */
+  const COMMAND_GROUP_ORDER = [
+    "Filters",
+    "Packets",
+    "Statistics",
+    "Export",
+    "Capture",
+    "Editing",
+    "Dissectors",
+    "AI",
+    "Other",
+  ];
+
+  /**
+   * @typedef {{id: string, title: string, category: string, group: string,
+   *   keys?: {key: string, mac?: string}, requires?: string[]}} MenuCommand
+   */
+
+  /**
+   * Commands under their headings, in COMMAND_GROUP_ORDER (a group the order
+   * doesn't know goes under "Other"); each group keeps the commands' order.
+   * Empty groups are left out.
+   * @param {MenuCommand[]} commands
+   * @returns {{group: string, commands: MenuCommand[]}[]}
+   */
+  function groupCommands(commands) {
+    /** @type {Map<string, MenuCommand[]>} */
+    const byGroup = new Map(COMMAND_GROUP_ORDER.map((g) => [g, []]));
+    for (const c of commands) {
+      byGroup.get(COMMAND_GROUP_ORDER.includes(c.group) ? c.group : "Other")?.push(c);
+    }
+    return [...byGroup]
+      .filter(([, list]) => list.length)
+      .map(([group, list]) => ({ group, commands: list }));
+  }
+
+  /**
+   * The commands matching typed text: every word must occur (case-insensitive)
+   * in the title, the heading or the package.json category.
+   * @param {MenuCommand[]} commands @param {string} text
+   */
+  function filterCommands(commands, text) {
+    const words = text.toLowerCase().split(/\s+/).filter(Boolean);
+    if (!words.length) {
+      return commands;
+    }
+    return commands.filter((c) => {
+      const hay = `${c.title} ${c.group} ${c.category}`.toLowerCase();
+      return words.every((w) => hay.includes(w));
+    });
+  }
+
+  const KEY_NAMES = {
+    left: "Left",
+    right: "Right",
+    up: "Up",
+    down: "Down",
+    escape: "Esc",
+    enter: "Enter",
+  };
+  const MAC_SYMBOLS = { cmd: "⌘", ctrl: "⌃", alt: "⌥", shift: "⇧", meta: "⌘" };
+  const MAC_KEYS = { left: "←", right: "→", up: "↑", down: "↓", escape: "⎋", enter: "↩" };
+  const PC_MODIFIERS = {
+    ctrl: "Ctrl",
+    alt: "Alt",
+    shift: "Shift",
+    cmd: "Win",
+    meta: "Win",
+    win: "Win",
+  };
+
+  /**
+   * A package.json key binding as the platform shows it: "Ctrl+Shift+N" or,
+   * on macOS (its `mac` binding when there is one), "⌘⇧N". "" without one.
+   * @param {{key: string, mac?: string} | undefined} keys @param {boolean} mac
+   */
+  function formatKeybinding(keys, mac) {
+    if (!keys) {
+      return "";
+    }
+    const binding = mac ? keys.mac || keys.key : keys.key;
+    return binding
+      .split(" ") // (chords: "ctrl+k ctrl+s")
+      .map((chord) =>
+        chord
+          .split("+")
+          .map((part) => {
+            const p = part.toLowerCase();
+            if (mac) {
+              return MAC_SYMBOLS[p] ?? MAC_KEYS[p] ?? (p.length === 1 ? p.toUpperCase() : part);
+            }
+            return PC_MODIFIERS[p] ?? KEY_NAMES[p] ?? (p.length === 1 ? p.toUpperCase() : part);
+          })
+          .join(mac ? "" : "+"),
+      )
+      .join(" ");
+  }
+
+  /** Why a requirement isn't met (lib.commandUnavailable). */
+  const REQUIREMENT_REASONS = {
+    ai: "AI help isn't available (it needs GitHub Copilot, and pcapViewer.ai.enabled)",
+    selection: "Select a packet first",
+    marks: "No packets are marked",
+    filter: "No display filter is applied",
+    capturing: "No capture is running",
+  };
+
+  /**
+   * Why a command can't run now (its first requirement that isn't met), or
+   * null when it can. The menu shows such entries disabled with the reason.
+   * @param {MenuCommand} command
+   * @param {{selected: boolean, marks: number, filter: boolean, capturing: boolean, ai: boolean}} ctx
+   * @returns {string | null}
+   */
+  function commandUnavailable(command, ctx) {
+    for (const need of command.requires ?? []) {
+      const met =
+        need === "selection"
+          ? ctx.selected
+          : need === "marks"
+            ? ctx.marks > 0
+            : need === "filter"
+              ? ctx.filter
+              : need === "capturing"
+                ? ctx.capturing
+                : need === "ai"
+                  ? ctx.ai
+                  : true;
+      if (!met) {
+        return REQUIREMENT_REASONS[need] ?? "Not available now";
+      }
+    }
+    return null;
+  }
+
   // ------------------------------------------------------------------ VoIP
 
   /**
@@ -1194,6 +1331,11 @@
   }
 
   const api = {
+    COMMAND_GROUP_ORDER,
+    groupCommands,
+    filterCommands,
+    formatKeybinding,
+    commandUnavailable,
     callFlow,
     rtpStreamLabel,
     rtpProblems,

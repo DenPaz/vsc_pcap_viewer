@@ -61,6 +61,13 @@ by **tshark** (Wireshark's command-line tool), so results match Wireshark exactl
   keep the matches found so far. A sort chosen meanwhile applies when the
   filter is done. Finished filter results are cached, also with the saved
   index, so reapplying a recent filter after reopening a capture is instant.
+- **All commands in one place**: ☰ at the end of the viewer's filter bar lists
+  every PCAP Viewer command under headings (Filters, Packets, Statistics,
+  Export, Capture, Editing, Dissectors, AI, Other) with its key binding. Type to
+  narrow the list, use the arrow keys and Enter, or click; the command runs on
+  this capture. Commands that can't run right now (Stop Capture while nothing
+  is being captured, commands that need a selected packet, AI commands without
+  Copilot) are greyed out and say why.
 - **TLS decryption** with a key log file: _PCAP: Set TLS Key Log File…_ picks
   the file your browser or curl writes when `SSLKEYLOGFILE` is set
   (`pcapViewer.tlsKeyLogFile`). The capture reloads with HTTP, HTTP/2 and
@@ -361,6 +368,9 @@ Other formats Wireshark reads work as well when the file has one of these names
 shows "_name_ is not a capture file that tshark can read" in the viewer, with a
 button to reopen it in another editor. Reading zstd and LZ4 files needs a
 tshark built with them (`tshark --version` lists "with Zstandard", "with LZ4").
+
+Every command below is in the Command Palette and in the viewer's ☰ menu (at
+the end of the filter bar), which runs it on that capture.
 
 | Command                                                                                                               | Default key                           | Description                                                                                                       |
 | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
