@@ -3,6 +3,7 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 import { revealFile } from "./reveal";
 import { SECTION, getSetting, readSettings, updateSetting } from "../config";
+import { setLuaChoice } from "../luaChoice";
 import { luaDissectorTemplate, validatePort, validateProtocolName } from "../luaTemplate";
 import type { PcapEditorProvider, PcapEditorSession } from "../pcapEditor";
 import {
@@ -87,6 +88,86 @@ export async function reloadDissectors(
   const n = scripts.size;
   vscode.window.setStatusBarMessage(
     `Reloaded ${sessions.length} capture(s) with ${n} Lua dissector${n === 1 ? "" : "s"}`,
+    4000,
+  );
+}
+
+// ---------------------------------------------------------------------- per-capture choice
+
+/** Arguments of pcapViewer.chooseLuaDissectors (tests skip the picker): scripts by path or name. */
+export interface LuaChoiceArgs {
+  scripts?: string[];
+}
+
+/**
+ * PCAP: Lua Dissectors…: check which of the configured scripts this capture
+ * loads (none checked: no Lua; all checked: back to every configured script,
+ * including ones added later). The choice is remembered per capture file and
+ * the capture reloads with it; switching back to an earlier choice reopens
+ * from its saved index.
+ */
+async function chooseLuaDissectors(provider: PcapEditorProvider, args?: LuaChoiceArgs) {
+  const session = requireSession(provider);
+  if (!session) {
+    return;
+  }
+  const settings = readSettings(session.uri);
+  const available = settings.luaAvailable;
+  if (!available.length) {
+    const pick = await vscode.window.showInformationMessage(
+      "No Lua dissectors are configured. Put .lua files in the dissectors folder, or list them in pcapViewer.luaScripts.",
+      "Open Dissectors Folder",
+      "Open Settings",
+    );
+    if (pick === "Open Dissectors Folder") {
+      await vscode.commands.executeCommand("pcapViewer.openDissectorsFolder");
+    } else if (pick === "Open Settings") {
+      await vscode.commands.executeCommand("workbench.action.openSettings", "pcapViewer.lua");
+    }
+    return;
+  }
+  let chosen: string[] | undefined;
+  if (args?.scripts) {
+    const wanted = new Set(args.scripts.map((f) => path.normalize(f)));
+    chosen = available.filter((f) => wanted.has(path.normalize(f)) || wanted.has(path.basename(f)));
+  } else {
+    const active = new Set(settings.luaScripts.map((f) => path.normalize(f)));
+    const items = available.map((f) => ({
+      label: path.basename(f),
+      description: vscode.workspace.asRelativePath(path.dirname(f)),
+      picked: active.has(path.normalize(f)),
+      script: f,
+    }));
+    const picked = await vscode.window.showQuickPick(items, {
+      canPickMany: true,
+      ignoreFocusOut: true,
+      title: `Lua Dissectors for ${path.basename(session.uri.fsPath)}`,
+      placeHolder: "Check the scripts this capture loads (none checked: no Lua dissectors)",
+    });
+    if (!picked) {
+      return;
+    }
+    chosen = picked.map((i) => i.script);
+  }
+  // Every script checked means "all configured", so scripts added later load too.
+  const next = chosen.length === available.length ? undefined : chosen;
+  const current = settings.luaChosen ? settings.luaScripts : undefined;
+  const same =
+    current === undefined
+      ? next === undefined
+      : next !== undefined && next.join("\n") === current.join("\n");
+  if (same) {
+    return;
+  }
+  await setLuaChoice(session.uri, next);
+  const file = path.normalize(session.uri.fsPath);
+  const sessions = provider.allSessions.filter((s) => path.normalize(s.uri.fsPath) === file);
+  await Promise.all(sessions.map((s) => s.load()));
+  const n = next?.length ?? available.length;
+  vscode.window.setStatusBarMessage(
+    next?.length === 0
+      ? `${path.basename(file)}: no Lua dissectors`
+      : `${path.basename(file)}: ${n} Lua dissector${n === 1 ? "" : "s"}`,
     4000,
   );
 }
@@ -456,6 +537,9 @@ export function registerDissectorCommands(
   context.subscriptions.push(
     vscode.commands.registerCommand("pcapViewer.reloadDissectors", () =>
       reloadDissectors(provider, log),
+    ),
+    vscode.commands.registerCommand("pcapViewer.chooseLuaDissectors", (args?: LuaChoiceArgs) =>
+      chooseLuaDissectors(provider, args),
     ),
     vscode.commands.registerCommand("pcapViewer.newLuaDissector", () => newLuaDissector()),
     vscode.commands.registerCommand("pcapViewer.openDissectorsFolder", () =>

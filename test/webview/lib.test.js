@@ -764,6 +764,29 @@ suite("webview lib: navigation and customisation", () => {
     assert.deepEqual(lib.COMMAND_GROUP_ORDER.slice(0, 3), ["Filters", "Packets", "Statistics"]);
   });
 
+  test("commandMenuRows: headings fold their commands, except while searching", () => {
+    const c = (id, group) => ({ id, title: id, category: "PCAP", group });
+    const groups = lib.groupCommands([
+      c("f1", "Filters"),
+      c("s1", "Statistics"),
+      c("s2", "Statistics"),
+    ]);
+    const shape = (rows) =>
+      rows.map((r) =>
+        r.kind === "group" ? `${r.open ? "▾" : "▸"}${r.group}(${r.count})` : r.command.id,
+      );
+    assert.deepEqual(shape(lib.commandMenuRows(groups, new Set(), false)), [
+      "▸Filters(1)",
+      "▸Statistics(2)",
+    ]);
+    const open = lib.commandMenuRows(groups, new Set(["Statistics"]), false);
+    assert.deepEqual(shape(open), ["▸Filters(1)", "▾Statistics(2)", "s1", "s2"]);
+    assert.ok(open.filter((r) => r.kind === "group").every((r) => r.foldable));
+    const searching = lib.commandMenuRows(groups, new Set(), true);
+    assert.deepEqual(shape(searching), ["▾Filters(1)", "f1", "▾Statistics(2)", "s1", "s2"]);
+    assert.ok(searching.filter((r) => r.kind === "group").every((r) => !r.foldable));
+  });
+
   test("filterCommands: every word, case-insensitive, in the title, heading or category", () => {
     const commands = [
       { id: "a", title: "Conversations", category: "PCAP Statistics", group: "Statistics" },

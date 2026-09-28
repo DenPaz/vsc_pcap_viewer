@@ -76,7 +76,8 @@ wireshark`, `C:\Program Files\Wireshark` added to PATH): lint, backend and
   JSON-RPC client (no `vscode` import: unit-testable). `src/settingsModel.ts`
   pure settings helpers. `src/commands/` command implementations
   (`export.ts`, `coloring.ts`, `dissectors.ts`, `tls.ts`, `merge.ts`,
-  `filterButtons.ts`, `importHexDump.ts`, …). `src/hexDump.ts` guesses a hex
+  `filterButtons.ts`, `importHexDump.ts`, `openFile.ts`, …).
+  `src/luaChoice.ts` per-capture Lua choices. `src/hexDump.ts` guesses a hex
   dump's layout (pure).
   `src/rotation.ts` recognises rotated capture pieces (pure).
   AI: `src/aiFilter.ts`, `aiExplain.ts`, `aiSummary.ts`, `aiAnomaly.ts`,
@@ -112,7 +113,8 @@ wireshark`, `C:\Program Files\Wireshark` added to PATH): lint, backend and
   comments, editcap options, packet counts), `capture.py` (live capture:
   dumpcap interfaces, filters, the pcapng tee), `editing.py` (editcap options
   of capture editing), `hexdump.py` (text2pcap options of Import from Hex
-  Dump), `voip.py` (RTP stream report, SIP calls, RTP stream
+  Dump), `ber.py` (counting back-to-back BER records), `voip.py` (RTP
+  stream report, SIP calls, RTP stream
   analysis, G.711 decoding and WAV), `protocol.py` (error codes,
   request context), `cancellation.py`, `index_cache.py` (saved indexes),
   `procs.py` (stopping children, also
@@ -522,6 +524,33 @@ matchCount, fraction}`; the end sends `done`, `stopped` (`stop_filter
   (exit code stays 0 on Lua errors). Lua shortens long chunk paths to
   `...tail`, so the script is found by suffix (`script_in_lua_message`).
   "Reload Dissectors" runs it first, then re-indexes every open capture.
+- **Lua per capture** (`luaChoice.ts`, `pcapViewer.chooseLuaDissectors`):
+  _PCAP: Lua Dissectors…_ (☰ Dissectors, the webview's `#status-lua` link =
+  `luaLabel`, posted in `init` as `lua`) offers the configured scripts
+  (`luaAvailable` = luaScripts + dissectorsFolder, so Restricted Mode's
+  user-only values apply) as a multi-select QuickPick. The choice is stored
+  per capture path in `workspaceState` (`pcapViewer.luaChoices`, 500 most
+  recent; [] = none; all checked = no entry, so scripts added later load).
+  `readSettings(uri)` applies it (`applyLuaChoice`), so every caller (load,
+  Reload Dissectors, the reload offer on save) sees the capture's own set;
+  chosen scripts no longer configured become `luaWarnings`. Choosing reloads
+  the sessions of that file; the saved index key already covers the scripts,
+  so switching back is instant. `session.lua` is the latest load's set
+  (smoke test). Args `{scripts}` (paths or basenames) skip the picker.
+- **Open any file** (`probe_file {path}`, `ber.py`, `commands/openFile.ts`,
+  `pcapViewer.openFile`): VS Code chooses editors by file name, and a glob
+  can't say "no extension", so files tshark reads under other names (a pcap
+  without suffix, a raw BER value: tshark's BER file type, `wtap_encap` 90,
+  one value per file) need an explicit open. The command takes the Explorer's
+  selection (`explorer/context`) or a QuickPick of `workspace.findFiles`
+  (20k, files.exclude) plus Browse…, runs `probe_file` (`_readable_capture`,
+  empty check, `tshark -r -c 1 -T fields -e frame.number` without dissection
+  options) through `withBackend`, and opens with `vscode.openWith(uri,
+"pcapViewer.editor")` (an explicit editor id needn't match the selector).
+  Unreadable: a warning with the reason; `ber.count_records` recognises
+  several BER values back to back (definite lengths, high tag numbers,
+  trailing 0x00/0xFF block padding; up to MAX_RECORDS) so the message says
+  so (`berRecords`). Splitting such files into packets isn't done yet.
 - **Decode As choices** come from tshark itself: an invalid `-d` rule makes it
   print "Valid layer types are:" or "Valid protocols for layer type X are:"
   lists (parsed by `parse_decode_as_choices`, cached). An unknown layer gets
@@ -1031,7 +1060,15 @@ stream, sessionId}`. The query stays short: expert rows (sanitized by
   when a command has no explicit heading, and category "PCAP Statistics"
   falls back to Statistics) and `REQUIRES` what it needs (selection, marks,
   filter, capturing, ai). `EXCLUDED_COMMANDS` names what is left out and why
-  (only `savedFilters`: the ★ button in the same bar). The host posts
+  (only `savedFilters`: the ★ button in the same bar). **Foldable groups**:
+  `lib.commandMenuRows` turns the groups into rows (a heading per group,
+  then the commands of open groups; while searching every matching group is
+  open and its heading is a plain label, `foldable: false`). Headings are
+  `menuitem`s with `aria-expanded` and `data-group` (commands keep
+  `data-id`); groups start folded and the open ones persist in the webview
+  state (`state.menuGroups`, `persist()`). Enter/click toggles a heading, →
+  opens it (again: into it), ← on a command goes to its heading and on an
+  open heading folds it; ←/→ move the caret instead while searching. The host posts
   `commands` on "ready", before the capture loads (Reload and Show Log help
   when it fails), and `runCommand {id}` is accepted only for an id in that
   list (`runMenuCommand`: anything else is logged and ignored); it calls
@@ -1103,4 +1140,5 @@ anomaly explanations and `@pcap` tools, and publishing: a release workflow,
 Marketplace details, and the Get Started walkthrough. Then resumable indexing
 with a progress bar, VoIP analysis (SIP calls, RTP streams, audio), the ☰
 commands menu, HTTP/DNS/packet length/service response time statistics,
-filter buttons, and Import from Hex Dump.
+filter buttons, and Import from Hex Dump. Then foldable ☰ menu groups,
+per-capture Lua dissectors, and Open File in PCAP Viewer for files of any name.

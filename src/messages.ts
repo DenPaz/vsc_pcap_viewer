@@ -146,6 +146,7 @@ export type WebviewToHost =
   | { type: "columnLayout"; layout: ColumnLayout }
   | { type: "pickTimeFormat" }
   | { type: "pickNameResolution" }
+  | { type: "pickLuaDissectors" }
   | { type: "tcpGraph"; frame: number }
   /** Change a packet's comment ("" deletes it): an undoable edit of the document. */
   | { type: "setComment"; frame: number; text: string }
@@ -184,6 +185,8 @@ export type HostToWebview =
       elapsedMs: number;
       /** Status-bar text for the name resolution in effect, e.g. "Names: MAC". */
       names: string;
+      /** Status-bar text for the Lua dissectors in effect ("" when none are configured). */
+      lua: string;
     }
   /** The ☰ menu's commands (sent on "ready", before the capture loads). */
   | { type: "commands"; commands: MenuCommand[] }

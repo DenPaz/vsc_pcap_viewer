@@ -82,6 +82,53 @@ export function resolveLuaScripts(
   return { scripts: [...new Set(scripts)], warnings };
 }
 
+/**
+ * The Lua scripts a capture loads: all configured ones (`available`) unless a
+ * choice was made for it (`chosen`, possibly empty = none). Chosen scripts
+ * that are no longer configured (a renamed file, another folder, Restricted
+ * Mode) are left out and returned as `missing`.
+ */
+export function applyLuaChoice(
+  available: readonly string[],
+  chosen: readonly string[] | undefined,
+): { scripts: string[]; missing: string[] } {
+  if (chosen === undefined) {
+    return { scripts: [...available], missing: [] };
+  }
+  const key = (f: string) => path.normalize(f);
+  const configured = new Set(available.map(key));
+  const wanted = new Set(chosen.map(key));
+  return {
+    scripts: available.filter((f) => wanted.has(key(f))),
+    missing: chosen.filter((f) => !configured.has(key(f))),
+  };
+}
+
+/**
+ * The viewer's status-bar text for the Lua dissectors in effect: "" when none
+ * are configured, else "Lua: asn1.lua", "Lua: all 5", "Lua: a.lua, b.lua",
+ * "Lua: 3 of 5" or "Lua: none".
+ */
+export function luaLabel(
+  scripts: readonly string[],
+  available: readonly string[],
+  chosen: boolean,
+): string {
+  if (!available.length && !scripts.length) {
+    return "";
+  }
+  if (!scripts.length) {
+    return "Lua: none";
+  }
+  const names = scripts.map((f) => path.basename(f));
+  if (!chosen && available.length > 1) {
+    return `Lua: all ${available.length}`;
+  }
+  return names.length <= 2
+    ? `Lua: ${names.join(", ")}`
+    : `Lua: ${names.length} of ${available.length}`;
+}
+
 function expandHome(p: string): string {
   if (p === "~" || p.startsWith("~/") || p.startsWith("~\\")) {
     const home = process.env.HOME ?? process.env.USERPROFILE ?? "";

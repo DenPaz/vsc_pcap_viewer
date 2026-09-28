@@ -35,7 +35,19 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import coloring, comments, editing, hexdump, navigation, objects, pdml, procs, stats, voip
+from . import (
+    ber,
+    coloring,
+    comments,
+    editing,
+    hexdump,
+    navigation,
+    objects,
+    pdml,
+    procs,
+    stats,
+    voip,
+)
 from .cache import FrameIndex, LruCache, RowStore, sort_frames, sort_frames_by_key
 from .cancellation import CancelledError, CancelToken
 from .capture import (
@@ -2994,6 +3006,42 @@ class PcapService:
                     )
         return {"path": str(dest), "packets": counts[1] if counts else comments.packet_count(dest)}
 
+    # ------------------------------------------------------------------ probe
+
+    def probe_file(self, params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
+        """Whether tshark can read ``path`` as a capture, whatever it is called
+        (for "Open File in PCAP Viewer…"): ``{readable: true, format}``
+        (pcap/pcapng/null for other formats tshark reads), or ``{readable:
+        false, message}``, with ``berRecords: N`` when the file is several BER
+        values back to back (tshark reads one BER value per file). Needs no open
+        capture; a missing or unreadable file is an InvalidParamsError."""
+        path = _readable_capture(param(params, "path", str))
+        if path.stat().st_size == 0:
+            return {"readable": False, "message": f"{path.name} is empty"}
+        tshark = self._require_tshark()
+        argv = tshark.argv(
+            "-c", "1", "-T", "fields", "-e", "frame.number", capture=str(path), dissect=False
+        )  # fmt: skip
+        res = run(argv, ctx.token)
+        if res.returncode == 0 and not _UNSUPPORTED_RE.search(res.stderr):
+            return {"readable": True, "format": sniff_format(path)}
+        if not _UNSUPPORTED_RE.search(res.stderr):
+            raise tshark.error(res.stderr, res.returncode, f"tshark could not read {path.name}")
+        records = ber.count_records(path)
+        if records and records > 1:
+            return {
+                "readable": False,
+                "berRecords": records,
+                "message": (
+                    f"{path.name} holds {records:,}{'+' if records >= ber.MAX_RECORDS else ''} "
+                    "BER records one after another; tshark reads a file of one BER value only"
+                ),
+            }
+        return {
+            "readable": False,
+            "message": f"{path.name} isn't a capture file in a format tshark can read",
+        }
+
     # ------------------------------------------------------------------ editing
 
     def edit_capture(self, params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
@@ -4007,6 +4055,7 @@ def rpc_methods(service: PcapService) -> dict[str, Callable[[dict[str, Any], Req
         "export": service.export,
         "merge": service.merge,
         "import_hexdump": service.import_hexdump,
+        "probe_file": service.probe_file,
         "edit_capture": service.edit_capture,
         "flow_graph": service.flow_graph,
         "tcp_graph": service.tcp_graph,

@@ -165,6 +165,7 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
           "marks",
           "pickTimeFormat",
           "pickNameResolution",
+          "pickLuaDissectors",
           "renameColumn",
           "exportSelected",
           "copy",
@@ -694,7 +695,7 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     page.$$eval("#list-header > div", (cells) => cells.map((c) => c.dataset.id));
 
   /** Open another capture in the viewer, as the host would after a reload. */
-  async function reopenCapture(file, extra = {}, label = "Names: MAC") {
+  async function reopenCapture(file, extra = {}, label = "Names: MAC", lua = "") {
     const info = await client.request(
       "open",
       { path: path.join(ROOT, "test", "fixtures", file), columns: ["tcp.stream"], ...extra },
@@ -712,6 +713,7 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
       savedFilters,
       elapsedMs: 1,
       names: label,
+      lua,
     });
     await page.waitForFunction(
       (n) => document.querySelector("#status-left").textContent.includes(`Packets: ${n}`),
@@ -1241,7 +1243,7 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
         focused: document.activeElement === b,
       }));
     const items = () =>
-      page.$$eval("#commands-list [role=menuitem]", (nodes) =>
+      page.$$eval("#commands-list [role=menuitem][data-id]", (nodes) =>
         nodes.map((n) => ({
           id: n.dataset.id,
           title: n.querySelector(".title")?.textContent,
@@ -1252,11 +1254,35 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
           group: n.closest("[role=group]")?.getAttribute("aria-label"),
         })),
       );
+    const headings = () =>
+      page.$$eval("#commands-list [role=menuitem][data-group]", (nodes) =>
+        nodes.map((n) => ({
+          group: n.dataset.group,
+          expanded: n.getAttribute("aria-expanded"),
+          count: Number(n.querySelector(".count")?.textContent),
+        })),
+      );
     const activeId = () =>
       page.$eval("#commands-filter", (i) => {
         const id = i.getAttribute("aria-activedescendant");
         return id ? document.getElementById(id)?.dataset.id : null;
       });
+    const activeGroup = () =>
+      page.$eval("#commands-filter", (i) => {
+        const id = i.getAttribute("aria-activedescendant");
+        return id ? document.getElementById(id)?.dataset.group : null;
+      });
+    const GROUPS = [
+      "Filters",
+      "Packets",
+      "Statistics",
+      "Export",
+      "Capture",
+      "Editing",
+      "Dissectors",
+      "AI",
+      "Other",
+    ];
 
     let b = await button();
     assert.deepEqual(
@@ -1264,7 +1290,7 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
       ["filter-clear", "All PCAP commands", "All PCAP commands", "menu", "false"],
     );
 
-    // Open with a click: every command, under the headings in their order.
+    // Open with a click: the headings in their order, folded, with their counts.
     await page.click("#filter-menu");
     assert.equal(await menuOpen(), true);
     assert.equal((await button()).expanded, "true");
@@ -1277,24 +1303,50 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     if (process.env.PCAP_SCREENSHOTS) {
       await page.screenshot({ path: `${process.env.PCAP_SCREENSHOTS}/commands-menu.png` });
     }
+    let hs = await headings();
+    assert.deepEqual(
+      hs.map((h) => h.group),
+      GROUPS,
+    );
+    assert.ok(hs.every((h) => h.expanded === "false"));
+    assert.equal(
+      hs.reduce((n, h) => n + h.count, 0),
+      menuCommands.length,
+      "the counts cover every command",
+    );
+    assert.equal((await items()).length, 0, "groups start folded");
+    assert.equal(await activeGroup(), "Filters");
+
+    // → opens the active heading, → again goes into it, ← back to the heading, ← folds it.
+    await page.keyboard.press("ArrowRight");
+    hs = await headings();
+    assert.equal(hs[0].expanded, "true");
+    assert.equal(await activeGroup(), "Filters", "the heading stays active");
+    const filters = await items();
+    assert.equal(filters.length, hs[0].count);
+    assert.ok(filters.every((i) => i.group === "Filters"));
+    await page.keyboard.press("ArrowRight");
+    assert.equal(await activeId(), "pcapViewer.applyFilter");
+    await page.keyboard.press("ArrowLeft");
+    assert.equal(await activeGroup(), "Filters");
+    await page.keyboard.press("ArrowLeft");
+    assert.equal((await headings())[0].expanded, "false");
+    assert.equal((await items()).length, 0);
+    // Enter toggles a heading too; ↓ moves between headings.
+    await page.keyboard.press("ArrowDown");
+    assert.equal(await activeGroup(), "Packets");
+    await page.keyboard.press("Enter");
+    assert.equal((await headings())[1].expanded, "true");
+    await page.keyboard.press("Enter");
+    assert.equal((await headings())[1].expanded, "false");
+
+    // A click on each heading opens it: every command, under its heading, in order.
+    for (const g of GROUPS) {
+      await page.click(`#commands-list [data-group='${g}']`);
+    }
     const all = await items();
     assert.equal(all.length, menuCommands.length, "every command is listed");
-    const groups = [...new Set(all.map((i) => i.group))];
-    assert.deepEqual(groups, [
-      "Filters",
-      "Packets",
-      "Statistics",
-      "Export",
-      "Capture",
-      "Editing",
-      "Dissectors",
-      "AI",
-      "Other",
-    ]);
-    assert.deepEqual(
-      await page.$$eval("#commands-list .heading", (h) => h.map((x) => x.textContent)),
-      groups,
-    );
+    assert.deepEqual([...new Set(all.map((i) => i.group))], GROUPS);
     const byId = Object.fromEntries(all.map((i) => [i.id, i]));
     // Key bindings follow the platform the webview runs on (macOS CI shows ⌘ and ⌥).
     const mac = await page.evaluate(() =>
@@ -1312,7 +1364,7 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     assert.equal(byId["pcapViewer.clearFilter"].reason, "No display filter is applied");
     assert.equal(byId["pcapViewer.statistics.conversations"].disabled, false);
     assert.equal(byId["pcapViewer.savedFilters"], undefined, "excluded");
-    assert.equal(await activeId(), "pcapViewer.applyFilter", "the first enabled entry is active");
+    assert.equal(await activeGroup(), "Other", "the heading clicked last stays active");
 
     // A disabled entry sends nothing (click or Enter); the hint says why.
     const runs = () => hostLog.filter((m) => m.type === "runCommand").length;
@@ -1325,11 +1377,18 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     );
     assert.equal(runs(), 0);
 
-    // Typing filters (title, heading or category); the arrows, Home/End move; Esc closes.
+    // Typing filters (title, heading or category) over every group, folded or not; the
+    // headings are then labels, and the arrows, Home/End move over the matches; Esc closes.
+    await page.click("#commands-list [data-group='Statistics']"); // (fold one)
     await page.fill("#commands-filter", "statistics conv");
     assert.deepEqual(
       (await items()).map((i) => i.id),
       ["pcapViewer.statistics.conversations"],
+    );
+    assert.deepEqual(await headings(), [], "headings are labels while searching");
+    assert.deepEqual(
+      await page.$$eval("#commands-list .heading", (h) => h.map((x) => x.textContent)),
+      ["Statistics"],
     );
     await page.fill("#commands-filter", "EXPORT");
     const exports = await items();
@@ -1367,9 +1426,19 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     assert.equal(await menuOpen(), false);
     assert.equal((await button()).focused, true);
 
-    // Space opens it too; ↓ lands on the disabled Clear (Enter sends nothing), ↓ again runs Save.
+    // Space opens it too, with the groups left open still open (Statistics was folded);
+    // ↓ goes from the Filters heading to Apply, ↓ to the disabled Clear (Enter sends nothing),
+    // ↓ again runs Save.
     await page.keyboard.press(" ");
     assert.equal(await menuOpen(), true);
+    assert.deepEqual(
+      (await headings()).filter((h) => h.expanded === "false").map((h) => h.group),
+      ["Statistics"],
+      "open groups are remembered",
+    );
+    assert.equal(await activeGroup(), "Filters");
+    await page.keyboard.press("ArrowDown");
+    assert.equal(await activeId(), "pcapViewer.applyFilter");
     await page.keyboard.press("ArrowDown");
     assert.equal(await activeId(), "pcapViewer.clearFilter");
     await page.keyboard.press("Enter");
@@ -1965,6 +2034,21 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     await page.waitForFunction(
       () => document.querySelectorAll("#list-rows .list-row:not(.loading)").length === 11,
     );
+  });
+
+  test("Lua dissectors: the status link shows the capture's scripts and opens the picker", async () => {
+    await cleanView();
+    assert.equal(await page.isVisible("#status-lua"), false, "hidden: no scripts configured");
+    try {
+      await reopenCapture("http.pcap", {}, "Names: MAC", "Lua: asn1.lua");
+      assert.equal(await page.textContent("#status-lua"), "Lua: asn1.lua");
+      assert.ok(await page.isVisible("#status-lua"));
+      await page.click("#status-lua");
+      await expectHostLast({ type: "pickLuaDissectors" });
+    } finally {
+      await reopenCapture("http.pcap");
+    }
+    assert.equal(await page.isVisible("#status-lua"), false);
   });
 
   test("name resolution: status link, addresses as tooltips and in cell filters", async () => {

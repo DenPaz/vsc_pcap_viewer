@@ -105,6 +105,7 @@
     statusRight: $("status-right"),
     statusTime: $("status-time"),
     statusNames: $("status-names"),
+    statusLua: $("status-lua"),
     statusInfo: $("status-info"),
     statusCapture: $("status-capture"),
     captureText: $("capture-text"),
@@ -214,6 +215,10 @@
     /** "✨ Ask AI": available (host says a model can be used), asking (the input holds a description). */
     /** The ☰ menu's commands (host "commands" message). @type {any[]} */
     commands: [],
+    /** The ☰ menu's open headings (the rest start folded), kept in the webview state. */
+    /** @type {Set<string>} */ menuGroups: new Set(
+      Array.isArray(saved.menuGroups) ? saved.menuGroups : [],
+    ),
     ai: {
       available: false,
       asking: false,
@@ -383,6 +388,7 @@
     state.layout = msg.layout || { order: [], hidden: [] };
     state.timeFormat = msg.timeFormat || "relative";
     el.statusNames.textContent = msg.names || "";
+    el.statusLua.textContent = msg.lua || "";
     state.quickDetail = msg.quickDetail || state.quickDetail;
     state.timeRef = null;
     state.markCount = 0;
@@ -2405,11 +2411,14 @@
   // ------------------------------------------------------------------ commands menu (☰)
 
   /**
-   * Every PCAP Viewer command, grouped under headings, filtered as you type
-   * (lib.groupCommands/filterCommands). Focus stays in the filter box: ↑/↓,
-   * Home/End move the active entry (aria-activedescendant), Enter runs it,
-   * Esc or Tab closes. Entries that can't run now stay listed but disabled,
-   * with the reason as their tooltip and in the hint line.
+   * Every PCAP Viewer command, grouped under foldable headings, filtered as
+   * you type (lib.groupCommands/filterCommands/commandMenuRows). Groups start
+   * folded and the open ones are remembered (`state.menuGroups`); typing
+   * shows every match with its heading as a label. Focus stays in the filter
+   * box: ↑/↓, Home/End move the active entry (aria-activedescendant), Enter
+   * runs it or toggles a heading, → opens a heading, ← goes back to it and
+   * folds it, Esc or Tab closes. Entries that can't run now stay listed but
+   * disabled, with the reason as their tooltip and in the hint line.
    */
   const commandsMenu = (() => {
     const root = document.createElement("div");
@@ -2435,7 +2444,7 @@
     return { root, filter, list, hint };
   })();
   const isMac = /Mac|iPhone|iPad/i.test(window.navigator.platform || window.navigator.userAgent);
-  /** @type {{items: {command: any, node: HTMLElement, reason: string | null}[], active: number}} */
+  /** @type {{items: {group: string, command: any, node: HTMLElement, reason: string | null}[], active: number}} */
   const menuView = { items: [], active: -1 };
 
   function commandContext() {
@@ -2448,51 +2457,102 @@
     };
   }
 
-  function renderCommandsMenu() {
+  function menuSearching() {
+    return commandsMenu.filter.value.trim() !== "";
+  }
+
+  /**
+   * @param {{group?: string, id?: string}} [keep] the entry to keep active
+   * (a heading by group, a command by id); else the first enabled one.
+   */
+  function renderCommandsMenu(keep) {
     const ctx = commandContext();
     const shown = lib.filterCommands(state.commands, commandsMenu.filter.value);
+    const rows = lib.commandMenuRows(lib.groupCommands(shown), state.menuGroups, menuSearching());
     menuView.items = [];
-    const groups = lib
-      .groupCommands(shown)
-      .map((/** @type {{group: string, commands: any[]}} */ g) => {
-        const group = document.createElement("div");
+    /** @type {HTMLElement[]} */
+    const groups = [];
+    /** @type {HTMLElement | null} */
+    let group = null;
+    for (const row of rows) {
+      const index = menuView.items.length;
+      if (row.kind === "group") {
+        group = document.createElement("div");
         group.setAttribute("role", "group");
-        group.setAttribute("aria-label", g.group);
+        group.setAttribute("aria-label", row.group);
+        groups.push(group);
         const heading = document.createElement("div");
         heading.className = "heading";
-        heading.setAttribute("aria-hidden", "true");
-        heading.textContent = g.group;
-        group.append(heading);
-        for (const command of g.commands) {
-          const reason = lib.commandUnavailable(command, ctx);
-          const node = document.createElement("div");
-          const index = menuView.items.length;
-          node.id = `command-item-${index}`;
-          node.className = "item";
-          node.setAttribute("role", "menuitem");
-          node.dataset.id = command.id;
-          const title = document.createElement("span");
-          title.className = "title";
-          title.textContent = command.title;
-          const keys = document.createElement("span");
-          keys.className = "keys";
-          keys.textContent = lib.formatKeybinding(command.keys, isMac);
-          node.append(title, keys);
-          if (reason) {
-            node.setAttribute("aria-disabled", "true");
-            node.title = reason;
-          }
-          node.addEventListener("mousemove", () => setActiveCommand(index));
-          node.addEventListener("mousedown", (e) => e.preventDefault()); // (keep focus in the box)
-          node.addEventListener("click", () => runMenuEntry(index));
-          group.append(node);
-          menuView.items.push({ command, node, reason });
+        if (!row.foldable) {
+          heading.setAttribute("aria-hidden", "true"); // (a label over search results)
+          heading.textContent = row.group;
+          group.append(heading);
+          continue;
         }
-        return group;
-      });
+        heading.classList.add("item");
+        heading.id = `command-item-${index}`;
+        heading.setAttribute("role", "menuitem");
+        heading.setAttribute("aria-expanded", String(row.open));
+        heading.dataset.group = row.group;
+        const chevron = document.createElement("span");
+        chevron.className = "chevron";
+        chevron.setAttribute("aria-hidden", "true");
+        chevron.textContent = row.open ? "▾" : "▸";
+        const title = document.createElement("span");
+        title.className = "title";
+        title.textContent = row.group;
+        const count = document.createElement("span");
+        count.className = "keys count";
+        count.textContent = String(row.count);
+        heading.append(chevron, title, count);
+        heading.addEventListener("mousemove", () => setActiveCommand(index));
+        heading.addEventListener("mousedown", (e) => e.preventDefault()); // (keep focus in the box)
+        heading.addEventListener("click", () => toggleMenuGroup(row.group));
+        group.append(heading);
+        menuView.items.push({ group: row.group, command: null, node: heading, reason: null });
+        continue;
+      }
+      const command = row.command;
+      const reason = lib.commandUnavailable(command, ctx);
+      const node = document.createElement("div");
+      node.id = `command-item-${index}`;
+      node.className = "item";
+      node.setAttribute("role", "menuitem");
+      node.dataset.id = command.id;
+      const title = document.createElement("span");
+      title.className = "title";
+      title.textContent = command.title;
+      const keys = document.createElement("span");
+      keys.className = "keys";
+      keys.textContent = lib.formatKeybinding(command.keys, isMac);
+      node.append(title, keys);
+      if (reason) {
+        node.setAttribute("aria-disabled", "true");
+        node.title = reason;
+      }
+      node.addEventListener("mousemove", () => setActiveCommand(index));
+      node.addEventListener("mousedown", (e) => e.preventDefault()); // (keep focus in the box)
+      node.addEventListener("click", () => runMenuEntry(index));
+      group?.append(node);
+      menuView.items.push({ group: row.group, command, node, reason });
+    }
     commandsMenu.list.replaceChildren(...groups);
+    const kept = menuView.items.findIndex((i) =>
+      keep?.id ? i.command?.id === keep.id : !i.command && i.group === keep?.group,
+    );
     const first = menuView.items.findIndex((i) => !i.reason);
-    setActiveCommand(menuView.items.length ? Math.max(0, first) : -1);
+    setActiveCommand(kept >= 0 ? kept : menuView.items.length ? Math.max(0, first) : -1);
+  }
+
+  /** Open or fold a heading (it stays the active entry). @param {string} group */
+  function toggleMenuGroup(group) {
+    if (state.menuGroups.has(group)) {
+      state.menuGroups.delete(group);
+    } else {
+      state.menuGroups.add(group);
+    }
+    persist();
+    renderCommandsMenu({ group });
   }
 
   /** @param {number} index */
@@ -2557,6 +2617,10 @@
     if (!item) {
       return;
     }
+    if (!item.command) {
+      toggleMenuGroup(item.group);
+      return;
+    }
     if (item.reason) {
       setActiveCommand(index); // (shows why in the hint line)
       return;
@@ -2582,7 +2646,7 @@
       openCommandsMenu();
     }
   });
-  commandsMenu.filter.addEventListener("input", renderCommandsMenu);
+  commandsMenu.filter.addEventListener("input", () => renderCommandsMenu());
   commandsMenu.filter.addEventListener("keydown", (e) => {
     switch (e.key) {
       case "ArrowDown":
@@ -2600,6 +2664,31 @@
       case "Enter":
         runMenuEntry(menuView.active);
         break;
+      case "ArrowRight":
+      case "ArrowLeft": {
+        const item = menuView.items[menuView.active];
+        if (menuSearching() || !item) {
+          e.stopPropagation(); // (the caret moves in the typed text)
+          return;
+        }
+        const heading = menuView.items.findIndex((i) => !i.command && i.group === item.group);
+        const open = state.menuGroups.has(item.group);
+        if (e.key === "ArrowRight") {
+          if (item.command) {
+            break;
+          }
+          if (open) {
+            moveActiveCommand(menuView.active, 1); // (into the group)
+          } else {
+            toggleMenuGroup(item.group);
+          }
+        } else if (item.command) {
+          setActiveCommand(heading);
+        } else if (open) {
+          toggleMenuGroup(item.group);
+        }
+        break;
+      }
       case "Escape":
       case "Tab":
         closeCommandsMenu(true);
@@ -3548,6 +3637,7 @@
   el.statusNames.addEventListener("click", () =>
     vscode.postMessage({ type: "pickNameResolution" }),
   );
+  el.statusLua.addEventListener("click", () => vscode.postMessage({ type: "pickLuaDissectors" }));
 
   // ------------------------------------------------------------------ column header menu and drag
 
@@ -3971,6 +4061,7 @@
     el.statusTime.textContent = TIME_LABELS[state.timeFormat] ?? "";
     el.statusTime.classList.toggle("hidden", !info);
     el.statusNames.classList.toggle("hidden", !info);
+    el.statusLua.classList.toggle("hidden", !info || !el.statusLua.textContent);
     if (!info) {
       el.statusLeft.textContent = "";
       el.statusInfo.textContent = "";
@@ -4029,6 +4120,7 @@
     vscode.setState({
       widths: state.widths,
       expanded: [...state.expanded].slice(-200),
+      menuGroups: [...state.menuGroups],
       listHeight: root.getPropertyValue("--list-height"),
       treeWidth: root.getPropertyValue("--tree-width"),
     });

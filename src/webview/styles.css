@@ -900,6 +900,28 @@ button.icon:hover {
   padding: 3px 12px;
 }
 
+/* A foldable heading: ▸ Statistics … 14 */
+.command-menu .heading.item {
+  justify-content: flex-start;
+  gap: 6px;
+  padding: 4px 12px;
+  cursor: default;
+}
+
+.command-menu .heading.item .title {
+  flex: 1;
+}
+
+.command-menu .chevron {
+  width: 1em;
+  text-align: center;
+}
+
+/* Commands under an open heading are indented past its chevron. */
+.command-menu .heading.item ~ .item {
+  padding-left: calc(12px + 1em + 6px);
+}
+
 .command-menu .item.active {
   color: var(
     --vscode-menu-selectionForeground,
