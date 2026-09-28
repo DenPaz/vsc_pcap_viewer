@@ -28,11 +28,17 @@ function loadDeps() {
   }
 }
 
-function serveWebview() {
-  const types = { ".js": "text/javascript", ".css": "text/css" };
+/**
+ * Serve src/webview's files, and with `media` (a folder) its files under
+ * /media/ (the VoIP panel's audio, like the panel's own local resource root).
+ */
+function serveWebview({ media } = {}) {
+  const types = { ".js": "text/javascript", ".css": "text/css", ".wav": "audio/wav" };
   const server = http.createServer((req, res) => {
-    const file = path.join(WEBVIEW, path.basename(new URL(req.url, "http://x").pathname));
-    if (!file.startsWith(WEBVIEW) || !fs.existsSync(file)) {
+    const pathname = new URL(req.url, "http://x").pathname;
+    const dir = media && pathname.startsWith("/media/") ? media : WEBVIEW;
+    const file = path.join(dir, path.basename(pathname));
+    if (!file.startsWith(dir) || !fs.existsSync(file)) {
       res.writeHead(404).end();
       return;
     }
@@ -70,9 +76,10 @@ function renderEditorHtml(origin) {
 }
 
 /** A statistics / follow panel page, mirroring src/panels/panelHtml.ts. */
-function renderPanelHtml(origin, script) {
+function renderPanelHtml(origin, script, { media = false } = {}) {
   const nonce = crypto.randomBytes(16).toString("base64");
-  const csp = `default-src 'none'; img-src ${origin} data:; style-src ${origin}; font-src ${origin}; script-src 'nonce-${nonce}'`;
+  const mediaSrc = media ? ` media-src ${origin};` : "";
+  const csp = `default-src 'none'; img-src ${origin} data:; style-src ${origin}; font-src ${origin};${mediaSrc} script-src 'nonce-${nonce}'`;
   return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
   <meta http-equiv="Content-Security-Policy" content="${csp}">
   <link rel="stylesheet" href="${origin}/styles.css"><link rel="stylesheet" href="${origin}/panel.css">

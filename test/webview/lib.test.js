@@ -684,4 +684,60 @@ suite("webview lib: navigation and customisation", () => {
     assert.equal(lib.progressView({ busy: -2 }).fraction, 0, "clamped to 0–1");
     assert.equal(lib.progressView({ busy: 0 }).visible, true, "0% is still running");
   });
+
+  test("callFlow: endpoint columns and SIP/RTP rows in time order", () => {
+    const streams = [
+      { src: "10.0.0.2", dst: "10.0.0.1", start: 1.021, payload: "g711U", packets: 50, lost: 0 },
+      {
+        src: "10.0.0.1",
+        dst: "10.0.0.2",
+        start: 1.0213,
+        payload: "g711U",
+        packets: 49,
+        lost: 1,
+        lostPercent: 2,
+      },
+      { src: "10.0.0.9", dst: "10.0.0.8", start: 0, payload: "g729", packets: 1, lost: 0 },
+    ];
+    const call = {
+      messages: [
+        [1, 0, "10.0.0.1", "10.0.0.2", "INVITE (SDP)"],
+        [4, 1.0, "10.0.0.2", "10.0.0.1", "200 OK (SDP)"],
+        [105, 2.07, "10.0.0.1", "10.0.0.3", "BYE"],
+      ],
+      streams: [0, 1],
+    };
+    const { nodes, rows } = lib.callFlow(call, streams);
+    assert.deepEqual(nodes, ["10.0.0.1", "10.0.0.2", "10.0.0.3"]);
+    assert.deepEqual(
+      rows.map((r) => [r.from, r.to, r.label, r.frame ?? `stream ${r.stream}`]),
+      [
+        [0, 1, "INVITE (SDP)", 1],
+        [1, 0, "200 OK (SDP)", 4],
+        [1, 0, "RTP g711U · 50 packets", "stream 0"],
+        [0, 1, "RTP g711U · 49 packets · 1 lost (2.0%)", "stream 1"],
+        [0, 2, "BYE", 105],
+      ],
+    );
+    assert.equal(
+      lib.rtpStreamLabel({ payload: "g711A", packets: 10, lost: -2 }),
+      "g711A · 10 packets · 2 duplicated",
+    );
+  });
+
+  test("rtpProblems lists sequence gaps, late packets and payload changes", () => {
+    const points = [
+      [7, 0, 1000, 0, 0, 0, 1, 0, 0],
+      [48, 0.42, 1021, 42.3, 1.05, -2.6, 0, 1, 1],
+      [50, 0.44, 1024, 20, 1, 0, 0, 1, 2],
+      [51, 0.45, 1022, 1, 1, 0, 0, 2, 0],
+      [52, 0.46, 1025, 20, 1, 0, 0, 3, 0],
+    ];
+    assert.deepEqual(lib.rtpProblems(points), [
+      { frame: 48, text: "1 packet lost before seq 1021" },
+      { frame: 50, text: "2 packets lost before seq 1024" },
+      { frame: 51, text: "Seq 1022 out of order or duplicated" },
+      { frame: 52, text: "Payload type changed at seq 1025" },
+    ]);
+  });
 });

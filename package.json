@@ -353,6 +353,11 @@
         "category": "PCAP Statistics"
       },
       {
+        "command": "pcapViewer.statistics.voipCalls",
+        "title": "VoIP Calls",
+        "category": "PCAP Statistics"
+      },
+      {
         "command": "pcapViewer.statistics.endpoints",
         "title": "Endpoints",
         "category": "PCAP Statistics"
@@ -574,6 +579,10 @@
         {
           "command": "pcapViewer.statistics.flowGraph",
           "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow || activeWebviewPanelId == pcapViewer.flowGraph"
+        },
+        {
+          "command": "pcapViewer.statistics.voipCalls",
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow || activeWebviewPanelId == pcapViewer.voip"
         },
         {
           "command": "pcapViewer.statistics.conversations",

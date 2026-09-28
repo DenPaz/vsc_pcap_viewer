@@ -255,6 +255,17 @@ is anything unusual?`) describes the capture from its statistics only:
   throughput, round-trip time and the receive window with the bytes in
   flight. Switch the direction, step to the previous or next stream, hover for
   the packet, click to go to it.
+- **VoIP calls**: _PCAP Statistics: VoIP Calls_ lists the SIP calls (from, to,
+  state such as Completed, Rejected (486 Busy Here) or Cancelled, setup time,
+  duration) with a sequence diagram of the selected call's SIP messages and
+  media, and the RTP streams with their packets, lost packets, delta and
+  jitter (tshark's RTP stream report). _Analyse_ follows one stream packet by
+  packet (RFC 3550 jitter over time, sequence gaps and late packets, each a
+  link to its packet); _Play_ decodes G.711 µ-law or A-law audio and plays it
+  in the panel, with silence where packets were lost; _Save Audio…_ writes a
+  WAV file (or the raw payload for other codecs). _Filter Call_ and _Filter
+  Stream_ show their packets in the capture. RTP that no SIP/SDP set up is
+  found with _Find RTP without signalling_ (tshark's RTP heuristic).
 - **Statistics**: Conversations and Endpoints (Ethernet, IPv4, IPv6, TCP, UDP),
   Protocol Hierarchy, I/O Graph (line chart plus table, adjustable interval),
   Expert Information and Capture File Properties. Each opens in a panel with
@@ -380,6 +391,7 @@ tshark built with them (`tshark --version` lists "with Zstandard", "with LZ4").
 | PCAP: Delete All Packet Comments                                                                                      |                                       | Remove every comment (one undoable edit)                                                                          |
 | PCAP Statistics: Flow Graph                                                                                           |                                       | The displayed packets as arrows between their endpoints                                                           |
 | PCAP Statistics: TCP Stream Graph                                                                                     |                                       | Stevens, throughput, round-trip time and window graphs of the selected packet's TCP stream                        |
+| PCAP Statistics: VoIP Calls                                                                                           |                                       | SIP calls with their flow, RTP streams with loss and jitter, stream analysis, play or save the audio              |
 | PCAP: Manage Custom Columns                                                                                           |                                       | Add or remove columns (searches tshark's field list)                                                              |
 | PCAP: Reload Capture                                                                                                  |                                       | Re-run tshark on the current capture                                                                              |
 | PCAP: Reload Dissectors                                                                                               |                                       | Check the Lua dissectors for errors, then re-index all open captures                                              |

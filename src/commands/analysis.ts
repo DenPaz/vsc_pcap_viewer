@@ -4,6 +4,7 @@ import { FlowGraphPanel } from "../panels/flowGraphPanel";
 import { ObjectsPanel } from "../panels/objectsPanel";
 import { StatsKind, StatsPanel } from "../panels/statsPanel";
 import { TcpGraphPanel } from "../panels/tcpGraphPanel";
+import { VoipPanel } from "../panels/voipPanel";
 import type { PcapEditorProvider } from "../pcapEditor";
 import { requireSession } from "./filter";
 
@@ -77,6 +78,10 @@ export function registerAnalysisCommands(
     vscode.commands.registerCommand("pcapViewer.statistics.flowGraph", () => {
       const session = requireSession(provider);
       return session ? FlowGraphPanel.show(context, session) : undefined;
+    }),
+    vscode.commands.registerCommand("pcapViewer.statistics.voipCalls", () => {
+      const session = requireSession(provider);
+      return session ? VoipPanel.show(context, session) : undefined;
     }),
     vscode.commands.registerCommand("pcapViewer.exportObjects", () => {
       const session = requireSession(provider);

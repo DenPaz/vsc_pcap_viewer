@@ -1092,7 +1092,112 @@
     return { visible: false, fraction: null, secondary: false, label: "" };
   }
 
+  // ------------------------------------------------------------------ VoIP
+
+  /**
+   * A call's sequence diagram: the endpoints (columns, in order of first
+   * appearance) and one row per SIP message and per RTP stream of the call
+   * (at the stream's start), in time order. A row's `from`/`to` are column
+   * indexes; RTP rows carry `stream` (index into `streams`) instead of a frame.
+   * @param {{messages: [number, number, string, string, string][], streams: number[]}} call
+   * @param {{src: string, dst: string, start: number, payload: string, packets: number, lost: number}[]} streams
+   * @returns {{nodes: string[], rows: {time: number, from: number, to: number, label: string, frame?: number, stream?: number}[]}}
+   */
+  function callFlow(call, streams) {
+    /** @type {string[]} */
+    const nodes = [];
+    const node = (/** @type {string} */ addr) => {
+      let i = nodes.indexOf(addr);
+      if (i < 0) {
+        i = nodes.push(addr) - 1;
+      }
+      return i;
+    };
+    /** @type {{time: number, from: number, to: number, label: string, frame?: number, stream?: number}[]} */
+    const rows = call.messages.map(([frame, time, src, dst, label]) => ({
+      time,
+      from: node(src),
+      to: node(dst),
+      label,
+      frame,
+    }));
+    for (const i of call.streams) {
+      const s = streams[i];
+      if (s) {
+        rows.push({
+          time: s.start,
+          from: node(s.src),
+          to: node(s.dst),
+          label: `RTP ${rtpStreamLabel(s)}`,
+          stream: i,
+        });
+      }
+    }
+    rows.sort((a, b) => a.time - b.time);
+    return { nodes, rows };
+  }
+
+  /**
+   * "g711U · 49 packets · 1 lost (2.0%)".
+   * @param {{payload: string, packets: number, lost: number, lostPercent?: number}} s
+   */
+  function rtpStreamLabel(s) {
+    const lost =
+      s.lost > 0
+        ? ` · ${s.lost.toLocaleString()} lost (${(s.lostPercent ?? 0).toFixed(1)}%)`
+        : s.lost < 0
+          ? ` · ${(-s.lost).toLocaleString()} duplicated`
+          : "";
+    return `${s.payload} · ${s.packets.toLocaleString()} packets${lost}`;
+  }
+
+  /** rtp_stream point fields (voip.POINT_FIELDS). */
+  const RP = {
+    frame: 0,
+    time: 1,
+    seq: 2,
+    delta: 3,
+    jitter: 4,
+    skew: 5,
+    marker: 6,
+    status: 7,
+    gap: 8,
+  };
+
+  /**
+   * The packets of an analysed RTP stream that are worth a look: sequence
+   * gaps, late or duplicated packets and payload type changes.
+   * @param {any[][]} points
+   * @returns {{frame: number, text: string}[]}
+   */
+  function rtpProblems(points) {
+    /** @type {{frame: number, text: string}[]} */
+    const out = [];
+    for (const p of points) {
+      const frame = p[RP.frame];
+      const seq = p[RP.seq];
+      switch (p[RP.status]) {
+        case 1: {
+          const n = p[RP.gap];
+          out.push({ frame, text: `${n} packet${n === 1 ? "" : "s"} lost before seq ${seq}` });
+          break;
+        }
+        case 2:
+          out.push({ frame, text: `Seq ${seq} out of order or duplicated` });
+          break;
+        case 3:
+          out.push({ frame, text: `Payload type changed at seq ${seq}` });
+          break;
+      }
+    }
+    return out;
+  }
+
   const api = {
+    callFlow,
+    rtpStreamLabel,
+    rtpProblems,
+    RP,
     indexingLabel,
     progressView,
     MAX_SCROLL_HEIGHT,

@@ -5,10 +5,14 @@ real tshark; the ``@tshark`` feature tag becomes a pytest marker, so they skip
 when tshark is missing (see ``test/backend/conftest.py``).
 """
 
+import itertools
 import json
 import os
 import re
+import sys
 import time
+import wave
+from array import array
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -67,6 +71,8 @@ class World:
     names: dict[str, bool] | None = None  # name resolution switches (None: tshark's own)
     objects: list[dict[str, Any]] | None = None
     save_dir: Path | None = None
+    voip: dict[str, Any] | None = None  # voip_calls' result
+    saved: Path | None = None  # a file saved by a step
     release: Any = None  # slow_index's event: lets a held index pass finish
     saved_frames: int = 0  # rows of the unfinished saved index
     error: Exception | None = None
@@ -1645,3 +1651,132 @@ def counted(world: World, count: str, total: str) -> None:
     assert world.error is None, world.error
     assert world.found is not None
     assert (world.found["count"], world.found["total"]) == (int(count), int(total))
+
+
+# ---------------------------------------------------------------------- VoIP
+
+
+def _voip(world: World) -> dict[str, Any]:
+    if world.voip is None:
+        world.voip = world.service.voip_calls({}, world.ctx)
+    return world.voip
+
+
+def _rtp_stream(world: World, source: str) -> dict[str, Any]:
+    addr, port = source.rsplit(":", 1)
+    return next(s for s in _voip(world)["streams"] if (s["src"], s["srcPort"]) == (addr, int(port)))
+
+
+@when("I list the VoIP calls")
+def list_voip_calls(world: World) -> None:
+    world.voip = None
+    _voip(world)
+
+
+@then(parsers.re(r"there are (?P<calls>\d+) SIP calls and (?P<streams>\d+) RTP streams$"))
+def voip_counts(world: World, calls: str, streams: str) -> None:
+    result = _voip(world)
+    assert (len(result["calls"]), len(result["streams"])) == (int(calls), int(streams))
+
+
+@then(
+    parsers.re(
+        r'call (?P<n>\d+) goes from "(?P<frm>[^"]+)" to "(?P<to>[^"]+)" and is (?P<state>[\w ]+?)'
+        r'(?: with "(?P<reason>[^"]+)")?$'
+    )
+)
+def call_is(world: World, n: str, frm: str, to: str, state: str, reason: str | None) -> None:
+    call = _voip(world)["calls"][int(n) - 1]
+    assert (call["from"], call["to"], call["state"]) == (frm, to, state)
+    assert call["reason"] == (reason or "")
+
+
+@then(parsers.re(r"call (?P<n>\d+) has the messages (?P<labels>.+)$"))
+def call_messages(world: World, n: str, labels: str) -> None:
+    call = _voip(world)["calls"][int(n) - 1]
+    assert [m[4] for m in call["messages"]] == items(labels)
+
+
+@then(parsers.re(r"call (?P<n>\d+) has both RTP streams$"))
+def call_streams(world: World, n: str) -> None:
+    result = _voip(world)
+    assert sorted(result["calls"][int(n) - 1]["streams"]) == list(range(len(result["streams"])))
+
+
+@then(
+    parsers.re(
+        r'the RTP stream from "(?P<source>[^"]+)" has (?P<packets>\d+) packets '
+        r"and (?P<lost>\d+) lost$"
+    )
+)
+def stream_counts(world: World, source: str, packets: str, lost: str) -> None:
+    stream = _rtp_stream(world, source)
+    assert (stream["packets"], stream["lost"]) == (int(packets), int(lost))
+
+
+@when(parsers.re(r'I analyse the RTP stream from "(?P<source>[^"]+)"$'))
+def analyse_rtp_stream(world: World, source: str) -> None:
+    world.table = world.service.rtp_stream({"stream": _rtp_stream(world, source)}, world.ctx)
+    world.table["report"] = _rtp_stream(world, source)
+
+
+@then(
+    parsers.re(
+        r"the analysis counts (?P<packets>\d+) of (?P<expected>\d+) packets "
+        r"with (?P<lost>\d+) lost$"
+    )
+)
+def analysis_counts(world: World, packets: str, expected: str, lost: str) -> None:
+    assert world.table is not None
+    summary = world.table["summary"]
+    assert (summary["packets"], summary["expected"], summary["lost"]) == (
+        int(packets), int(expected), int(lost),
+    )  # fmt: skip
+
+
+@then("its maximum and mean jitter are those of tshark's RTP streams report")
+def analysis_jitter(world: World) -> None:
+    assert world.table is not None
+    summary, report = world.table["summary"], world.table["report"]
+    assert summary["maxJitter"] == pytest.approx(report["maxJitter"], abs=0.002)
+    assert summary["meanJitter"] == pytest.approx(report["meanJitter"], abs=0.002)
+
+
+@then(parsers.re(r"packet (?P<frame>\d+) comes after (?P<gap>\d+) lost packets?$"))
+def analysis_gap(world: World, frame: str, gap: str) -> None:
+    assert world.table is not None
+    flagged = [(p[0], p[8]) for p in world.table["points"] if p[7] == 1]
+    assert flagged == [(int(frame), int(gap))]
+
+
+@when(parsers.re(r'I save the audio of the RTP stream from "(?P<source>[^"]+)"$'))
+def save_rtp_audio(world: World, source: str, tmp_path: Path) -> None:
+    world.saved = tmp_path / "audio.wav"
+    world.service.rtp_audio(
+        {"stream": _rtp_stream(world, source), "dest": str(world.saved)}, world.ctx
+    )
+
+
+@then(
+    parsers.re(
+        r"the file is (?P<seconds>\d+) seconds? of (?P<rate>\d+) Hz WAV audio "
+        r"with a (?P<tone>\d+) Hz tone$"
+    )
+)
+def wav_tone(world: World, seconds: str, rate: str, tone: str) -> None:
+    assert world.saved is not None
+    with wave.open(str(world.saved), "rb") as wav:
+        assert wav.getframerate() == int(rate)
+        samples = array("h", wav.readframes(wav.getnframes()))
+    if sys.byteorder == "big":
+        samples.byteswap()
+    assert len(samples) == int(seconds) * int(rate)
+    crossings = sum(1 for a, b in itertools.pairwise(samples) if (a < 0) != (b < 0))
+    assert crossings / 2 / int(seconds) == pytest.approx(int(tone), rel=0.02)
+
+
+@when(parsers.re(r'I apply the filter of the RTP stream from "(?P<source>[^"]+)"$'))
+def apply_stream_filter(world: World, source: str) -> None:
+    world.filter_result = world.call(
+        world.service.set_filter, {"expr": _rtp_stream(world, source)["filter"]}
+    )

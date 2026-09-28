@@ -14,6 +14,7 @@ import { FollowPanel } from "../../../src/panels/followPanel";
 import { ObjectsPanel } from "../../../src/panels/objectsPanel";
 import { StatsPanel } from "../../../src/panels/statsPanel";
 import { TcpGraphPanel } from "../../../src/panels/tcpGraphPanel";
+import { VoipPanel } from "../../../src/panels/voipPanel";
 
 const FIXTURES = path.resolve(__dirname, "../../../../test/fixtures");
 
@@ -134,6 +135,7 @@ suite("PCAP Viewer smoke test", () => {
       "pcapViewer.deleteAllPacketComments",
       "pcapViewer.statistics.flowGraph",
       "pcapViewer.statistics.tcpStreamGraph",
+      "pcapViewer.statistics.voipCalls",
       "pcapViewer.toggleTimeReference",
       "pcapViewer.timeFormat",
     ]) {
@@ -232,6 +234,11 @@ suite("PCAP Viewer smoke test", () => {
     );
     assert.equal(graph.stream, 0);
     assert.equal(graph.points.length, 11);
+    // VoIP Calls: this capture has neither SIP nor RTP.
+    session.reveal();
+    await vscode.commands.executeCommand("pcapViewer.statistics.voipCalls");
+    const voip = await waitFor(() => VoipPanel.all.find((p) => p.session === session)?.calls);
+    assert.deepEqual(voip, { calls: [], streams: [], heuristic: false });
 
     await vscode.commands.executeCommand("workbench.action.closeAllEditors");
     await waitFor(() => (api.provider.allSessions.length ? undefined : true), 10_000);

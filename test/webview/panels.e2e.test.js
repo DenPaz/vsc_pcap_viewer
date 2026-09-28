@@ -4,6 +4,8 @@
  * real backend exactly like src/panels/*.ts does.
  */
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const {
   FIXTURES,
@@ -31,9 +33,11 @@ maybe("statistics and follow panels (Chromium + real backend)", function () {
   this.timeout(60_000);
   let server, browser, client, origin;
   const pages = [];
+  // The VoIP panel's played audio (the panel's own local resource folder).
+  const media = fs.mkdtempSync(path.join(os.tmpdir(), "pcapviewer-e2e-media-"));
 
   suiteSetup(async function () {
-    server = await serveWebview();
+    server = await serveWebview({ media });
     origin = `http://127.0.0.1:${server.address().port}`;
     client = await startBackend(deps);
     await client.request("open", { path: path.join(FIXTURES, "mixed.pcapng") }, { timeoutMs: 0 });
@@ -49,6 +53,7 @@ maybe("statistics and follow panels (Chromium + real backend)", function () {
     await browser?.close();
     await client?.dispose();
     server?.close();
+    fs.rmSync(media, { recursive: true, force: true });
   });
 
   /** Open stats.js with a stand-in for StatsPanel (src/panels/statsPanel.ts). */
@@ -679,6 +684,148 @@ maybe("statistics and follow panels (Chromium + real backend)", function () {
       /^TCP stream 1/.test(document.querySelector(".panel-title").textContent),
     );
     assert.match(await page.textContent(".status"), /No packets in this stream/);
+  });
+
+  test("VoIP calls: calls, call flow, streams, analysis, audio, filters", async () => {
+    const voip = await startBackend(deps);
+    try {
+      await voip.request("open", { path: path.join(FIXTURES, "voip.pcap") }, { timeoutMs: 0 });
+      const { page, problems, post } = await newPage(browser);
+      const log = [];
+      let played = 0;
+      // A stand-in for VoipPanel (src/panels/voipPanel.ts).
+      await page.exposeFunction("__toHost", async (raw) => {
+        const msg = JSON.parse(raw);
+        log.push(msg);
+        const reply = (method, params, ok) =>
+          voip.request(method, params, { timeoutMs: 0 }).then(ok, (err) =>
+            post({
+              type: "error",
+              id: msg.id,
+              message: err.message,
+              unsupported: !!err.data?.unsupported,
+            }),
+          );
+        if (msg.type === "ready") {
+          await post({ type: "init", title: "VoIP Calls · voip.pcap" });
+        } else if (msg.type === "list") {
+          await reply("voip_calls", { heuristic: msg.heuristic }, (r) =>
+            post({ type: "calls", ...r, heuristic: msg.heuristic }),
+          );
+        } else if (msg.type === "analyse") {
+          await reply("rtp_stream", { stream: msg.stream }, (result) =>
+            post({ type: "analysis", id: msg.id, result }),
+          );
+        } else if (msg.type === "play") {
+          const name = `stream-${++played}.wav`;
+          await reply("rtp_audio", { stream: msg.stream, dest: path.join(media, name) }, (r) =>
+            post({ type: "audio", id: msg.id, uri: `${origin}/media/${name}`, ...r }),
+          );
+        }
+      });
+      await page.setContent(renderPanelHtml(origin, "voip.js", { media: true }), {
+        waitUntil: "load",
+      });
+      pages.push(problems);
+      const cells = (table) =>
+        page.$$eval(`${table} tbody tr`, (trs) =>
+          trs.map((tr) => [...tr.children].map((td) => td.textContent)),
+        );
+      const waitLog = async (type) => {
+        for (let i = 0; i < 100 && !log.some((m) => m.type === type); i++) {
+          await page.waitForTimeout(20);
+        }
+        return log.filter((m) => m.type === type).at(-1);
+      };
+
+      await page.waitForFunction(
+        () => document.querySelectorAll("#voip-calls tbody tr").length === 2,
+      );
+      assert.equal(await page.textContent(".panel-title"), "VoIP Calls · voip.pcap");
+      assert.match(await page.textContent(".status"), /^2 SIP calls, 2 RTP streams$/);
+      const [call, busy] = await cells("#voip-calls");
+      assert.deepEqual(call.slice(1, 4), ["alice@10.0.0.1", "bob@10.0.0.2", "Completed"]);
+      assert.equal(call[5], "0:01", "answered for about a second");
+      assert.deepEqual(busy.slice(3, 7), ["Rejected (486 Busy Here)", "", "", "0"]);
+
+      // The first call is selected: its flow (7 SIP messages + 2 RTP streams) and its streams.
+      assert.equal((await page.$$("#voip-flow .flow-row")).length, 9);
+      assert.equal((await page.$$("#voip-flow .flow-row.voip-rtp")).length, 2);
+      assert.deepEqual(
+        await page.$$eval("#voip-flow .voip-node", (n) => n.map((t) => t.textContent)),
+        ["10.0.0.1", "10.0.0.2"],
+      );
+      assert.equal((await page.$$("#voip-streams tbody tr.linked")).length, 2);
+      await page.click("#voip-flow .flow-row >> nth=0");
+      assert.deepEqual(await waitLog("goto"), { type: "goto", frame: 1 });
+      await page.click("#voip-filter-call");
+      assert.match(
+        (await waitLog("filter")).expr,
+        /^sip\.Call-ID == "call-1@10\.0\.0\.1" \|\| \(rtp\.ssrc/,
+      );
+
+      // An RTP row of the flow selects its stream.
+      const streams = await cells("#voip-streams");
+      const alice = streams.findIndex((r) => r[0] === "10.0.0.1:40000");
+      assert.deepEqual(streams[alice].slice(3, 6), ["g711U", "49", "1 (2.0%)"]);
+      assert.equal(streams[alice][9], "⚠");
+      assert.ok(await page.$eval("#voip-analyse", (b) => b.disabled), "no stream selected yet");
+      await page.click("#voip-flow .flow-row.voip-rtp:has-text('1 lost')");
+      await page.waitForSelector(`#voip-streams tbody tr:nth-child(${alice + 1}).selected`);
+
+      await page.click("#voip-analyse");
+      await page.waitForSelector("#voip-summary");
+      const summary = await page.textContent("#voip-summary");
+      assert.match(summary, /^49 of 50 packets · 1 lost \(2\.0%\) · max delta 42\.3\d\d ms/);
+      assert.ok(await page.$("#voip-analysis .chart path.series-line"), "the jitter line");
+      assert.equal((await page.$$("#voip-analysis circle.dot.retrans")).length, 1);
+      assert.deepEqual(
+        await page.$$eval("#voip-problems li", (li) => li.map((l) => l.textContent)),
+        ["Packet 48: 1 packet lost before seq 1021"],
+      );
+      await page.click("#voip-problems button");
+      assert.equal((await waitLog("goto")).frame, 48);
+
+      // Play: the backend writes a WAV into the panel's folder; the <audio> element loads it.
+      await page.click("#voip-play");
+      await page.waitForFunction(() => {
+        const a = document.querySelector("#voip-audio");
+        return a && !a.classList.contains("hidden") && a.readyState >= 1;
+      });
+      assert.ok(Math.abs((await page.$eval("#voip-audio", (a) => a.duration)) - 1) < 0.01);
+      assert.equal(
+        await page.textContent("#voip-audio-note"),
+        "G.711 µ-law, 1.0 s, 0.02 s of silence for lost packets",
+      );
+
+      await page.click("#voip-save");
+      assert.equal((await waitLog("save")).format, "wav");
+      await page.click("#voip-filter-stream");
+      assert.match(
+        log.filter((m) => m.type === "filter").at(-1).expr,
+        /^rtp\.ssrc == 0x11111111 && ip\.src == 10\.0\.0\.1/,
+      );
+
+      // The rejected call: no media; keyboard selection.
+      await page.focus("#voip-calls tbody tr >> nth=0");
+      await page.keyboard.press("ArrowDown");
+      await page.keyboard.press("Enter");
+      await page.waitForFunction(
+        () => document.querySelectorAll("#voip-flow .flow-row").length === 4,
+      );
+      assert.equal((await page.$$("#voip-streams tbody tr.linked")).length, 0);
+
+      await page.check("#voip-heuristic");
+      assert.equal(
+        (await waitLog("list")) && log.filter((m) => m.type === "list").at(-1).heuristic,
+        true,
+      );
+      await page.screenshot({
+        path: process.env.PCAP_SCREENSHOTS ? `${process.env.PCAP_SCREENSHOTS}/voip.png` : undefined,
+      });
+    } finally {
+      await voip.dispose();
+    }
   });
 
   test("no script errors or CSP violations in any panel", () => {

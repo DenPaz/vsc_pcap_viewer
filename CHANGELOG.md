@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- VoIP calls: _PCAP Statistics: VoIP Calls_ lists the SIP calls (state, setup
+  time, duration) with a sequence diagram of each call's messages and media,
+  and the RTP streams with lost packets, delta and jitter. A stream can be
+  analysed packet by packet (jitter over time, sequence errors linked to
+  their packets), its G.711 audio played in the panel or saved as a WAV
+  file (other codecs as raw payload), and a call or stream shown in the
+  capture with one click. RTP without SIP signalling can be found with
+  tshark's RTP heuristic.
+
 - Fixed: closing VS Code (or a capture) while a big capture was still being
   indexed could save the packets read so far as the capture's complete
   index, so the next open showed a truncated packet list. Only a pass that
