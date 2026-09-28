@@ -522,7 +522,8 @@ suite("PCAP Viewer smoke test", () => {
   test("Open File in PCAP Viewer: any name when tshark reads it, a refusal otherwise", async () => {
     const ext = vscode.extensions.all.find((e) => e.packageJSON.name === "pcap-viewer");
     const api = (await ext!.activate()) as PcapViewerApi;
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pcap-open-"));
+    // (The long path: on Windows os.tmpdir() can be an 8.3 name such as RUNNER~1.)
+    const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "pcap-open-")));
     const record = Buffer.from("300a020105040568656c6c6f", "hex"); // one BER value
     const trace = path.join(dir, "trace"); // a pcap without an extension
     fs.copyFileSync(path.join(FIXTURES, "http.pcap"), trace);
@@ -539,7 +540,8 @@ suite("PCAP Viewer smoke test", () => {
         ["record", 1],
       ] as const) {
         assert.equal(await open(name), true, name);
-        const file = path.join(dir, name);
+        // Compared as VS Code writes it (Windows: a lower-case drive letter).
+        const file = vscode.Uri.file(path.join(dir, name)).fsPath;
         const tab = vscode.window.tabGroups.activeTabGroup.activeTab?.input;
         assert.ok(tab instanceof vscode.TabInputCustom, `${name} opens in a custom editor`);
         assert.equal(tab.viewType, "pcapViewer.editor");
