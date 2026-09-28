@@ -528,6 +528,14 @@
   // ---------------------------------------------------------------- statistics tables
 
   /** 1234567 -> "1,234,567"; floats keep up to 6 decimals. @param {unknown} v */
+  /**
+   * A filter button's tooltip: its comment (if any) above its filter.
+   * @param {{filter: string, comment?: string}} button
+   */
+  function filterButtonTitle(button) {
+    return button.comment ? `${button.comment}\n${button.filter}` : button.filter;
+  }
+
   function formatCell(v) {
     if (typeof v !== "number") {
       return v === null || v === undefined ? "" : String(v);
@@ -1361,6 +1369,7 @@
     hexDump,
     streamFilter,
     formatCell,
+    filterButtonTitle,
     sortRows,
     tableToCsv,
     rowsToText,

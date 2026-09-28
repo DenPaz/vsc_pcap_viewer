@@ -811,4 +811,12 @@ suite("webview lib: navigation and customisation", () => {
     );
     assert.equal(lib.commandUnavailable(cmd(["something new"]), ctx), null, "unknown: allowed");
   });
+
+  test("filterButtonTitle: the comment above the filter", () => {
+    assert.equal(lib.filterButtonTitle({ filter: "dns" }), "dns");
+    assert.equal(
+      lib.filterButtonTitle({ filter: "dns.flags.rcode != 0", comment: "Failed lookups" }),
+      "Failed lookups\ndns.flags.rcode != 0",
+    );
+  });
 });

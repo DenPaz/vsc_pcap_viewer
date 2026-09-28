@@ -51,6 +51,8 @@ const GROUP_OF: Readonly<Record<string, CommandGroup>> = {
   "pcapViewer.applyFilter": "Filters",
   "pcapViewer.clearFilter": "Filters",
   "pcapViewer.saveFilter": "Filters",
+  "pcapViewer.addFilterButton": "Filters",
+  "pcapViewer.manageFilterButtons": "Filters",
   "pcapViewer.goToPacket": "Packets",
   "pcapViewer.find": "Packets",
   "pcapViewer.findNext": "Packets",

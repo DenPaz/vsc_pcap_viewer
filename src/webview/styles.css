@@ -122,6 +122,39 @@ button.icon:hover {
   background: var(--vscode-toolbar-activeBackground, var(--vscode-list-activeSelectionBackground));
 }
 
+/* ------------------------------------------------------------------ filter buttons */
+
+#filter-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+#filter-buttons button.filter-button {
+  padding: 1px 8px;
+  max-width: 20em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+  background: var(--vscode-button-secondaryBackground, transparent);
+}
+
+#filter-buttons button.filter-button:hover {
+  background: var(--vscode-button-secondaryHoverBackground, var(--vscode-list-hoverBackground));
+}
+
+#filter-buttons button.filter-button[aria-pressed="true"] {
+  color: var(--vscode-button-foreground, HighlightText);
+  background: var(--vscode-button-background, Highlight);
+}
+
+#filter-buttons button.icon {
+  padding: 1px 7px;
+}
+
 /* ------------------------------------------------------------------ suggestions */
 
 .suggest {

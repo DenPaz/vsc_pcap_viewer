@@ -7,6 +7,7 @@ import { registerExportCommands } from "./commands/export";
 import { registerNavigationCommands } from "./commands/navigation";
 import { registerFilterCommands } from "./commands/filter";
 import { registerSavedFilterCommands } from "./commands/savedFilters";
+import { registerFilterButtonCommands } from "./commands/filterButtons";
 import { COLORING_KEYS, RELOAD_KEYS, SECTION, readQuickDetail, readSettings } from "./config";
 import { FilterAssistant } from "./ai";
 import { registerAiCommands } from "./commands/ai";
@@ -40,6 +41,7 @@ export function activate(context: vscode.ExtensionContext): PcapViewerApi {
   registerFilterCommands(context, p);
   registerColumnCommands(context, p);
   registerSavedFilterCommands(context, p);
+  registerFilterButtonCommands(context, p);
   registerAnalysisCommands(context, p);
   registerDissectorCommands(context, p, log);
   registerExportCommands(context, p);
@@ -78,6 +80,12 @@ export function activate(context: vscode.ExtensionContext): PcapViewerApi {
       if (e.affectsConfiguration(`${SECTION}.quickDetail`)) {
         for (const s of p.allSessions) {
           s.setQuickDetail(readQuickDetail(s.uri));
+        }
+      }
+      if (e.affectsConfiguration(`${SECTION}.filterButtons`)) {
+        const buttons = readSettings().filterButtons;
+        for (const s of p.allSessions) {
+          s.setFilterButtons(buttons);
         }
       }
       if (e.affectsConfiguration(`${SECTION}.savedFilters`)) {

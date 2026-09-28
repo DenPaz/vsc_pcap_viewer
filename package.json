@@ -283,6 +283,16 @@
         "category": "PCAP"
       },
       {
+        "command": "pcapViewer.addFilterButton",
+        "title": "Add Filter Button…",
+        "category": "PCAP"
+      },
+      {
+        "command": "pcapViewer.manageFilterButtons",
+        "title": "Filter Buttons…",
+        "category": "PCAP"
+      },
+      {
         "command": "pcapViewer.suggestFilter",
         "title": "Suggest Display Filter…",
         "category": "PCAP"
@@ -1065,6 +1075,29 @@
           },
           "default": [],
           "markdownDescription": "Named display filters, e.g. `{ \"name\": \"Web\", \"filter\": \"http || tls\" }`. Shown in the filter bar's ★ menu and *PCAP: Saved Display Filters*. Set in user settings for all captures or in workspace settings to share with a project."
+        },
+        "pcapViewer.filterButtons": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "label": {
+                "type": "string"
+              },
+              "filter": {
+                "type": "string"
+              },
+              "comment": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "label",
+              "filter"
+            ]
+          },
+          "default": [],
+          "markdownDescription": "Buttons under the viewer's filter bar that apply a display filter in one click, like Wireshark's filter buttons, e.g. `{ \"label\": \"DNS errors\", \"filter\": \"dns.flags.rcode != 0\", \"comment\": \"Failed lookups\" }`. Add them with *PCAP: Add Filter Button…* or the bar's **+**; right-click a button to edit, move or remove it. Set in user settings for all captures or in workspace settings to share with a project."
         },
         "pcapViewer.colorize": {
           "type": "boolean",

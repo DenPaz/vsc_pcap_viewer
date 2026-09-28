@@ -74,6 +74,7 @@
     filterError: $("filter-error"),
     filterSaved: $("filter-saved"),
     filterMenu: $("filter-menu"),
+    filterButtons: $("filter-buttons"),
     filterAi: $("filter-ai"),
     filterField: $("filter-field"),
     suggest: $("suggest"),
@@ -166,6 +167,8 @@
     rowHeight: 22,
     /** @type {string[]} */ history: [],
     /** @type {{name: string, filter: string}[]} */ savedFilters: [],
+    /** `pcapViewer.filterButtons`: the bar under the filter bar. */
+    /** @type {{label: string, filter: string, comment?: string}[]} */ filterButtons: [],
     /** @type {number | null} */ filterRequest: null,
     validateSeq: 0,
     /** @type {number | null} */ elapsedMs: null,
@@ -358,6 +361,10 @@
         break;
       case "commands":
         state.commands = Array.isArray(msg.commands) ? msg.commands : [];
+        break;
+      case "filterButtons":
+        state.filterButtons = Array.isArray(msg.buttons) ? msg.buttons : [];
+        renderFilterButtons();
         break;
       case "aiSuggestions":
         onAiSuggestions(msg);
@@ -3892,7 +3899,59 @@
 
   // ------------------------------------------------------------------ status & state
 
+  // ------------------------------------------------------------------ filter buttons
+
+  /**
+   * The filter-button bar: one button per `pcapViewer.filterButtons` entry
+   * (click applies its filter; right-click, Shift+F10 or the context-menu key
+   * asks the host to edit, move or remove it) and "+" to add the current
+   * filter. Hidden while there are none (PCAP: Add Filter Button… adds the first).
+   */
+  function renderFilterButtons() {
+    const bar = el.filterButtons;
+    const buttons = state.filterButtons.map((b, index) => {
+      const node = document.createElement("button");
+      node.type = "button";
+      node.className = "filter-button";
+      node.textContent = b.label;
+      node.title = lib.filterButtonTitle(b);
+      node.dataset.index = String(index);
+      node.addEventListener("click", () => {
+        el.filterInput.value = b.filter;
+        void applyFilter(b.filter);
+      });
+      node.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        vscode.postMessage({ type: "editFilterButton", index, filter: b.filter });
+      });
+      return node;
+    });
+    const add = document.createElement("button");
+    add.type = "button";
+    add.id = "filter-button-add";
+    add.className = "icon";
+    add.textContent = "+";
+    add.title = "Add a filter button for the display filter in the filter bar…";
+    add.setAttribute("aria-label", "Add filter button");
+    add.addEventListener("click", () =>
+      vscode.postMessage({ type: "addFilterButton", filter: el.filterInput.value.trim() }),
+    );
+    bar.replaceChildren(...buttons, add);
+    bar.classList.toggle("hidden", !buttons.length);
+    updateFilterButtons();
+  }
+
+  /** Marks the buttons whose filter is the applied one. */
+  function updateFilterButtons() {
+    const applied = state.appliedFilter.trim();
+    for (const node of el.filterButtons.querySelectorAll("button.filter-button")) {
+      const b = state.filterButtons[Number(/** @type {HTMLElement} */ (node).dataset.index)];
+      node.setAttribute("aria-pressed", String(!!b && !!applied && b.filter === applied));
+    }
+  }
+
   function updateStatus() {
+    updateFilterButtons();
     renderProgress();
     const info = state.info;
     el.statusTime.textContent = TIME_LABELS[state.timeFormat] ?? "";

@@ -35,6 +35,7 @@ import {
   WebviewToHost,
 } from "./messages";
 import { saveFilterInteractive, showSavedFilters } from "./commands/savedFilters";
+import { addFilterButtonInteractive, editFilterButton } from "./commands/filterButtons";
 import { FollowPanel } from "./panels/followPanel";
 import { rotatedSiblings } from "./rotation";
 import { MenuCommand, buildCommandMenu } from "./commandMenu";
@@ -43,6 +44,7 @@ import {
   ColumnLayout,
   ColumnSetting,
   DEFAULT_NAME_RESOLUTION,
+  FilterButton,
   NameResolution,
   QuickDetail,
   SavedFilter,
@@ -563,6 +565,7 @@ export class PcapEditorSession {
           markReady();
           // (Before the capture loads: Reload or Show Log help when it fails.)
           this.post({ type: "commands", commands: this.menuCommands });
+          this.setFilterButtons(readSettings().filterButtons);
         }
         void this.onMessage(msg);
       }),
@@ -1101,6 +1104,18 @@ export class PcapEditorSession {
       case "manageSavedFilters":
         await showSavedFilters(this);
         return;
+      case "addFilterButton":
+        await addFilterButtonInteractive(typeof msg.filter === "string" ? msg.filter : "", this);
+        return;
+      case "editFilterButton":
+        if (Number.isInteger(msg.index)) {
+          await editFilterButton(
+            msg.index,
+            typeof msg.filter === "string" ? msg.filter : undefined,
+            this,
+          );
+        }
+        return;
       case "selection":
         this.selectedFrame = typeof msg.frame === "number" ? msg.frame : null;
         this.selectedFrames = Array.isArray(msg.frames)
@@ -1615,6 +1630,10 @@ export class PcapEditorSession {
 
   setSavedFilters(savedFilters: SavedFilter[]): void {
     this.post({ type: "savedFilters", savedFilters });
+  }
+
+  setFilterButtons(buttons: FilterButton[]): void {
+    this.post({ type: "filterButtons", buttons });
   }
 
   async validateFilter(expr: string): Promise<string | undefined> {
