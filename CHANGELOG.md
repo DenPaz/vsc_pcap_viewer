@@ -1,234 +1,169 @@
 # Changelog
 
+All notable changes, newest first. Each entry links to the pull request that
+made it. The format follows [Keep a Changelog](https://keepachangelog.com);
+versions are plain `major.minor.patch`.
+
 ## Unreleased
 
 ## 0.2.0 — 2026-09-28
 
-- More statistics: _PCAP Statistics: HTTP_ (packet counter by status code and
-  method, requests by host and URI, load distribution by server), _DNS_,
-  _Packet Lengths_ and _Service Response Time_ (ICMP/ICMPv6, SMB, SMB2, LDAP,
-  SNMP, Diameter, GTP and others; protocols with traffic are marked). Their
-  rows apply or prepare the display filter of the packets they count.
-- Filter buttons under the filter bar, like Wireshark's: one click applies a
-  filter. Add one with **+** or _PCAP: Add Filter Button…_; right-click a
-  button to edit, move or remove it (`pcapViewer.filterButtons`).
-- _PCAP: Import from Hex Dump…_ builds a capture from a hex dump in the
-  editor, the clipboard or a text file (text2pcap): Ethernet frames, IP
-  packets, or payloads with a dummy UDP/TCP/SCTP header, optionally with a
-  time before each packet. It opens as a new unsaved capture.
+The first published release. It adds everything since 0.1.0 below.
 
-- ☰ in the viewer's filter bar lists every PCAP Viewer command under headings
-  (Filters, Packets, Statistics, Export, Capture, Editing, Dissectors, AI,
-  Other) with its key binding, filters them as you type and runs the one you
-  pick on that capture. Commands that can't run right now are greyed out with
-  the reason. On narrow editors the filter bar's buttons now wrap to a second
-  line instead of squeezing the filter box.
+### Added
 
-- VoIP calls: _PCAP Statistics: VoIP Calls_ lists the SIP calls (state, setup
-  time, duration) with a sequence diagram of each call's messages and media,
-  and the RTP streams with lost packets, delta and jitter. A stream can be
-  analysed packet by packet (jitter over time, sequence errors linked to
-  their packets), its G.711 audio played in the panel or saved as a WAV
-  file (other codecs as raw payload), and a call or stream shown in the
-  capture with one click. RTP without SIP signalling can be found with
-  tshark's RTP heuristic.
+**Opening big captures**
 
-- Fixed: closing VS Code (or a capture) while a big capture was still being
-  indexed could save the packets read so far as the capture's complete
-  index, so the next open showed a truncated packet list. Only a pass that
-  really reached the end of the file is saved as complete now, and saved
-  colors and filter results come only from complete indexes.
-- Opening big captures is resumable: closing a capture before it is fully
-  indexed keeps what was indexed, and the next open shows those packets at
-  once, re-reads them to check they still match ("Resuming… re-reading
-  packets 1–N (already shown)"), then goes on with the rest.
-- A progress bar under the filter bar for indexing (determinate when the
-  size is known, animated otherwise, a quieter style while resuming),
-  streaming filters, coloring and exports, with the percentage and packet
-  count in the status bar ("Indexing… 42% · 420,000 packets").
+- The first packets show within about half a second while the rest is
+  indexed. The finished index is saved, so reopening an unchanged capture is
+  instant (`pcapViewer.indexCache.*`, _PCAP: Clear Index Cache_). [#18]
+- Resumable indexing: a capture closed before it was fully indexed shows the
+  saved packets at once on the next open, then continues. [#29]
+- A progress bar for indexing, filters, coloring and exports, with the
+  percentage and packet count in the status bar. [#29]
+- Quick view of late packets: from packet 20,000 on, details show in about
+  0.3 s by dissecting only the 300 packets before (`pcapViewer.quickDetail.*`).
+  [#17]
+- Streaming filters: matches show as tshark finds them; ■ stops and keeps them.
+  Finished results are saved with the index. [#19]
+- Colors come with the packets: the coloring rules run in the index pass
+  (about 6% slower) instead of a second full pass. [#20]
 
-- Remote windows (WSL, SSH, Dev Containers, Codespaces): PCAP Viewer runs on
-  the remote machine, next to the captures and the tools, and says so when
-  Python or tshark is missing there. Saved files are shown in the Explorer
-  view (or their path is offered) instead of the local file manager. The
-  README has a Dev Container example.
-- Captures that aren't files on disk (Live Share, archives, virtual file
-  systems) offer to open a copy.
-- Restricted Mode: the extension now works in untrusted workspaces, where the
-  Python and tshark paths and the Lua dissectors come from user settings only.
+**Packet list and navigation**
 
-- **Get Started with PCAP Viewer** walkthrough (_Help › Welcome_, or _PCAP:
-  Get Started_): checks Python and tshark and says how to install what's
-  missing on your system, opens a sample capture, and introduces filters,
-  statistics and the optional AI features. _PCAP: Check Python and TShark_
-  runs the check at any time; a capture that can't open because either is
-  missing offers the guide.
-- _PCAP: Open Sample Capture_: a small capture with ARP, ICMP, DNS and HTTP.
-- An icon, screenshots and Marketplace details.
-- Releases: pushing a `v<version>` tag builds the `.vsix` and attaches it to
-  a GitHub release with the version's CHANGELOG notes, and publishes it to the
-  VS Code Marketplace and Open VSX when their tokens are configured.
+- More file types open by default: gzip/zstd/lz4-compressed pcap(ng), `.ntar`,
+  `tcpdump -C` pieces, snoop, ERF, PacketLogger, btsnoop; generic extensions
+  via _Reopen Editor With…_. [#10]
+- Find Packet (display filter, string, hex), frame links with back/forward
+  history, conversation stepping, first/last packet, marks, time display
+  formats and a time reference. [#12]
+- Column customisation (Apply as Column, hide, rename, reorder), cell filters
+  and bytes-pane copy formats. [#12]
+- Multi-select (Shift/Ctrl+click, Shift+arrows, Ctrl+A) with mark, copy and
+  export of the selection. [#13]
+- Addresses sort numerically; the Time column sorts by the format shown. [#13]
+- Packet comments: shown on rows and above the details; edit, undo and save
+  them into the pcapng. [#23]
+- Name resolution for MAC addresses, IP addresses and ports
+  (`pcapViewer.nameResolution.*`). [#22]
+- The ☰ menu in the filter bar lists every command, greyed out with the reason
+  when it can't run. [#31]
+- Filter buttons under the filter bar (`pcapViewer.filterButtons`). [#32]
 
-- Capture summary with Copilot: _PCAP: Summarize Capture with Copilot_ or
-  `@pcap /summary` describes the capture from its statistics (properties,
-  protocol hierarchy, top conversations and endpoints, expert counts, traffic
-  over time), never from packet contents, with _Apply filter_ buttons for the
-  filters it suggests.
-- Anomaly explanations: _Ask Copilot…_ in the Expert Information panel and in
-  the TCP Stream Graph panel (`@pcap /anomaly`) explains expert entries with
-  their conversation, or a TCP stream from its sequence numbers, windows,
-  round-trip times and retransmissions (never its payload).
-- `@pcap` answers questions with read-only tools on the open capture (packet
-  counts for display filters, statistics, capture properties, field search,
-  packet rows) where VS Code has language model tools; the tools never change
-  the viewer's filter, and at most 8 calls are made per question.
-- New setting `pcapViewer.ai.allowCaptureStatistics` (off; asked once; user
-  settings only) for the features above; `pcapViewer.ai.allowPacketData`
-  implies it and is still needed for packet rows. The README lists what each
-  AI feature sends.
-- Backend: `count_matches` counts a display filter's packets without changing
-  the view.
+**Analysis**
 
-- Live capture: _PCAP: Start Capture…_ captures on one or more interfaces,
-  with a capture filter checked as you type, into a new capture that fills as
-  packets arrive (the list follows them). _Stop_ in the status bar or the
-  editor title, or `pcapViewer.capture.stopAfter*`. The capture is unsaved
-  until saved (`Ctrl+S` asks where); closing it without saving discards it.
-- Capture editing (_PCAP: Edit Capture…_): time shift, remove duplicate
-  packets, keep packets by number or time, truncate packets, split into files
-  of N packets or seconds, and embed a TLS key log in the capture. The result
-  opens as a new unsaved capture.
-- Packet comments: shown on the packet's row and above its details; add, edit
-  and delete them (`Ctrl+Alt+C`, the row menu, _PCAP: Delete All Packet
-  Comments_). Edits are ordinary unsaved changes: undo with `Ctrl+Z`, save
-  into the capture with `Ctrl+S` (a new `.pcapng` for other formats).
-- _PCAP Statistics: Flow Graph_: the displayed packets as arrows between their
-  endpoints.
-- _PCAP Statistics: TCP Stream Graph_: Stevens, throughput, round-trip time
-  and window scaling graphs of a TCP stream.
-- _PCAP: Export Objects…_: the files a capture carried over HTTP, SMB, TFTP,
-  IMF, DICOM and FTP-DATA, with the packet, host, content type and size of
-  each; filter, sort, go to the packet, and save one or all of them.
-- Name resolution (_PCAP: Name Resolution…_, the status bar's _Names_ link,
-  `pcapViewer.nameResolution.*`): names for MAC addresses, IP addresses (from
-  the capture's DNS answers and hosts files; network lookups only if allowed)
-  and ports. Resolved names show their address as a tooltip and cell filters
-  use the address.
-- Fixed: statistics showed MAC names such as "Broadcast" from Wireshark's
-  preferences, and their rows then built filters that matched nothing; reports
-  now always show addresses.
-- _PCAP: Export Packet Dissections…_: the full packet details of the
-  displayed, all, selected or marked packets as plain text, PDML or JSON,
-  optionally with the packet bytes.
-- Merging captures: opening a piece of a rotated capture (`tcpdump -C`, or a
-  dumpcap/Wireshark ring buffer) offers to merge all its pieces into one
-  capture; _PCAP: Merge Captures…_ merges them, or any captures by timestamp.
-- _PCAP: Edit Coloring Rules_ (was _Manage Coloring Rules_, which opened the
-  settings) is an editor: reorder, enable, rename, recolor with a preview, add
-  and remove rules, with filters checked by tshark as you type.
-- CI uses the Node 24 versions of its GitHub Actions.
-- Colors come with the packets: opening a capture evaluates the coloring rules
-  in the same tshark pass that builds the packet list, so rows are colored as
-  soon as they show (0.5 s on a million packets) instead of after indexing and
-  a second full pass (about a minute). It adds about 6% to the pass, and the
-  colors are saved with the index. A coloring pass after changing rules shows
-  "Coloring… N%" in the status bar.
-- Fixed: after scrolling to the end of the list while a big capture was still
-  being indexed (or a filter was still running), the list stopped growing.
-- Streaming filters: on big captures the matches show as tshark finds them,
-  with a count and progress in the status bar. ■ stops the filter and keeps
-  the matches found so far; a sort chosen meanwhile applies when it's done.
-  A filter applied while a capture is still being indexed starts at once.
-  Finished filter results are saved with the index, so reapplying one after
-  reopening the capture is instant.
-- TLS decryption: _PCAP: Set TLS Key Log File…_ (`pcapViewer.tlsKeyLogFile`)
-  decrypts TLS and QUIC with an `SSLKEYLOGFILE` key log. The capture reloads
-  when the setting changes, the viewer offers a reload when the file gets new
-  keys, and saved indexes follow the file's contents. `generate.py
---tls-keylog` makes a sample capture and key log to try it.
-- Big captures open faster: the first packets show within about half a second
-  while the rest is indexed, and the
-  finished index is saved, so reopening an unchanged capture is instant
-  (`pcapViewer.indexCache.enabled`, `pcapViewer.indexCache.maxSizeMB`,
-  _PCAP: Clear Index Cache_).
-- The large-capture generator (`make large-fixture`) works on Pythons built
-  without zstd.
-- Quick view of late packets: from packet 20,000 on (`pcapViewer.quickDetail.after`),
-  the details show in about 0.3 s instead of up to ~20 s per million packets:
-  only the 300 packets before it (`pcapViewer.quickDetail.window`) are
-  dissected (cut out with editcap), marked _Quick view_, until the exact view
-  replaces it. Ask Copilot uses it for late packets too.
-- _Ask Copilot About This Packet…_ (and _…About N Selected Packets…_) in the
-  packet list, and `@pcap /explain <frames> [question]` in chat: the language
-  model explains the packets, with _Go to packet_ and _Apply filter_ buttons.
-  It sends the packets' rows and dissection trees (capped; no raw bytes unless
-  `pcapViewer.ai.allowPacketBytes`), only after a one-time consent that sets
-  `pcapViewer.ai.allowPacketData`.
-- Fixed: the busy bar kept spinning after sorting by a column.
-- Fixed: a notice (e.g. "Packet 4 is not displayed") shown right after applying a
-  filter could be wiped by the late validation of what was typed.
-- Cancelling works when tshark can't be killed: under Ubuntu's AppArmor tshark
-  profile `kill()` is refused (`PermissionError`), which crashed cancellation
-  and could leave tshark running. The backend now closes tshark's output
-  instead, reaps it, logs one warning, and the AppArmor hint suggests the
-  `signal (receive) peer=unconfined,` / `peer=vscode,` local rules.
-- tshark 4.6: the packet's own bytes are still labelled "Frame" (4.6 says
-  "Packet"); tests no longer depend on the protocol hierarchy's depth.
-- Ctrl+A in the packet list now selects every packet in VS Code (it used to
-  select the page's text).
-- Multi-select in the packet list: Shift+click / Shift+arrows ranges,
-  Ctrl/Cmd+click, Ctrl+A, Esc. Mark, copy (rows or frame numbers) and export
-  the selection (_Export Selected Packets…_; the CSV/JSON packet list can
-  export the selected rows).
-- Source/Destination (and custom IPv4/IPv6/MAC columns) sort numerically:
-  IPv4, then IPv6, then MAC addresses, then names.
-- The Time column sorts by the time format shown: the delta formats sort by
-  the delta.
-- "Since previous displayed packet" now means the previous packet of the
-  filter in capture order (like Wireshark), whatever the sort order.
-- Fixed: after a sort change the selection could be drawn on the row where
-  the packet was before the sort.
+- TLS decryption with an `SSLKEYLOGFILE` key log (`pcapViewer.tlsKeyLogFile`,
+  _PCAP: Set TLS Key Log File…_). [#19]
+- Coloring rules editor (_PCAP: Edit Coloring Rules_). [#21]
+- Flow graph and TCP stream graphs (Stevens, throughput, RTT, window). [#23]
+- VoIP calls: SIP calls with a call flow, RTP streams with loss and jitter,
+  per-packet stream analysis, G.711 playback and WAV export. [#30]
+- HTTP, DNS, packet length and service response time statistics. [#32]
 
-- Wireshark-like navigation: Find Packet (display filter / string / hex),
-  clickable frame references with back/forward history, next/previous packet
-  in the conversation, first/last packet, marks (with export of marked
-  packets), time display formats and a time reference.
-- Customisation: Apply as Column, header menu (hide/show, rename, remove,
-  resize to contents, reset) and drag-to-reorder columns (pcapViewer.columnLayout),
-  cell Apply as Filter, and bytes-pane copy formats (hex dump, hex stream,
-  C array, escaped string, Base64, printable text).
+**Capture, export and import**
 
-- Optional AI help for display filters (VS Code Language Model API / Copilot):
-  ✨ in the filter bar, _PCAP: Suggest Display Filter…_ and `@pcap` in chat.
-  Suggestions are validated with tshark; no packet data is sent.
+- Live capture on one or more interfaces into a new unsaved capture. [#24]
+- Capture editing: time shift, remove duplicates, keep a range, truncate,
+  split, embed TLS keys. [#24]
+- Export Packet Dissections (text, PDML, JSON). [#21]
+- Merge captures, and an offer to merge a rotated capture's pieces. [#21]
+- Export Objects (HTTP, SMB, TFTP, IMF, DICOM, FTP-DATA). [#22]
+- Import from Hex Dump (text2pcap). [#32]
 
-- Opens more capture file types by default: gzip/zstd/lz4-compressed pcap and
-  pcapng, `.ntar`, `tcpdump -C` rotated files (`*.pcap1`…), snoop, ERF,
-  PacketLogger and btsnoop. Generic extensions (`*.1`, `.log`, `.dmp`, `.trc`,
-  `.ber`) are offered in _Reopen Editor With…_.
-- Files tshark can't read show a clear message; open progress no longer
-  stalls at 99% for compressed files and other formats.
-- Export file names drop compression suffixes (`trace.pcap.gz` →
-  `trace-filtered.pcapng`).
+**AI (optional, through VS Code's Language Model API)**
+
+- Display filter suggestions (✨, _PCAP: Suggest Display Filter…_, `@pcap`),
+  validated by tshark; no packet data is sent. [#11]
+- _Ask Copilot About This Packet…_ and `@pcap /explain`, after a one-time
+  consent (`pcapViewer.ai.allowPacketData`). [#16]
+- Capture summaries (`@pcap /summary`), anomaly explanations
+  (`@pcap /anomaly`) and read-only `@pcap` tools, gated by
+  `pcapViewer.ai.allowCaptureStatistics`. [#25]
+
+**Setup and distribution**
+
+- _Get Started_ walkthrough, _PCAP: Check Python and TShark_ and _PCAP: Open
+  Sample Capture_. [#26]
+- Icon, screenshots, Marketplace details and a release workflow. [#26]
+- Remote windows (WSL, SSH, Dev Containers), captures not on disk (open a
+  copy) and Restricted Mode. [#27]
+
+### Changed
+
+- "Since previous displayed packet" is the previous packet of the filter in
+  capture order, whatever the sort. [#13]
+- _Manage Coloring Rules_ became _Edit Coloring Rules_, an editor instead of
+  the settings. [#21]
+- Statistics always show addresses, so their row filters match. [#22]
+- On narrow editors the filter bar's buttons wrap to a second line. [#31]
+- CI tests with tshark on Linux, macOS and Windows [#19], on the Node 24
+  versions of its actions [#21].
+
+### Fixed
+
+- Cancelling works when AppArmor refuses to let tshark be killed. [#14]
+- tshark 4.6 output: byte tabs stay named "Frame"; statistics trees parse the
+  4.4+ layout. [#14], [#32]
+- Ctrl+A selected the page's text instead of the packets. [#14]
+- The busy indicator kept spinning after a sort; a notice could be wiped by a
+  late validation. [#16]
+- The list stopped growing after scrolling to its end while indexing or
+  filtering. [#20]
+- A streaming filter race. [#22]
+- Pipes leaked when cancelling tshark. [#28]
+- Closing VS Code mid-index could save a truncated index as complete. [#29]
+- A background tshark outlived the backend at shutdown. [#32]
+
+[#10]: https://github.com/DenPaz/vsc_pcap_viewer/pull/10
+[#11]: https://github.com/DenPaz/vsc_pcap_viewer/pull/11
+[#12]: https://github.com/DenPaz/vsc_pcap_viewer/pull/12
+[#13]: https://github.com/DenPaz/vsc_pcap_viewer/pull/13
+[#14]: https://github.com/DenPaz/vsc_pcap_viewer/pull/14
+[#16]: https://github.com/DenPaz/vsc_pcap_viewer/pull/16
+[#17]: https://github.com/DenPaz/vsc_pcap_viewer/pull/17
+[#18]: https://github.com/DenPaz/vsc_pcap_viewer/pull/18
+[#19]: https://github.com/DenPaz/vsc_pcap_viewer/pull/19
+[#20]: https://github.com/DenPaz/vsc_pcap_viewer/pull/20
+[#21]: https://github.com/DenPaz/vsc_pcap_viewer/pull/21
+[#22]: https://github.com/DenPaz/vsc_pcap_viewer/pull/22
+[#23]: https://github.com/DenPaz/vsc_pcap_viewer/pull/23
+[#24]: https://github.com/DenPaz/vsc_pcap_viewer/pull/24
+[#25]: https://github.com/DenPaz/vsc_pcap_viewer/pull/25
+[#26]: https://github.com/DenPaz/vsc_pcap_viewer/pull/26
+[#27]: https://github.com/DenPaz/vsc_pcap_viewer/pull/27
+[#28]: https://github.com/DenPaz/vsc_pcap_viewer/pull/28
+[#29]: https://github.com/DenPaz/vsc_pcap_viewer/pull/29
+[#30]: https://github.com/DenPaz/vsc_pcap_viewer/pull/30
+[#31]: https://github.com/DenPaz/vsc_pcap_viewer/pull/31
+[#32]: https://github.com/DenPaz/vsc_pcap_viewer/pull/32
 
 ## 0.1.0
 
-First release: every item of the project brief.
+The project brief, never published.
 
-- Custom read-only editor for `.pcap` / `.pcapng` / `.cap` files, backed by
-  tshark through a stdlib-only Python backend (JSON-RPC over stdio).
-- Packet list for captures with millions of packets: virtualized rows, backend
-  paging over a cached index, backend-side sorting, custom columns.
-- Protocol tree and hex/ASCII view with two-way byte highlighting, including
-  reassembled data sources.
-- Display filters with validation, inline errors, autocomplete from tshark's
-  field list, history and saved filters; apply/prepare as filter from the tree.
-- Follow TCP / UDP / TLS / HTTP stream panel.
-- Statistics panels: conversations, endpoints, protocol hierarchy, I/O graph,
-  expert information, capture file properties.
-- Lua dissectors (new from template, reload with error check, dissectors
-  folder), Decode As rules and preference overrides.
-- Coloring rules (default Wireshark-like set, _Colorize with Filter…_,
-  toggle), evaluated by tshark in one background pass.
-- Export: displayed / all / selected packets to pcapng or pcap, the packet
-  list as CSV or JSON, packet bytes, and stream data.
+### Added
+
+- Custom editor for `.pcap`/`.pcapng`/`.cap`, backed by tshark through a
+  stdlib-only Python backend. [#1]
+- Packet list for millions of packets: virtualized rows, backend paging and
+  sorting, custom columns. [#1]
+- Protocol tree and hex view with two-way highlighting, including reassembled
+  data. [#1]
+- Display filters with validation, autocomplete, history and saved filters.
+  [#2]
+- Follow TCP/UDP/TLS/HTTP stream; statistics panels (conversations, endpoints,
+  protocol hierarchy, I/O graph, expert information, capture properties). [#3]
+- Lua dissectors, Decode As rules and preference overrides, per workspace
+  folder. [#4], [#5]
+- Coloring rules and export (pcapng/pcap, CSV/JSON, packet bytes). [#6]
+- tshark permission errors under AppArmor or Snap explain the fix. [#7]
+- A Makefile for installs, updates, checks and packaging. [#9]
+
+[#1]: https://github.com/DenPaz/vsc_pcap_viewer/pull/1
+[#2]: https://github.com/DenPaz/vsc_pcap_viewer/pull/2
+[#3]: https://github.com/DenPaz/vsc_pcap_viewer/pull/3
+[#4]: https://github.com/DenPaz/vsc_pcap_viewer/pull/4
+[#5]: https://github.com/DenPaz/vsc_pcap_viewer/pull/5
+[#6]: https://github.com/DenPaz/vsc_pcap_viewer/pull/6
+[#7]: https://github.com/DenPaz/vsc_pcap_viewer/pull/7
+[#9]: https://github.com/DenPaz/vsc_pcap_viewer/pull/9
