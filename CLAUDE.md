@@ -456,11 +456,16 @@ matchCount, fraction}`; the end sends `done`, `stopped` (`stop_filter
 - **Service statistics** (`stats {kind: http | dns | plen | srt}`): HTTP
   (`type` packets/requests/load = `-z http,tree` / `http_req,tree` /
   `http_srv,tree`), DNS and packet lengths are tshark's stats_tree reports,
-  parsed by one `parse_stats_tree`: the `Topic / Item` header's column
-  starts cut each row (topics hold spaces, empty cells are blank; values that
-  overflowed a column would break this, tshark sizes the first column to the
-  longest topic), one space of indentation per level, columns empty in every
-  row are dropped. Rows whose path maps onto a filter carry it (`_TREE_FILTERS`:
+  parsed by one `parse_stats_tree`: the header is the line above the first
+  rule of dashes (its first column is "Topic / Item", or since tshark 4.4 a name
+  the tree sets: "Packet Type" for HTTP and DNS, found on macOS/Windows CI), the
+  first value column starts at "Count" (a long first-column name may leave one
+  space), the others are two or more spaces apart, and the header's column
+  starts cut each row (topics hold spaces, empty cells are blank). A
+  first-column name longer than every topic isn't cut and pushes the header's
+  value columns right: the rule is as long as a row, so the header's extra
+  length is the shift. One space of indentation per level; columns empty in
+  every row are dropped. Rows whose path maps onto a filter carry it (`_TREE_FILTERS`:
   status classes/codes, methods, host + URI, address/host/OK-Error chains in the
   load tree, DNS rcode/opcode/type/class by value, length buckets); the
   acceptance tests count each filter's matches against the row. Service response

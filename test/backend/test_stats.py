@@ -384,3 +384,54 @@ Minimum   Maximum   Mean      Median    SDeviation     Min Frame Max Frame
     )
     no_replies = no_replies.split("Minimum")[0]
     assert stats.parse_icmp_srt(no_replies, "icmp").rows[0]["cells"][:4] == [1, 0, 1, 100]
+
+
+def _tree_46(first_column: str, rows: list[tuple[int, str, list[str]]]) -> str:
+    """A stats tree as tshark 4.6's stats_tree.c prints it: the name column is
+    padded to the longest topic (a longer first-column name isn't cut), then
+    " %-14s" per value column; the rules are as long as a row."""
+    cols = ["Count", "Average", "Min Val", "Max Val", "Rate (ms)", "Percent", "Burst Rate"]
+    width = max(len(name) + depth for depth, name, _ in rows)
+    rule = width + 15 * len(cols)
+    head = first_column.ljust(width) + "".join(" " + c.ljust(14) for c in cols)
+    body = [
+        " " * depth + name.ljust(width - depth) + "".join(" " + v.ljust(14) for v in values)
+        for depth, name, values in rows
+    ]
+    return "\n".join(["", "=" * rule, "DNS:", head, "-" * rule, *body, "", "-" * rule, ""])
+
+
+def test_stats_tree_first_column_named_by_the_tree() -> None:
+    """tshark 4.4+: HTTP and DNS name the first column "Packet Type"."""
+    text = _tree_46(
+        "Packet Type",
+        [
+            (0, "Total Packets", ["8", "", "", "", "0.0242", "100%", "0.0300"]),
+            (1, "rcode", ["8", "", "", "", "0.0242", "100.00%", "0.0300"]),
+            (2, "No such name", ["1", "", "", "", "0.0030", "12.50%", "0.0100"]),
+        ],
+    )
+    table = stats.parse_stats_tree(text, "dns").to_json()
+    assert [c["label"] for c in table["columns"]] == [
+        "Packet Type", "Count", "Rate (ms)", "Percent", "Burst Rate",
+    ]  # fmt: skip
+    assert table["rows"][2]["cells"] == ["No such name", 1, 0.003, 12.5, 0.01]
+    assert table["rows"][2]["depth"] == 2
+    assert table["rows"][2]["filter"] == "dns.flags.rcode == 3"
+
+
+def test_stats_tree_first_column_name_longer_than_every_topic() -> None:
+    """The header's value columns sit right of the rows' by the overflow."""
+    text = _tree_46(
+        "Request Type",
+        [
+            (0, "GET", ["3", "", "", "", "0.0099", "75.00%", "0.0100"]),
+            (0, "POST", ["1", "", "", "", "0.0033", "25.00%", "0.0100"]),
+        ],
+    )
+    assert "Request Type Count" in text  # one space: the name column is 4 wide
+    rows = stats.parse_stats_tree(text, "http_requests").rows
+    assert [r["cells"] for r in rows] == [
+        ["GET", 3, 0.0099, 75.0, 0.01],
+        ["POST", 1, 0.0033, 25.0, 0.01],
+    ]

@@ -406,6 +406,9 @@ TREE_TITLES = {
 }
 _IPV4 = re.compile(r"\d{1,3}(\.\d{1,3}){3}")
 _HEADER_CELL = re.compile(r"\S+(?: \S+)*")
+# The first value column: the name column is padded to the longest topic, so a
+# long first-column name may be followed by a single space.
+_COUNT_HEADER = re.compile(r"\s(Count)(?:\s|$)")
 _STATUS_CLASS = re.compile(r"^(?P<d>[1-5])xx: ")
 _STATUS_CODE = re.compile(r"^(?P<code>[1-5]\d\d) ")
 _METHOD = re.compile(r"^[A-Z][A-Z-]*$")
@@ -537,19 +540,33 @@ _TREE_FILTERS: dict[str, Callable[[list[str]], str | None]] = {
 def parse_stats_tree(text: str, kind: str) -> Table:
     """tshark's generic stats_tree report (``-z http,tree``, ``dns,tree``, ``plen,tree``…).
 
-    Fixed-width columns under a ``Topic / Item`` header; one space of
+    Fixed-width columns under a header line, the line above the first rule of
+    dashes (its first column is "Topic / Item", or since tshark 4.4 a name the
+    tree sets: "Packet Type" for HTTP and DNS, "Request Type"…); one space of
     indentation per tree level. The header's column positions cut each row
-    (topics may hold spaces, and empty cells are blank). Columns that are empty
-    in every row (Average/Min/Max of plain counters) are dropped. Rows whose
-    topic maps onto a display filter (a status code, a host, a length bucket…)
-    carry it.
+    (topics may hold spaces, and empty cells are blank): the first value column
+    starts at "Count", the others are at least two spaces apart. Columns that
+    are empty in every row (Average/Min/Max of plain counters) are dropped.
+    Rows whose topic maps onto a display filter (a status code, a host, a
+    length bucket…) carry it.
     """
     lines = _lines(text)
-    header = next((i for i, line in enumerate(lines) if line.startswith("Topic / Item")), None)
+    rule = next((i for i, line in enumerate(lines) if line and set(line) == {"-"}), None)
     table = Table(kind, TREE_TITLES.get(kind, kind), [])
-    if header is None:
+    count = _COUNT_HEADER.search(lines[rule - 1]) if rule else None
+    if rule is None or count is None:
         return table
-    spans = [(m.start(), m.group()) for m in _HEADER_CELL.finditer(lines[header])]
+    header = rule - 1
+    head = lines[header]
+    # A first-column name longer than every topic isn't cut: it pushes the
+    # header's value columns right. The rule is as long as a row (topics padded
+    # to the longest), so what the header has beyond it is that shift.
+    shift = max(0, len(head.rstrip("\n")) - len(lines[rule]))
+    spans = [(0, head[: count.start(1)].strip())]
+    spans += [
+        (count.start(1) + m.start() - shift, m.group())
+        for m in _HEADER_CELL.finditer(head[count.start(1) :])
+    ]
     starts = [start for start, _ in spans]
     labels = [label for _, label in spans]
     to_filter = _TREE_FILTERS.get(kind)
