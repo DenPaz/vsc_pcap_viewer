@@ -3920,9 +3920,23 @@
         el.filterInput.value = b.filter;
         void applyFilter(b.filter);
       });
+      const edit = () => vscode.postMessage({ type: "editFilterButton", index, filter: b.filter });
+      // Shift+F10 and the menu key: Chromium turns them into "contextmenu" on
+      // Windows and Linux but not on macOS, so they're handled here, and the
+      // "contextmenu" that may follow them is ignored.
+      let keyEditAt = -Infinity;
+      node.addEventListener("keydown", (e) => {
+        if ((e.key === "F10" && e.shiftKey) || e.key === "ContextMenu") {
+          e.preventDefault();
+          keyEditAt = Date.now();
+          edit();
+        }
+      });
       node.addEventListener("contextmenu", (e) => {
         e.preventDefault();
-        vscode.postMessage({ type: "editFilterButton", index, filter: b.filter });
+        if (Date.now() - keyEditAt > 1000) {
+          edit();
+        }
       });
       return node;
     });
