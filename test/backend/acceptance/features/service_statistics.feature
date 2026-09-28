@@ -35,7 +35,8 @@ Feature: Service statistics
     And the statistics row "AAAA" below "Query Type" has "Count" 2
     And the filter of the statistics row "AAAA" matches 2 packets
     And the filter of the statistics row "No such name" matches 1 packet
-    And the filter of the statistics row "Query" below "Query/Response" matches 4 packets
+    # tshark 4.6 shows its top-level "Query/Response" as "Response" (the name after "/").
+    And the filter of the statistics row "Query" matches 4 packets
 
   Scenario: Packet lengths
     When I request the "plen" statistics

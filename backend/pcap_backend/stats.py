@@ -513,7 +513,9 @@ def _dns_filter(path: list[str]) -> str | None:
         return f"dns.flags.rcode == {_DNS_RCODES[topic]}"
     if parent == "opcodes" and topic == "Standard query":
         return "dns.flags.opcode == 0"
-    if parent == "Query/Response" and topic in ("Query", "Response"):
+    # A top-level node's name is shown after its last "/" (stats_tree's
+    # display name), so 4.6 shows its top-level "Query/Response" as "Response".
+    if parent in ("Query/Response", "Response") and topic in ("Query", "Response"):
         return f"dns.flags.response == {int(topic == 'Response')}"
     if parent == "Query Type" and topic in _DNS_TYPES:
         return f"dns.qry.type == {_DNS_TYPES[topic]}"

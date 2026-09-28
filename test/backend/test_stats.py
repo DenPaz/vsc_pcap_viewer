@@ -458,3 +458,16 @@ def test_dns_filters_follow_the_parent_whatever_the_depth() -> None:
     rows = stats.parse_stats_tree(text, "dns").rows
     assert rows[1]["filter"] == 'dns.qry.name == "example.com"'
     assert rows[3]["filter"] == "dns.resp.type == 15"
+
+
+def test_dns_query_response_under_its_46_display_name() -> None:
+    """tshark 4.6 shows the top-level "Query/Response" node as "Response"."""
+    for parent, depth in (("Query/Response", 1), ("Response", 0)):
+        rows = [(0, "Total Packets")] if depth else []
+        rows += [(depth, parent), (depth + 1, "Response"), (depth + 1, "Query")]
+        text = _tree_46("Packet Type", [(d, n, ["4"] + [""] * 6) for d, n in rows])
+        by_depth = [r for r in stats.parse_stats_tree(text, "dns").rows if r["depth"] == depth + 1]
+        assert [r.get("filter") for r in by_depth] == [
+            "dns.flags.response == 1",
+            "dns.flags.response == 0",
+        ]
