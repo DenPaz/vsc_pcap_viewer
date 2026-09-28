@@ -158,6 +158,8 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
           "copy",
           "askAboutPackets",
           "runCommand",
+          "addFilterButton",
+          "editFilterButton",
         ].includes(msg.type)
       ) {
         hostLog.push(msg);
@@ -1391,6 +1393,97 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     } finally {
       await page.setViewportSize({ width: 1200, height: 800 });
     }
+  });
+
+  test("filter buttons: hidden without any, apply on click, pressed state, add and edit", async () => {
+    await cleanView();
+    await post({ type: "filterButtons", buttons: [] });
+    assert.equal(await page.isHidden("#filter-buttons"), true, "no buttons: no bar");
+
+    await post({
+      type: "filterButtons",
+      buttons: [
+        { label: "HTTP", filter: "http" },
+        { label: "Handshake", filter: "tcp.flags.syn == 1", comment: "SYN and SYN/ACK" },
+      ],
+    });
+    await page.waitForSelector("#filter-buttons button.filter-button");
+    const bar = await page.$eval("#filter-buttons", (b) => ({
+      role: b.getAttribute("role"),
+      label: b.getAttribute("aria-label"),
+      afterFilterBar: b.previousElementSibling?.id,
+      buttons: [...b.querySelectorAll("button")].map((x) => ({
+        text: x.textContent,
+        title: x.title,
+        pressed: x.getAttribute("aria-pressed"),
+      })),
+    }));
+    assert.deepEqual(
+      { role: bar.role, label: bar.label, after: bar.afterFilterBar },
+      { role: "toolbar", label: "Filter buttons", after: "filter-bar" },
+    );
+    assert.deepEqual(bar.buttons, [
+      { text: "HTTP", title: "http", pressed: "false" },
+      { text: "Handshake", title: "SYN and SYN/ACK\ntcp.flags.syn == 1", pressed: "false" },
+      {
+        text: "+",
+        title: "Add a filter button for the display filter in the filter bar…",
+        pressed: null,
+      },
+    ]);
+
+    // A click applies the button's filter and marks it.
+    await page.click("#filter-buttons button:text-is('Handshake')");
+    await page.waitForFunction(() =>
+      /Displayed: 2\b/.test(document.querySelector("#status-left").textContent),
+    );
+    assert.equal(await page.inputValue("#filter-input"), "tcp.flags.syn == 1");
+    await page.waitForFunction(
+      () =>
+        document
+          .querySelector("#filter-buttons button[data-index='1']")
+          .getAttribute("aria-pressed") === "true",
+    );
+    assert.equal(
+      await page.getAttribute("#filter-buttons button[data-index='0']", "aria-pressed"),
+      "false",
+    );
+
+    // "+" asks the host to add the filter bar's filter; right-click (or Shift+F10) edits.
+    // (The value is set without typing: typing opens suggestions over the buttons.)
+    await page.$eval("#filter-input", (input) => {
+      /** @type {HTMLInputElement} */ (input).value = "dns";
+    });
+    await page.click("#filter-button-add");
+    await waitForHost((m) => m.type === "addFilterButton");
+    assert.deepEqual(hostLog.filter((m) => m.type === "addFilterButton").at(-1), {
+      type: "addFilterButton",
+      filter: "dns",
+    });
+    await page.click("#filter-buttons button:text-is('HTTP')", { button: "right" });
+    await waitForHost((m) => m.type === "editFilterButton");
+    await page.focus("#filter-buttons button:text-is('Handshake')");
+    await page.keyboard.press("Shift+F10");
+    await waitForHost((m) => m.type === "editFilterButton" && m.index === 1);
+    assert.deepEqual(
+      hostLog.filter((m) => m.type === "editFilterButton").map((m) => [m.index, m.filter]),
+      [
+        [0, "http"],
+        [1, "tcp.flags.syn == 1"],
+      ],
+    );
+    if (process.env.PCAP_SCREENSHOTS) {
+      await page.screenshot({ path: `${process.env.PCAP_SCREENSHOTS}/filter-buttons.png` });
+    }
+
+    // Clearing the filter releases the button; removing every button hides the bar.
+    await cleanView();
+    assert.equal(
+      await page.getAttribute("#filter-buttons button[data-index='1']", "aria-pressed"),
+      "false",
+    );
+    await post({ type: "filterButtons", buttons: [] });
+    assert.equal(await page.isHidden("#filter-buttons"), true);
   });
 
   test("the busy bar goes away once a sort is done", async () => {

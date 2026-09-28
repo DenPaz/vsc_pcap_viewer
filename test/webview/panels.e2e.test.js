@@ -27,6 +27,10 @@ const TITLES = {
   io: "I/O Graph",
   expert: "Expert Information",
   properties: "Capture File Properties",
+  http: "HTTP",
+  dns: "DNS",
+  plen: "Packet Lengths",
+  srt: "Service Response Time",
 };
 
 maybe("statistics and follow panels (Chromium + real backend)", function () {
@@ -255,6 +259,79 @@ maybe("statistics and follow panels (Chromium + real backend)", function () {
     const props = Object.fromEntries((await rows(page)).map((r) => [r[0], r[1]]));
     assert.equal(props["Number of packets"], "26");
     assert.equal(await page.$("input[type=checkbox]"), null); // no filter limit for file properties
+  });
+
+  test("HTTP statistics: a tree in its own order, report switch, row filters", async () => {
+    const { page, log } = await openStats("http");
+    await page.waitForSelector("table.stats tbody tr");
+    assert.equal(await page.textContent(".panel-title"), "HTTP Packet Counter");
+    const names = (await rows(page)).map((r) => r[0]);
+    assert.equal(names[0], "Total HTTP Packets");
+    assert.ok(names.includes("200 OK") && names.includes("GET"), names.join(", "));
+    // Trees can't be re-sorted: headers aren't sortable.
+    assert.equal(await page.$("th[aria-sort]"), null);
+    const indent = (name) =>
+      page.$eval(`table.stats tbody tr:has(td:text-is('${name}')) td`, (td) =>
+        parseFloat(getComputedStyle(td).paddingLeft),
+      );
+    assert.equal((await indent("200 OK")) - (await indent("2xx: Success")), 16);
+
+    await page.click("table.stats tbody tr:has(td:text-is('200 OK'))");
+    await page.click("button:has-text('Apply as Filter')");
+    assert.equal(log.find((m) => m.type === "filter").expr, "http.response.code == 200");
+
+    await page.selectOption("#stats-type", "requests");
+    await page.waitForFunction(
+      () => document.querySelector(".panel-title").textContent === "HTTP Requests",
+    );
+    await page.dblclick("table.stats tbody tr:has(td:text-is('/index.html'))");
+    assert.equal(
+      log.filter((m) => m.type === "filter").at(-1).expr,
+      'http.host == "example.com" && http.request.uri == "/index.html"',
+    );
+  });
+
+  test("DNS and packet length statistics", async () => {
+    const dns = await openStats("dns");
+    await dns.page.waitForSelector("table.stats tbody tr");
+    const dnsRows = Object.fromEntries((await rows(dns.page)).map((r) => [r[0], r]));
+    assert.equal(dnsRows["No such name"][1], "1");
+    // Average/Min/Max stay: DNS has value rows (payload size, response time).
+    assert.ok(await dns.page.$("th:text-is('Average')"));
+
+    const plen = await openStats("plen");
+    await plen.page.waitForSelector("table.stats tbody tr");
+    const buckets = Object.fromEntries((await rows(plen.page)).map((r) => [r[0], r[1]]));
+    assert.equal(buckets["Packet Lengths"], "26");
+    assert.equal(buckets["40-79"], "21");
+    await plen.page.dblclick("table.stats tbody tr:has(td:text-is('40-79'))");
+    assert.equal(
+      plen.log.find((m) => m.type === "filter").expr,
+      "frame.len >= 40 && frame.len <= 79",
+    );
+  });
+
+  test("service response time: picks a protocol with traffic, marks it, switches", async () => {
+    const { page, log } = await openStats("srt");
+    await page.waitForFunction(
+      () => document.querySelector(".panel-title").textContent === "ICMP Service Response Time",
+    );
+    assert.equal(await page.inputValue("#stats-type"), "icmp");
+    assert.equal(await page.textContent("#stats-type option[value=icmp]"), "ICMP ●");
+    assert.equal(await page.textContent("#stats-type option[value=snmp]"), "SNMP");
+    const [row] = await rows(page);
+    assert.deepEqual(row.slice(0, 3), ["1", "1", "0"]); // requests, replies, lost
+
+    await page.click("table.stats tbody tr >> nth=0");
+    await page.click("button:has-text('Go to Packet')");
+    assert.equal(log.find((m) => m.type === "goto").frame, 3);
+
+    await page.selectOption("#stats-type", "snmp");
+    await page.waitForFunction(
+      () => document.querySelector(".panel-title").textContent === "SNMP Service Response Time",
+    );
+    assert.equal((await rows(page)).length, 0);
+    assert.equal(await page.inputValue("#stats-type"), "snmp");
   });
 
   test("follow TCP stream: directions, formats, stepping, filter and save", async () => {

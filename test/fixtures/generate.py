@@ -21,10 +21,12 @@ import ssl
 import struct
 from pathlib import Path
 
+from scapy.asn1.asn1 import ASN1_OID
 from scapy.layers.dns import DNS, DNSQR, DNSRR
 from scapy.layers.inet import ICMP, IP, TCP, UDP
 from scapy.layers.l2 import ARP, Ether
 from scapy.layers.rtp import RTP
+from scapy.layers.snmp import SNMP, SNMPget, SNMPnext, SNMPresponse, SNMPvarbind
 from scapy.packet import Packet, Raw
 from scapy.utils import wrpcap, wrpcapng
 
@@ -408,6 +410,141 @@ def voip_packets() -> list[Packet]:
     return [pkt for _, pkt in timed]
 
 
+def services_packets() -> list[Packet]:
+    """Traffic for the service statistics: HTTP requests with several methods and
+    status codes on two hosts, DNS queries of several types (one NXDOMAIN), SNMP
+    requests with known response times, and ICMP echoes (one unanswered)."""
+    timed: list[tuple[float, Packet]] = []
+    exchanges = [
+        ("example.com", "93.184.216.34", b"GET /index.html", b"200 OK"),
+        ("example.com", "93.184.216.34", b"GET /missing.png", b"404 Not Found"),
+        ("example.com", "93.184.216.34", b"POST /form", b"200 OK"),
+        ("api.example.net", "198.51.100.7", b"GET /v1/items", b"301 Moved Permanently"),
+    ]
+    for i, (host, addr, request, status) in enumerate(exchanges):
+        s = _TcpSession("192.168.1.10", addr, 51000 + i, 80)
+        s.handshake()
+        body = b"" if request.startswith(b"GET") else b"a=1"
+        s.client_send(
+            request
+            + b" HTTP/1.1\r\nHost: "
+            + host.encode()
+            + f"\r\nContent-Length: {len(body)}\r\n\r\n".encode()
+            + body
+        )
+        s.server_send(b"HTTP/1.1 " + status + b"\r\nContent-Length: 0\r\n\r\n")
+        s.close()
+        timed += [(0.1 * i + 0.001 * j, pkt) for j, pkt in enumerate(s.packets)]
+    queries = [
+        ("example.com", "A", 0, 0.012),
+        ("example.com", "AAAA", 0, 0.020),
+        ("example.com", "MX", 0, 0.016),
+        ("nothing.invalid", "A", 3, 0.030),
+    ]
+    for i, (name, qtype, rcode, delay) in enumerate(queries):
+        qid = 0x2000 + i
+        q = (
+            Ether(src=CLIENT_MAC, dst=SERVER_MAC)
+            / IP(src="192.168.1.10", dst="8.8.8.8")
+            / UDP(sport=41000 + i, dport=53)
+            / DNS(id=qid, rd=1, qd=DNSQR(qname=name, qtype=qtype))
+        )
+        r = (
+            Ether(src=SERVER_MAC, dst=CLIENT_MAC)
+            / IP(src="8.8.8.8", dst="192.168.1.10")
+            / UDP(sport=53, dport=41000 + i)
+            / DNS(id=qid, qr=1, rd=1, ra=1, rcode=rcode, qd=DNSQR(qname=name, qtype=qtype))
+        )
+        timed += [(0.5 + 0.1 * i, q), (0.5 + 0.1 * i + delay, r)]
+    snmp = [
+        (SNMPget, "1.3.6.1.2.1.1.1.0", 0.004),
+        (SNMPget, "1.3.6.1.2.1.1.3.0", 0.010),
+        (SNMPget, "1.3.6.1.2.1.1.5.0", 0.007),
+        (SNMPnext, "1.3.6.1.2.1.2.2.1.2", 0.002),
+    ]
+    for i, (pdu, oid, delay) in enumerate(snmp):
+        bind = [SNMPvarbind(oid=ASN1_OID(oid))]
+        q = (
+            Ether(src=CLIENT_MAC, dst=SERVER_MAC)
+            / IP(src="192.168.1.10", dst="192.168.1.20")
+            / UDP(sport=42000 + i, dport=161)
+            / SNMP(community="public", PDU=pdu(id=100 + i, varbindlist=bind))
+        )
+        r = (
+            Ether(src=SERVER_MAC, dst=CLIENT_MAC)
+            / IP(src="192.168.1.20", dst="192.168.1.10")
+            / UDP(sport=161, dport=42000 + i)
+            / SNMP(community="public", PDU=SNMPresponse(id=100 + i, varbindlist=bind))
+        )
+        timed += [(1.0 + 0.1 * i, q), (1.0 + 0.1 * i + delay, r)]
+    for i, delay in enumerate([0.003, 0.009, None]):
+        q = (
+            Ether(src=CLIENT_MAC, dst=SERVER_MAC)
+            / IP(src="192.168.1.10", dst="192.168.1.1")
+            / ICMP(type=8, id=7, seq=i + 1)
+            / Raw(b"ping")
+        )
+        timed.append((1.5 + 0.1 * i, q))
+        if delay is not None:
+            r = (
+                Ether(src=SERVER_MAC, dst=CLIENT_MAC)
+                / IP(src="192.168.1.1", dst="192.168.1.10")
+                / ICMP(type=0, id=7, seq=i + 1)
+                / Raw(b"ping")
+            )
+            timed.append((1.5 + 0.1 * i + delay, r))
+    timed.sort(key=lambda tp: tp[0])
+    for at, pkt in timed:
+        pkt.time = BASE_TS + at
+    return [pkt for _, pkt in timed]
+
+
+def hex_dump(data: bytes, ascii_column: bool = True) -> str:
+    """One packet as Wireshark's *Copy as Hex Dump* writes it: 4-digit hex
+    offsets, 16 bytes per line and, optionally, the ASCII column."""
+    lines = []
+    for at in range(0, len(data), 16):
+        chunk = data[at : at + 16]
+        line = f"{at:04x}  " + " ".join(f"{b:02x}" for b in chunk)
+        if ascii_column:
+            text = "".join(chr(b) if 32 <= b < 127 else "." for b in chunk)
+            line = f"{line:<54}   {text}"
+        lines.append(line.rstrip())
+    return "\n".join(lines) + "\n"
+
+
+SIP_PAYLOADS = [
+    (
+        b"OPTIONS sip:bob@example.com SIP/2.0\r\nVia: SIP/2.0/UDP 10.0.0.1:5060\r\n"
+        b"From: <sip:alice@example.com>;tag=1\r\nTo: <sip:bob@example.com>\r\n"
+        b"Call-ID: hexdump-1@10.0.0.1\r\nCSeq: 1 OPTIONS\r\nContent-Length: 0\r\n\r\n"
+    ),
+    (
+        b"SIP/2.0 200 OK\r\nVia: SIP/2.0/UDP 10.0.0.1:5060\r\n"
+        b"From: <sip:alice@example.com>;tag=1\r\nTo: <sip:bob@example.com>;tag=2\r\n"
+        b"Call-ID: hexdump-1@10.0.0.1\r\nCSeq: 1 OPTIONS\r\nContent-Length: 0\r\n\r\n"
+    ),
+]
+
+
+def hexdump_fixtures() -> None:
+    """Hex dumps for Import from Hex Dump (text2pcap): the frames of http.pcap
+    as Wireshark copies them; two SIP payloads without headers (imported with a
+    dummy UDP header); raw IPv4 packets each after a time of day."""
+    folder = HERE / "hexdump"
+    folder.mkdir(exist_ok=True)
+    frames = [bytes(pkt) for pkt in http_packets()]
+    (folder / "frames.txt").write_text("\n".join(hex_dump(f) for f in frames), newline="\n")
+    (folder / "sip-payload.txt").write_text(
+        "\n".join(hex_dump(p, ascii_column=False) for p in SIP_PAYLOADS), newline="\n"
+    )
+    ips = [bytes(pkt[IP]) for pkt in dns_packets()[:2]]
+    timed = "".join(
+        f"10:15:{14 + i:02d}.25\n{hex_dump(ip, ascii_column=False)}" for i, ip in enumerate(ips)
+    )
+    (folder / "timed-ipv4.txt").write_text(timed, newline="\n")
+
+
 def mixed_packets() -> list[Packet]:
     extra: list[Packet] = [
         Ether(src=CLIENT_MAC, dst="ff:ff:ff:ff:ff:ff")
@@ -736,6 +873,8 @@ def main() -> None:
     shutil.copyfile(HERE / "mixed.pcapng", HERE.parents[1] / "media" / "sample.pcapng")
     wrpcap(str(HERE / "objects.pcap"), objects_packets())
     wrpcap(str(HERE / "voip.pcap"), voip_packets())
+    wrpcap(str(HERE / "services.pcap"), services_packets())
+    hexdump_fixtures()
     (HERE / "comments.pcapng").write_bytes(
         comments_pcapng(_records(http_packets()), PACKET_COMMENTS)
     )

@@ -51,7 +51,10 @@ async function waitForAsync<T>(fn: () => Promise<T | undefined>, timeoutMs = 30_
 }
 
 suite("PCAP Viewer smoke test", () => {
-  test("opens a capture and the backend responds", async () => {
+  test("opens a capture and the backend responds", async function () {
+    // The first open pays for every cold start (the webview, Python, the
+    // backend, tshark's first run): close to 30 s on a slow Windows runner.
+    this.timeout(120_000);
     const ext = vscode.extensions.all.find((e) => e.packageJSON.name === "pcap-viewer");
     assert.ok(ext, "extension is installed");
     const api = (await ext.activate()) as PcapViewerApi;
@@ -62,7 +65,7 @@ suite("PCAP Viewer smoke test", () => {
     const session = await waitFor(() =>
       api.provider.allSessions.find((s) => s.uri.fsPath === uri.fsPath),
     );
-    const info = await waitFor(() => (indexed(session) ? session.openInfo : undefined));
+    const info = await waitFor(() => (indexed(session) ? session.openInfo : undefined), 90_000);
     assert.equal(info.frames, 11);
 
     const backend = session.backend;
@@ -424,6 +427,29 @@ suite("PCAP Viewer smoke test", () => {
     await vscode.commands.executeCommand("workbench.action.closeAllEditors");
     registration.dispose();
     changed.dispose();
+  });
+
+  test("import from hex dump: text2pcap's capture opens unsaved, with no capture open", async () => {
+    const ext = vscode.extensions.all.find((e) => e.packageJSON.name === "pcap-viewer");
+    const api = (await ext!.activate()) as PcapViewerApi;
+    await vscode.commands.executeCommand("workbench.action.closeAllEditors");
+    await waitFor(() => (api.provider.allSessions.length ? undefined : true), 10_000);
+    const imported = await vscode.commands.executeCommand<string | undefined>(
+      "pcapViewer.importHexDump",
+      { input: path.join(FIXTURES, "hexdump", "frames.txt"), options: { offsets: "hex" } },
+    );
+    assert.ok(imported, "the import succeeded");
+    assert.equal(path.basename(imported), "frames.pcapng");
+    const session = await waitFor(() =>
+      api.provider.allSessions.find((s) => s.uri.fsPath === imported),
+    );
+    assert.ok(session.document.temporary, "the import is an unsaved capture");
+    const info = await waitFor(() => (indexed(session) ? session.openInfo : undefined));
+    assert.equal(info.frames, 11);
+
+    await vscode.commands.executeCommand("workbench.action.revertAndCloseActiveEditor");
+    await vscode.commands.executeCommand("workbench.action.closeAllEditors");
+    await waitFor(() => (api.provider.allSessions.length ? undefined : true), 10_000);
   });
 
   test("changing name resolution re-indexes open captures", async () => {

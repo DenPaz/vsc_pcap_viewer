@@ -129,6 +129,18 @@ def test_quick_detail_is_cached_and_leaves_no_files(
 
 
 @pytest.mark.tshark
+def test_shutdown_stops_the_catalogue_warm_up(opened: PcapService, ctx: RequestContext) -> None:
+    """A quick detail warms the field catalogue in the background (tshark -G
+    fields, seconds on Windows); shutting down right after stops that tshark
+    instead of leaving it to the next test's process count."""
+    opened.packet_detail({"number": 11, "mode": "quick", "window": 4}, ctx)
+    assert opened._warm_future is not None
+    opened.shutdown()
+    assert opened._warm_future.done()
+    assert len(ts.PROCESSES) == 0
+
+
+@pytest.mark.tshark
 def test_quick_detail_without_editcap(
     opened: PcapService, ctx: RequestContext, monkeypatch: pytest.MonkeyPatch
 ) -> None:

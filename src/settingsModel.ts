@@ -134,6 +134,65 @@ export function upsertSavedFilter(list: readonly SavedFilter[], entry: SavedFilt
   return copy;
 }
 
+/** A button in the viewer's filter-button bar (`pcapViewer.filterButtons`). */
+export interface FilterButton {
+  label: string;
+  filter: string;
+  /** Shown as the button's tooltip, above the filter. */
+  comment?: string;
+}
+
+/** At most this many buttons are shown (the rest of the setting is ignored). */
+export const MAX_FILTER_BUTTONS = 50;
+
+/**
+ * Accept `[{ label, filter, comment? }]`; drop entries without a label and a
+ * filter. Labels may repeat (Wireshark's may too); order is kept.
+ */
+export function normalizeFilterButtons(raw: unknown): FilterButton[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const out: FilterButton[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    const { label, filter, comment } = item as Record<string, unknown>;
+    if (typeof label !== "string" || typeof filter !== "string") {
+      continue;
+    }
+    if (!label.trim() || !filter.trim()) {
+      continue;
+    }
+    const button: FilterButton = { label: label.trim(), filter: filter.trim() };
+    if (typeof comment === "string" && comment.trim()) {
+      button.comment = comment.trim();
+    }
+    out.push(button);
+    if (out.length === MAX_FILTER_BUTTONS) {
+      break;
+    }
+  }
+  return out;
+}
+
+/** The list with button `index` moved by `delta` places (clamped); a copy. */
+export function moveFilterButton(
+  list: readonly FilterButton[],
+  index: number,
+  delta: number,
+): FilterButton[] {
+  const copy = [...list];
+  const to = Math.max(0, Math.min(copy.length - 1, index + delta));
+  if (index < 0 || index >= copy.length || to === index) {
+    return copy;
+  }
+  const [moved] = copy.splice(index, 1);
+  copy.splice(to, 0, moved);
+  return copy;
+}
+
 /** A "Decode As" rule as stored in `pcapViewer.decodeAs`: `<layer>==<value>,<protocol>`. */
 export interface DecodeAsRule {
   layer: string;

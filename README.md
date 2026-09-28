@@ -126,6 +126,12 @@ is anything unusual?`) describes the capture from its statistics only:
 - **Saved and recent filters** in the filter bar's ★ menu (or `↓` on an empty
   filter bar). Saved filters live in the `pcapViewer.savedFilters` setting, so
   they can be personal (user settings) or shared with a project (workspace settings).
+- **Filter buttons** like Wireshark's: a row of buttons under the filter bar,
+  each applying its display filter in one click (the button of the applied
+  filter shows as pressed). **+** adds one for the filter in the bar (or _PCAP:
+  Add Filter Button…_); right-click a button (or `Shift+F10`) to edit its label,
+  filter or tooltip comment, move it or remove it. They live in
+  `pcapViewer.filterButtons`, per user or per workspace like saved filters.
 - **Packet details**: collapsible protocol tree and hex/ASCII pane with
   **two-way highlighting** (select a field to see its bytes; click a byte to
   find its field), including reassembled data (e.g. HTTP over several TCP segments).
@@ -238,6 +244,13 @@ is anything unusual?`) describes the capture from its statistics only:
   `name_00001_<time>.pcapng`, …) offers to merge all the pieces into one
   capture and open it. _PCAP: Merge Captures…_ does the same, or merges any
   capture files you choose by timestamp (with `mergecap`).
+- **Import from Hex Dump**: _PCAP: Import from Hex Dump…_ turns a hex dump in
+  the editor (or its selection), the clipboard or a text file into a capture
+  with `text2pcap`, like Wireshark's _File › Import from Hex Dump_: frames as
+  Wireshark copies them, `od` or `hexdump -C` output, raw IP packets, or
+  payloads given a dummy UDP, TCP or SCTP header (or handed to one dissector),
+  with an optional time before each packet. The result opens as a new unsaved
+  capture.
 - **Follow TCP / UDP / TLS / HTTP stream** from the selected packet (right-click
   a packet or use the command palette). The stream opens in a panel with the
   two directions coloured and labelled. You can show one direction only, switch
@@ -278,6 +291,14 @@ is anything unusual?`) describes the capture from its statistics only:
   Expert Information and Capture File Properties. Each opens in a panel with
   sortable columns, CSV copy, and an option to limit it to the current display
   filter. Rows can apply or prepare a display filter, and expert rows jump to their packet.
+- **HTTP, DNS, packet length and service response time statistics**: HTTP's
+  packet counter (status codes and methods), requests by host and URI, and load
+  by server; DNS (return codes, query types, response times); packet lengths in
+  buckets; and service response times per procedure for ICMP/ICMPv6, SMB, SMB2,
+  LDAP, SNMP, Diameter, GTP and more (the protocols the capture has traffic for
+  are marked with ●, and the first one opens). Rows that stand for a set of
+  packets (a status code, a host, a query type, a length bucket, a procedure)
+  apply or prepare the matching display filter.
 
   ![The protocol hierarchy of the sample capture](media/screenshots/statistics.png)
 
@@ -384,6 +405,7 @@ the end of the filter bar), which runs it on that capture.
 | PCAP: Clear Index Cache                                                                                               |                                       | Delete the saved packet-list indexes                                                                              |
 | PCAP: Set TLS Key Log File…                                                                                           |                                       | Decrypt TLS with an `SSLKEYLOGFILE` key log (or stop using it)                                                    |
 | PCAP: Saved Display Filters                                                                                           |                                       | Apply or delete saved filters                                                                                     |
+| PCAP: Add Filter Button… / Filter Buttons…                                                                            |                                       | Add a one-click button for a filter under the filter bar / edit, move or remove them                              |
 | PCAP: Go to Packet                                                                                                    | `Ctrl+G` (`Cmd+G`)                    | Jump to a frame number                                                                                            |
 | PCAP: Find Packet… / Find Next / Find Previous                                                                        | `Ctrl+F`, `F3`, `Shift+F3`            | Find by display filter, string or hex bytes                                                                       |
 | PCAP: Go Back / Go Forward (Packet History)                                                                           | `Alt+Left`, `Alt+Right`               | Walk back and forth over jumps (links, go to, find…)                                                              |
@@ -402,6 +424,7 @@ the end of the filter bar), which runs it on that capture.
 | PCAP Statistics: Flow Graph                                                                                           |                                       | The displayed packets as arrows between their endpoints                                                           |
 | PCAP Statistics: TCP Stream Graph                                                                                     |                                       | Stevens, throughput, round-trip time and window graphs of the selected packet's TCP stream                        |
 | PCAP Statistics: VoIP Calls                                                                                           |                                       | SIP calls with their flow, RTP streams with loss and jitter, stream analysis, play or save the audio              |
+| PCAP Statistics: HTTP, DNS, Packet Lengths, Service Response Time                                                     |                                       | tshark's HTTP, DNS and packet length reports, and response times per procedure                                    |
 | PCAP: Manage Custom Columns                                                                                           |                                       | Add or remove columns (searches tshark's field list)                                                              |
 | PCAP: Reload Capture                                                                                                  |                                       | Re-run tshark on the current capture                                                                              |
 | PCAP: Reload Dissectors                                                                                               |                                       | Check the Lua dissectors for errors, then re-index all open captures                                              |
@@ -414,6 +437,7 @@ the end of the filter bar), which runs it on that capture.
 | PCAP: Export Packet Bytes…                                                                                            |                                       | Raw bytes of the selected packet (or a reassembled source)                                                        |
 | PCAP: Export Packet Dissections…                                                                                      |                                       | Full packet details as plain text, PDML or JSON                                                                   |
 | PCAP: Merge Captures…                                                                                                 |                                       | Merge a rotated capture's pieces, or any captures, into one file and open it                                      |
+| PCAP: Import from Hex Dump…                                                                                           |                                       | Build a capture from a hex dump (editor, clipboard or file) with `text2pcap` and open it                          |
 | PCAP: Export Objects…                                                                                                 |                                       | Files carried over HTTP, SMB, TFTP, IMF, DICOM and FTP-DATA: list, go to packet, save                             |
 | PCAP: Name Resolution…                                                                                                |                                       | Names for MAC addresses, IP addresses and ports (also the status bar's _Names_ link)                              |
 | PCAP: Colorize with Filter…                                                                                           |                                       | Add a coloring rule (also in the detail tree's right-click menu)                                                  |
@@ -466,6 +490,7 @@ crash) are removed after 7 days.
 | `pcapViewer.columnLayout`               | Column order and hidden columns by id, e.g. `{ "order": ["protocol", "number"], "hidden": ["time"] }` (set by the header menu and dragging)     |
 | `pcapViewer.timeFormat`                 | Time column: `relative` (default), `delta_displayed`, `delta_captured`, `absolute`, `utc` or `epoch`                                            |
 | `pcapViewer.savedFilters`               | Named filters: `{ "name": "Web", "filter": "http \|\| tls" }`                                                                                   |
+| `pcapViewer.filterButtons`              | Filter buttons under the filter bar: `{ "label": "DNS errors", "filter": "dns.flags.rcode != 0", "comment": "Failed lookups" }`                 |
 | `pcapViewer.coloringRules`              | Coloring rules, first match wins: `{ "name": "DNS", "filter": "dns", "foreground": "#12272e", "background": "#c8e2ff" }`                        |
 | `pcapViewer.colorize`                   | Color the packet list (default `true`)                                                                                                          |
 | `pcapViewer.ai.enabled`                 | Offer AI help when a language model is available (default `true`)                                                                               |
@@ -555,7 +580,7 @@ something in the meantime.
 
 Every item of the project brief is implemented, and more (see the
 [CHANGELOG](CHANGELOG.md)). Possible next steps: comparing two captures,
-and VoIP calls.
+and configuration profiles.
 
 ## Running locally (Linux)
 

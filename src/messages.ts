@@ -6,6 +6,7 @@ import type { MenuCommand } from "./commandMenu";
 import type {
   ColumnLayout,
   ColumnSetting,
+  FilterButton,
   QuickDetail,
   SavedFilter,
   TimeFormat,
@@ -127,6 +128,10 @@ export type WebviewToHost =
   | { type: "selection"; frame: number | null; frames?: number[] }
   /** Run a command from the ☰ menu on this capture (only ids sent in "commands"). */
   | { type: "runCommand"; id: string }
+  /** The filter-button bar's "+": add a button for this filter (the host asks for a label). */
+  | { type: "addFilterButton"; filter: string }
+  /** Right-click on filter button `index` (showing `filter`): edit, move or remove it. */
+  | { type: "editFilterButton"; index: number; filter: string }
   | { type: "decodeAs"; frame: number }
   | { type: "follow"; proto: "tcp" | "udp" | "tls" | "http"; frame: number }
   | { type: "manageSavedFilters" }
@@ -182,6 +187,8 @@ export type HostToWebview =
     }
   /** The ☰ menu's commands (sent on "ready", before the capture loads). */
   | { type: "commands"; commands: MenuCommand[] }
+  /** `pcapViewer.filterButtons` (sent on "ready" and when the setting changes). */
+  | { type: "filterButtons"; buttons: FilterButton[] }
   | { type: "error"; message: string; canReload: boolean }
   | { type: "rpcResult"; id: number; result: unknown }
   | { type: "rpcError"; id: number; error: { code: number; message: string; data?: unknown } }

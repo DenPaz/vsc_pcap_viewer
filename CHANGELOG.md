@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- More statistics: _PCAP Statistics: HTTP_ (packet counter by status code and
+  method, requests by host and URI, load distribution by server), _DNS_,
+  _Packet Lengths_ and _Service Response Time_ (ICMP/ICMPv6, SMB, SMB2, LDAP,
+  SNMP, Diameter, GTP and others; protocols with traffic are marked). Their
+  rows apply or prepare the display filter of the packets they count.
+- Filter buttons under the filter bar, like Wireshark's: one click applies a
+  filter. Add one with **+** or _PCAP: Add Filter Button…_; right-click a
+  button to edit, move or remove it (`pcapViewer.filterButtons`).
+- _PCAP: Import from Hex Dump…_ builds a capture from a hex dump in the
+  editor, the clipboard or a text file (text2pcap): Ethernet frames, IP
+  packets, or payloads with a dummy UDP/TCP/SCTP header, optionally with a
+  time before each packet. It opens as a new unsaved capture.
+
 - ☰ in the viewer's filter bar lists every PCAP Viewer command under headings
   (Filters, Packets, Statistics, Export, Capture, Editing, Dissectors, AI,
   Other) with its key binding, filters them as you type and runs the one you

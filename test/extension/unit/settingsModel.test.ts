@@ -20,6 +20,9 @@ import {
   normalizeColumns,
   prependColoringRule,
   normalizeSavedFilters,
+  normalizeFilterButtons,
+  moveFilterButton,
+  MAX_FILTER_BUTTONS,
   pushHistory,
   resolveLuaScripts,
   resolveSettingPath,
@@ -78,6 +81,43 @@ suite("settingsModel", () => {
     assert.deepEqual(pushHistory(["a", "b"], " b "), ["b", "a"]);
     assert.deepEqual(pushHistory(["a"], "  "), ["a"]);
     assert.deepEqual(pushHistory(["a", "b", "c"], "d", 3), ["d", "a", "b"]);
+  });
+
+  test("normalizeFilterButtons keeps labelled filters in order, comments optional", () => {
+    assert.deepEqual(
+      normalizeFilterButtons([
+        { label: " DNS errors ", filter: " dns.flags.rcode != 0 ", comment: " Failed lookups " },
+        { label: "Web", filter: "http", comment: "  " },
+        { label: "Web", filter: "tls" }, // labels may repeat
+        { label: "", filter: "x" },
+        { label: "No filter", filter: "" },
+        { label: 1, filter: "x" },
+        "http",
+        null,
+      ]),
+      [
+        { label: "DNS errors", filter: "dns.flags.rcode != 0", comment: "Failed lookups" },
+        { label: "Web", filter: "http" },
+        { label: "Web", filter: "tls" },
+      ],
+    );
+    assert.deepEqual(normalizeFilterButtons({ label: "x", filter: "y" }), []);
+    const many = Array.from({ length: MAX_FILTER_BUTTONS + 5 }, (_, i) => ({
+      label: `b${i}`,
+      filter: "frame",
+    }));
+    assert.equal(normalizeFilterButtons(many).length, MAX_FILTER_BUTTONS);
+  });
+
+  test("moveFilterButton moves one place, clamped, on a copy", () => {
+    const list = ["a", "b", "c"].map((label) => ({ label, filter: label }));
+    const labels = (l: { label: string }[]) => l.map((b) => b.label).join("");
+    assert.equal(labels(moveFilterButton(list, 0, 1)), "bac");
+    assert.equal(labels(moveFilterButton(list, 2, -1)), "acb");
+    assert.equal(labels(moveFilterButton(list, 0, -1)), "abc");
+    assert.equal(labels(moveFilterButton(list, 2, 5)), "abc");
+    assert.equal(labels(moveFilterButton(list, 7, 1)), "abc");
+    assert.equal(labels(list), "abc", "the original is untouched");
   });
 
   test("normalizeSavedFilters keeps valid, uniquely named entries", () => {

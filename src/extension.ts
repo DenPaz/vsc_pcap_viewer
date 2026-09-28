@@ -7,6 +7,7 @@ import { registerExportCommands } from "./commands/export";
 import { registerNavigationCommands } from "./commands/navigation";
 import { registerFilterCommands } from "./commands/filter";
 import { registerSavedFilterCommands } from "./commands/savedFilters";
+import { registerFilterButtonCommands } from "./commands/filterButtons";
 import { COLORING_KEYS, RELOAD_KEYS, SECTION, readQuickDetail, readSettings } from "./config";
 import { FilterAssistant } from "./ai";
 import { registerAiCommands } from "./commands/ai";
@@ -16,6 +17,7 @@ import { registerMergeCommands } from "./commands/merge";
 import { registerCommentCommands } from "./commands/comments";
 import { registerCaptureCommands } from "./commands/capture";
 import { registerEditCaptureCommands } from "./commands/editCapture";
+import { registerImportHexDumpCommand } from "./commands/importHexDump";
 import { registerSetupCommands } from "./commands/setup";
 import { pruneTemporaryCaptures } from "./tempCaptures";
 import { PcapEditorProvider } from "./pcapEditor";
@@ -40,6 +42,7 @@ export function activate(context: vscode.ExtensionContext): PcapViewerApi {
   registerFilterCommands(context, p);
   registerColumnCommands(context, p);
   registerSavedFilterCommands(context, p);
+  registerFilterButtonCommands(context, p);
   registerAnalysisCommands(context, p);
   registerDissectorCommands(context, p, log);
   registerExportCommands(context, p);
@@ -52,6 +55,7 @@ export function activate(context: vscode.ExtensionContext): PcapViewerApi {
   registerCommentCommands(context, p);
   registerCaptureCommands(context, p, log);
   registerEditCaptureCommands(context, p, log);
+  registerImportHexDumpCommand(context, p, log);
   registerSetupCommands(context, log);
   // Unsaved captures left behind (a crash, or a restored editor long closed).
   void pruneTemporaryCaptures(context, new Set(p.allSessions.map((s) => s.uri.fsPath)));
@@ -78,6 +82,12 @@ export function activate(context: vscode.ExtensionContext): PcapViewerApi {
       if (e.affectsConfiguration(`${SECTION}.quickDetail`)) {
         for (const s of p.allSessions) {
           s.setQuickDetail(readQuickDetail(s.uri));
+        }
+      }
+      if (e.affectsConfiguration(`${SECTION}.filterButtons`)) {
+        const buttons = readSettings().filterButtons;
+        for (const s of p.allSessions) {
+          s.setFilterButtons(buttons);
         }
       }
       if (e.affectsConfiguration(`${SECTION}.savedFilters`)) {

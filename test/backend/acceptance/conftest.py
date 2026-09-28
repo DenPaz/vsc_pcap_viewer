@@ -73,6 +73,8 @@ class World:
     save_dir: Path | None = None
     voip: dict[str, Any] | None = None  # voip_calls' result
     saved: Path | None = None  # a file saved by a step
+    imported: dict[str, Any] | None = None  # import_hexdump's result
+    import_dest: Path | None = None
     release: Any = None  # slow_index's event: lets a held index pass finish
     saved_frames: int = 0  # rows of the unfinished saved index
     error: Exception | None = None
@@ -895,6 +897,113 @@ def expert_row(world: World, summary: str, severity: str, count: int, frames: st
 def property_is(world: World, key: str, value: str) -> None:
     rows = {r["cells"][0]: r["cells"][1] for r in _table(world)["rows"]}
     assert rows.get(key) == value, rows
+
+
+def _stats_row(world: World, topic: str, parent: str | None) -> dict[str, Any]:
+    """The row whose first cell is ``topic`` (and whose nearest ancestor row,
+    by depth, is ``parent`` when given)."""
+    rows = _table(world)["rows"]
+    for i, row in enumerate(rows):
+        if row["cells"][0] != topic:
+            continue
+        if parent is None:
+            return row
+        depth = row.get("depth", 0)
+        up = next((r for r in reversed(rows[:i]) if r.get("depth", 0) < depth), None)
+        if up is not None and up["cells"][0] == parent:
+            return row
+    raise AssertionError(f"no row {topic!r} below {parent!r}")
+
+
+@then(
+    parsers.re(
+        r'the statistics row "(?P<topic>[^"]+)"(?: below "(?P<parent>[^"]+)")? '
+        r'has "(?P<label>[^"]+)" (?P<value>\d+)$'
+    )
+)
+def stats_named_row_has(
+    world: World, topic: str, parent: str | None, label: str, value: str
+) -> None:
+    assert _stats_cell(world, _stats_row(world, topic, parent), label) == int(value)
+
+
+@then(
+    parsers.re(
+        r'the filter of the statistics row "(?P<topic>[^"]+)"(?: below "(?P<parent>[^"]+)")? '
+        r"matches (?P<count>\d+) packets?$"
+    )
+)
+def stats_row_filter_matches(world: World, topic: str, parent: str | None, count: str) -> None:
+    row = _stats_row(world, topic, parent)
+    assert row.get("filter"), row
+    found = world.service.count_matches({"filter": row["filter"]}, RequestContext())
+    assert found["count"] == int(count), (row["filter"], found)
+
+
+@then(
+    parsers.re(r'the service response time is for "(?P<protocol>\w+)", out of (?P<available>.+)$')
+)
+def srt_protocol(world: World, protocol: str, available: str) -> None:
+    table = _table(world)
+    assert (table["type"], table["available"]) == (protocol, items(available))
+
+
+# ---------------------------------------------------------------------- import from hex dump
+
+
+def _import_options(text: str | None) -> dict[str, Any]:
+    """``header udp, srcPort 5060 and dstIp ::1`` -> params (numbers as ints)."""
+    options: dict[str, Any] = {}
+    for item in items(text or ""):
+        key, _, value = item.partition(" ")
+        options[key] = int(value) if value.isdigit() else value
+    return options
+
+
+def _import(world: World, tmp_path: Path, **params: Any) -> None:
+    world.import_dest = tmp_path / "imported.pcapng"
+    world.imported = world.call(
+        world.service.import_hexdump, {"dest": str(world.import_dest), **params}
+    )
+
+
+@when(
+    parsers.re(
+        r'I import the (?P<how>hex dump|text of the hex dump) "(?P<name>[^"]+)"'
+        r"(?: with (?P<opts>.+))?$"
+    )
+)
+def import_hexdump(world: World, tmp_path: Path, how: str, name: str, opts: str | None) -> None:
+    path = FIXTURES / "hexdump" / name
+    source = {"input": str(path)} if how == "hex dump" else {"text": path.read_text()}
+    _import(world, tmp_path, **source, **_import_options(opts))
+
+
+@when(parsers.re(r'I import the text "(?P<text>[^"]*)"$'))
+def import_text(world: World, tmp_path: Path, text: str) -> None:
+    _import(world, tmp_path, text=text + "\n")
+
+
+@then(parsers.re(r"the import wrote (?P<count>\d+) packets?$"))
+def import_wrote(world: World, count: str) -> None:
+    assert world.error is None, world.error
+    assert world.imported is not None
+    assert world.imported["packets"] == int(count)
+    assert Path(world.imported["path"]).is_file()
+
+
+@when("I open the imported capture")
+def open_imported(world: World) -> None:
+    assert world.imported is not None
+    open_capture(world, world.imported["path"])
+    assert world.error is None, world.error
+
+
+@then("no imported capture was written")
+def nothing_imported(world: World) -> None:
+    assert world.import_dest is not None
+    assert not world.import_dest.exists()
+    assert not list(world.import_dest.parent.glob(".imported.pcapng.*"))
 
 
 # ---------------------------------------------------------------------- dissector check / Decode As

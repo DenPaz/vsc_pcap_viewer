@@ -3,6 +3,7 @@ import {
   ColoringRule,
   ColumnLayout,
   ColumnSetting,
+  FilterButton,
   NameResolution,
   QuickDetail,
   SavedFilter,
@@ -11,6 +12,7 @@ import {
   normalizeColoringRules,
   normalizeColumnLayout,
   normalizeColumns,
+  normalizeFilterButtons,
   normalizeNameResolution,
   normalizeSavedFilters,
   normalizeTimeFormat,
@@ -35,6 +37,7 @@ export interface Settings {
   columnLayout: ColumnLayout;
   timeFormat: TimeFormat;
   savedFilters: SavedFilter[];
+  filterButtons: FilterButton[];
   colorize: boolean;
   coloringRules: ColoringRule[];
   maxCachedFrames: number;
@@ -78,6 +81,7 @@ export function readSettings(scope?: vscode.Uri): Settings {
     columnLayout: normalizeColumnLayout(cfg.get<unknown>("columnLayout", {})),
     timeFormat: normalizeTimeFormat(cfg.get<unknown>("timeFormat", "relative")),
     savedFilters: normalizeSavedFilters(cfg.get<unknown>("savedFilters", [])),
+    filterButtons: normalizeFilterButtons(cfg.get<unknown>("filterButtons", [])),
     colorize: cfg.get<boolean>("colorize", true),
     coloringRules: normalizeColoringRules(cfg.get<unknown>("coloringRules", [])),
     maxCachedFrames: cfg.get<number>("maxCachedFrames", 5_000_000),

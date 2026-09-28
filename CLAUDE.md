@@ -74,7 +74,9 @@ wireshark`, `C:\Program Files\Wireshark` added to PATH): lint, backend and
   custom editor + one `PcapEditorSession` per panel. `src/backendClient.ts`
   JSON-RPC client (no `vscode` import: unit-testable). `src/settingsModel.ts`
   pure settings helpers. `src/commands/` command implementations
-  (`export.ts`, `coloring.ts`, `dissectors.ts`, `tls.ts`, `merge.ts`, …).
+  (`export.ts`, `coloring.ts`, `dissectors.ts`, `tls.ts`, `merge.ts`,
+  `filterButtons.ts`, `importHexDump.ts`, …). `src/hexDump.ts` guesses a hex
+  dump's layout (pure).
   `src/rotation.ts` recognises rotated capture pieces (pure).
   AI: `src/aiFilter.ts`, `aiExplain.ts`, `aiSummary.ts`, `aiAnomaly.ts`,
   `aiTools.ts` (tool specs, `runTool`, `runToolLoop`) and `aiConsent.ts` are
@@ -108,7 +110,8 @@ wireshark`, `C:\Program Files\Wireshark` added to PATH): lint, backend and
   linking files to packets, safe names), `comments.py` (pcapng packet
   comments, editcap options, packet counts), `capture.py` (live capture:
   dumpcap interfaces, filters, the pcapng tee), `editing.py` (editcap options
-  of capture editing), `voip.py` (RTP stream report, SIP calls, RTP stream
+  of capture editing), `hexdump.py` (text2pcap options of Import from Hex
+  Dump), `voip.py` (RTP stream report, SIP calls, RTP stream
   analysis, G.711 decoding and WAV), `protocol.py` (error codes,
   request context), `cancellation.py`, `index_cache.py` (saved indexes),
   `procs.py` (stopping children, also
@@ -450,6 +453,60 @@ matchCount, fraction}`; the end sends `done`, `stopped` (`stop_filter
   to get frame numbers. Rows are matched by regex because multi-word groups
   ("Response code") overflow tshark's fixed-width column. The display-filter
   limit uses each tap's own filter argument (`conv,tcp,<filter>` etc.).
+- **Service statistics** (`stats {kind: http | dns | plen | srt}`): HTTP
+  (`type` packets/requests/load = `-z http,tree` / `http_req,tree` /
+  `http_srv,tree`), DNS and packet lengths are tshark's stats_tree reports,
+  parsed by one `parse_stats_tree`: the header is the line above the first
+  rule of dashes (its first column is "Topic / Item", or since tshark 4.4 a name
+  the tree sets: "Packet Type" for HTTP and DNS, found on macOS/Windows CI), the
+  first value column starts at "Count" (a long first-column name may leave one
+  space), the others are two or more spaces apart, and the header's column
+  starts cut each row (topics hold spaces, empty cells are blank). A
+  first-column name longer than every topic isn't cut and pushes the header's
+  value columns right: the rule is as long as a row, so the header's extra
+  length is the shift. One space of indentation per level; columns empty in
+  every row are dropped. Rows whose path maps onto a filter carry it (`_TREE_FILTERS`:
+  status classes/codes, methods, host + URI, address/host/OK-Error chains in the
+  load tree, DNS rcode/opcode/type/class/name by value, by the row's parent only (4.2 nests them
+  under Total Packets, 4.6 puts them on top and adds Query Name and Answer Type), length buckets); the
+  acceptance tests count each filter's matches against the row. Service response
+  time: `-z icmp,srt` / `icmpv6,srt` (own format, one row going to the slowest
+  reply) and the generic SRT table of the taps that need no arguments
+  (`SRT_PROTOCOLS`; DCE-RPC/ONC-RPC/SCSI need one and aren't offered), whose
+  single table's `Filter:` field + Index give row filters (several tables, as
+  SMB prints: a Table column, no filters). `type: "auto"` picks the first
+  protocol the protocol hierarchy shows (`SRT_PHS_NAMES` for names that
+  differ); results carry `type` and `available` (the webview marks those ●).
+  Tree kinds (`TREES` in stats.js) keep their order and aren't sortable.
+  `services.pcap` (generate.py) has HTTP with several codes/methods/hosts, DNS
+  of several types, SNMP gets and ICMP echoes (one unanswered).
+- **Filter buttons** (`pcapViewer.filterButtons`: `{label, filter, comment?}`,
+  `normalizeFilterButtons`, at most 50; window scope like saved filters): the
+  host posts `filterButtons` on "ready" and on setting changes; the webview's
+  `#filter-buttons` toolbar (after `#filter-bar`, hidden when empty) applies a
+  button's filter on click (it goes into the filter box first) and marks the
+  applied one `aria-pressed` (`updateFilterButtons`, from `updateStatus`). **+**
+  posts `addFilterButton {filter}`; `contextmenu` (right-click, Shift+F10, the
+  menu key) posts `editFilterButton {index, filter}` and the host
+  (`commands/filterButtons.ts`) offers edit label/filter/comment, move, remove
+  in a QuickPick, locating the button by index if it still holds that filter
+  (the setting may have changed). Filters are validated with the session's
+  `validateFilter` before they're stored.
+- **Import from Hex Dump** (`import_hexdump {text | input, dest, …}`,
+  `hexdump.py`; `commands/importHexDump.ts`): text2pcap (found next to
+  tshark) with `-F pcapng` and options checked in `text2pcap_options` (offsets,
+  `-t` time format, `-D`, `-a`, `-l` or a dummy header `-e/-i/-u/-T/-s/-S/-P`
+  with `-4/-6` addresses; a dummy header forces Ethernet), text written to a
+  temp file, output through `atomic_output`; "wrote 0 packets" is an
+  InvalidParamsError and writes nothing. Needs no open capture (`withBackend`).
+  The host asks source (editor/selection, clipboard, file), offsets
+  (`guessOffsets`: bytes-only lines = none, else the base in which offsets
+  advance by the previous line's byte count, hex on ties), what the bytes
+  hold, and times; `hasAsciiColumn` adds `-a` for hexdump -C. Args
+  `{text | input, options}` skip the questions (smoke test). The result opens
+  as an unsaved capture named after the file. Fixtures: `hexdump/*.txt`
+  (generate.py: http.pcap's frames as Wireshark copies them, SIP payloads,
+  timed IPv4).
 - **Never `str.splitlines()` on packet-derived text**: it also splits on
   `\x1c`–`\x1e`, `\x85`, `\u2028`… Stats parsers use `_lines()` (split on `\n`).
 - **Panels** (`src/panels/`) are separate webview panels beside the editor. They
@@ -1040,4 +1097,6 @@ Export Objects, name resolution, packet comments, the flow graph and TCP
 stream graphs, live capture and capture editing, AI capture summaries,
 anomaly explanations and `@pcap` tools, and publishing: a release workflow,
 Marketplace details, and the Get Started walkthrough. Then resumable indexing
-with a progress bar, and VoIP analysis (SIP calls, RTP streams, audio).
+with a progress bar, VoIP analysis (SIP calls, RTP streams, audio), the ☰
+commands menu, HTTP/DNS/packet length/service response time statistics,
+filter buttons, and Import from Hex Dump.

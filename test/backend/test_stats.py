@@ -239,3 +239,235 @@ def test_parse_follow_raw_merges_directions_and_skips_garbage() -> None:
 def test_parse_follow_raw_truncated_output() -> None:
     res = stats.parse_follow_raw("Filter: udp.stream eq 0\nNode 0: a:1\nNode 1: b:2\n00ff\n\t012")
     assert res["segments"] == [{"dir": 0, "hex": "00ff"}]  # odd-length trailing chunk dropped
+
+
+# test/fixtures/services.pcap, as tshark 4.2.2 prints ``-z http,tree`` (trimmed).
+HTTP_TREE = """\
+
+=========================================================================================================
+HTTP/Packet Counter:
+Topic / Item              Count         Average       Min Val       Max Val       Rate (ms)     Percent
+---------------------------------------------------------------------------------------------------------
+Total HTTP Packets        8                                                       0.0265        100%
+ HTTP Response Packets    4                                                       0.0132        50.00%
+  2xx: Success            2                                                       0.0066        50.00%
+   200 OK                 2                                                       0.0066        100.00%
+  ???: broken             0                                                       0.0000        0.00%
+ HTTP Request Packets     4                                                       0.0132        50.00%
+  GET                     3                                                       0.0099        75.00%
+  M-SEARCH                1                                                       0.0033        25.00%
+
+---------------------------------------------------------------------------------------------------------
+"""
+
+
+def test_parse_stats_tree_depths_empty_columns_and_filters() -> None:
+    table = stats.parse_stats_tree(HTTP_TREE, "http").to_json()
+    # Average/Min/Max are blank in every row: dropped.
+    assert [c["label"] for c in table["columns"]] == [
+        "Topic / Item",
+        "Count",
+        "Rate (ms)",
+        "Percent",
+    ]
+    rows = {r["cells"][0]: r for r in table["rows"]}
+    assert rows["200 OK"]["depth"] == 3
+    assert rows["200 OK"]["cells"] == ["200 OK", 2, 0.0066, 100.0]
+    assert rows["Total HTTP Packets"]["cells"][3] == 100
+    assert rows["200 OK"]["filter"] == "http.response.code == 200"
+    assert rows["2xx: Success"]["filter"] == (
+        "http.response.code >= 200 && http.response.code <= 299"
+    )
+    assert rows["M-SEARCH"]["filter"] == 'http.request.method == "M-SEARCH"'
+    assert "filter" not in rows["???: broken"]
+
+
+def test_stats_tree_filters_quote_hosts_and_uris() -> None:
+    text = """\
+Topic / Item                Count         Rate (ms)     Percent
+---------------------------------------------------------------
+HTTP Requests by HTTP Host  1             0.0100        100%
+ we"ird.example             1             0.0100        100.00%
+  /a b\\c                    1             0.0100        100.00%
+"""
+    rows = stats.parse_stats_tree(text, "http_requests").rows
+    assert rows[1]["filter"] == 'http.host == "we\\"ird.example"'
+    assert rows[2]["filter"] == (
+        'http.host == "we\\"ird.example" && http.request.uri == "/a b\\\\c"'
+    )
+
+
+def test_stats_tree_packet_length_buckets() -> None:
+    text = """\
+Topic / Item       Count         Average       Min Val       Max Val
+--------------------------------------------------------------------
+Packet Lengths     2             60.00         54            66
+ 40-79             2             60.00         54            66
+ 5120 and greater  0             -             -             -
+"""
+    rows = stats.parse_stats_tree(text, "plen").rows
+    assert "filter" not in rows[0]
+    assert rows[1]["filter"] == "frame.len >= 40 && frame.len <= 79"
+    assert rows[1]["cells"] == ["40-79", 2, 60.0, 54, 66]
+    assert rows[2]["filter"] == "frame.len >= 5120"
+    assert rows[2]["cells"] == ["5120 and greater", 0, None, None, None]
+
+
+def test_stats_tree_without_a_header_is_empty() -> None:
+    assert stats.parse_stats_tree("tshark: nothing\n", "dns").rows == []
+
+
+SNMP_SRT = """\
+
+===================================================================
+SNMP SRT Statistics:
+Filter: snmp.data
+Index  Procedure              Calls    Min SRT    Max SRT    Avg SRT    Sum SRT
+    0  Get                         3   0.004000   0.010000   0.007000   0.021000
+    1  GetNext                     1   0.002000   0.002000   0.002000   0.002000
+==================================================================
+"""
+
+
+def test_parse_srt_rows_filter_on_the_reported_field() -> None:
+    table = stats.parse_srt(SNMP_SRT, "snmp").to_json()
+    assert table["title"] == "SNMP Service Response Time"
+    assert table["rows"][0]["cells"] == ["Get", 0, 3, 0.004, 0.01, 0.007, 0.021]
+    assert table["rows"][1]["filter"] == "snmp.data == 1"
+
+
+def test_parse_srt_several_tables_get_a_table_column_and_no_filter() -> None:
+    text = """\
+===================================================================
+SMB SRT Statistics:
+Filter: smb.cmd
+Index  Commands               Calls    Min SRT    Max SRT    Avg SRT    Sum SRT
+  114  Negotiate Protocol          1   0.001000   0.001000   0.001000   0.001000
+
+Transaction2 Commands
+Index  Transaction2 Commands  Calls    Min SRT    Max SRT    Avg SRT    Sum SRT
+    1  FIND_FIRST2                 2   0.002000   0.004000   0.003000   0.006000
+==================================================================
+"""
+    table = stats.parse_srt(text, "smb").to_json()
+    assert table["columns"][0]["label"] == "Table"
+    assert [r["cells"][:2] for r in table["rows"]] == [
+        ["Commands", "Negotiate Protocol"],
+        ["Transaction2 Commands", "FIND_FIRST2"],
+    ]
+    assert all("filter" not in r for r in table["rows"])
+
+
+def test_parse_icmp_srt_goes_to_the_slowest_reply() -> None:
+    text = """\
+==========================================================================
+ICMP Service Response Time (SRT) Statistics (all times in ms):
+Filter: <none>
+
+Requests  Replies   Lost      % Loss
+3         2         1          33.3%
+
+Minimum   Maximum   Mean      Median    SDeviation     Min Frame Max Frame
+3.000     9.000     6.000     6.000     4.243          58        60
+==========================================================================
+"""
+    table = stats.parse_icmp_srt(text, "icmp").to_json()
+    assert table["rows"] == [
+        {
+            "cells": [3, 2, 1, 33.3, 3, 9, 6, 6, 4.243, 58, 60],
+            "frame": 60,
+            "filter": "icmp.type == 8 || icmp.type == 0",
+        }
+    ]
+    no_replies = text.replace(
+        "3         2         1          33.3%", "1         0         1         100.0%"
+    )
+    no_replies = no_replies.split("Minimum")[0]
+    assert stats.parse_icmp_srt(no_replies, "icmp").rows[0]["cells"][:4] == [1, 0, 1, 100]
+
+
+def _tree_46(first_column: str, rows: list[tuple[int, str, list[str]]]) -> str:
+    """A stats tree as tshark 4.6's stats_tree.c prints it: the name column is
+    padded to the longest topic (a longer first-column name isn't cut), then
+    " %-14s" per value column; the rules are as long as a row."""
+    cols = ["Count", "Average", "Min Val", "Max Val", "Rate (ms)", "Percent", "Burst Rate"]
+    width = max(len(name) + depth for depth, name, _ in rows)
+    rule = width + 15 * len(cols)
+    head = first_column.ljust(width) + "".join(" " + c.ljust(14) for c in cols)
+    body = [
+        " " * depth + name.ljust(width - depth) + "".join(" " + v.ljust(14) for v in values)
+        for depth, name, values in rows
+    ]
+    return "\n".join(["", "=" * rule, "DNS:", head, "-" * rule, *body, "", "-" * rule, ""])
+
+
+def test_stats_tree_first_column_named_by_the_tree() -> None:
+    """tshark 4.4+: HTTP and DNS name the first column "Packet Type"."""
+    text = _tree_46(
+        "Packet Type",
+        [
+            (0, "Total Packets", ["8", "", "", "", "0.0242", "100%", "0.0300"]),
+            (1, "rcode", ["8", "", "", "", "0.0242", "100.00%", "0.0300"]),
+            (2, "No such name", ["1", "", "", "", "0.0030", "12.50%", "0.0100"]),
+        ],
+    )
+    table = stats.parse_stats_tree(text, "dns").to_json()
+    assert [c["label"] for c in table["columns"]] == [
+        "Packet Type", "Count", "Rate (ms)", "Percent", "Burst Rate",
+    ]  # fmt: skip
+    assert table["rows"][2]["cells"] == ["No such name", 1, 0.003, 12.5, 0.01]
+    assert table["rows"][2]["depth"] == 2
+    assert table["rows"][2]["filter"] == "dns.flags.rcode == 3"
+
+
+def test_stats_tree_first_column_name_longer_than_every_topic() -> None:
+    """The header's value columns sit right of the rows' by the overflow."""
+    text = _tree_46(
+        "Request Type",
+        [
+            (0, "GET", ["3", "", "", "", "0.0099", "75.00%", "0.0100"]),
+            (0, "POST", ["1", "", "", "", "0.0033", "25.00%", "0.0100"]),
+        ],
+    )
+    assert "Request Type Count" in text  # one space: the name column is 4 wide
+    rows = stats.parse_stats_tree(text, "http_requests").rows
+    assert [r["cells"] for r in rows] == [
+        ["GET", 3, 0.0099, 75.0, 0.01],
+        ["POST", 1, 0.0033, 25.0, 0.01],
+    ]
+
+
+def test_dns_filters_follow_the_parent_whatever_the_depth() -> None:
+    """tshark 4.2 nests Query Type under Total Packets; 4.6 puts it on top."""
+    for rows in (
+        [(0, "Total Packets"), (1, "Query Type"), (2, "AAAA")],
+        [(0, "Total Packets"), (0, "Query Type"), (1, "AAAA")],
+    ):
+        text = _tree_46(
+            "Packet Type",
+            [(d, n, ["2", "", "", "", "0.0061", "25.00%", "0.0200"]) for d, n in rows],
+        )
+        by_name = {r["cells"][0]: r for r in stats.parse_stats_tree(text, "dns").rows}
+        assert by_name["AAAA"]["filter"] == "dns.qry.type == 28"
+        assert by_name["Total Packets"]["filter"] == "dns"
+    text = _tree_46(
+        "Packet Type",
+        [(0, "Query Name", ["1"] + [""] * 6), (1, "example.com", ["1"] + [""] * 6),
+         (0, "Answer Type", ["1"] + [""] * 6), (1, "MX", ["1"] + [""] * 6)],
+    )  # fmt: skip
+    rows = stats.parse_stats_tree(text, "dns").rows
+    assert rows[1]["filter"] == 'dns.qry.name == "example.com"'
+    assert rows[3]["filter"] == "dns.resp.type == 15"
+
+
+def test_dns_query_response_under_its_46_display_name() -> None:
+    """tshark 4.6 shows the top-level "Query/Response" node as "Response"."""
+    for parent, depth in (("Query/Response", 1), ("Response", 0)):
+        rows = [(0, "Total Packets")] if depth else []
+        rows += [(depth, parent), (depth + 1, "Response"), (depth + 1, "Query")]
+        text = _tree_46("Packet Type", [(d, n, ["4"] + [""] * 6) for d, n in rows])
+        by_depth = [r for r in stats.parse_stats_tree(text, "dns").rows if r["depth"] == depth + 1]
+        assert [r.get("filter") for r in by_depth] == [
+            "dns.flags.response == 1",
+            "dns.flags.response == 0",
+        ]

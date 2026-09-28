@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import coloring, comments, editing, navigation, objects, pdml, stats, voip
+from . import coloring, comments, editing, hexdump, navigation, objects, pdml, procs, stats, voip
 from .cache import FrameIndex, LruCache, RowStore, sort_frames, sort_frames_by_key
 from .cancellation import CancelledError, CancelToken
 from .capture import (
@@ -70,6 +70,7 @@ from .protocol import (
     param,
     str_list,
 )
+from .stats import Table
 from .tshark import (
     EMPTY_CAPTURE,
     DissectionOptions,
@@ -469,6 +470,9 @@ class PcapService:
         self._rtp_streams: LruCache[tuple[voip.StreamKey, bool], dict[str, Any]] = LruCache(8)
         self._quick_seq = itertools.count()
         self._catalog_warming = threading.Event()
+        # Background work nobody asked for (the catalogue warm-up): stopped by shutdown.
+        self._background = CancelToken()
+        self._warm_future: Future[None] | None = None
         self._field_index: LruCache[tuple[str, ...], FieldCatalog] = LruCache(2)
         self._decode_as: LruCache[str, list[dict[str, str]]] = LruCache(32)
         # Coloring: rule index + 1 per frame (0 = no rule), from the latest set_coloring.
@@ -508,6 +512,10 @@ class PcapService:
 
     def shutdown(self) -> None:
         self.close()
+        # Its tshark must not outlive the service (a test's process count).
+        self._background.cancel()
+        if self._warm_future is not None:
+            wait([self._warm_future], timeout=procs.STOP_TIMEOUT)
         EMPTY_CAPTURE.remove()
         self._pool.shutdown(wait=False, cancel_futures=True)
 
@@ -2204,7 +2212,7 @@ class PcapService:
         if catalog is None:
             if not self._catalog_warming.is_set():
                 self._catalog_warming.set()
-                self._pool.submit(self._warm_catalog)
+                self._warm_future = self._pool.submit(self._warm_catalog)
             return lambda name: bool(_FRAMENUM_HINT.search(name))
 
         def check(name: str) -> bool:
@@ -2215,7 +2223,9 @@ class PcapService:
 
     def _warm_catalog(self) -> None:
         try:
-            self._catalog(RequestContext())
+            self._catalog(RequestContext(token=self._background))
+        except CancelledError:
+            pass  # shutdown
         except (RpcError, ToolError, OSError) as exc:  # a real request reports it
             print(f"pcap-viewer: field catalogue not loaded: {exc}", file=sys.stderr)  # noqa: T201
         finally:
@@ -2431,7 +2441,10 @@ class PcapService:
 
         ``kind``: ``conversations`` / ``endpoints`` (with ``type`` eth, ip, ipv6,
         tcp, udp), ``phs`` (protocol hierarchy), ``io`` (with optional
-        ``interval`` in seconds), ``expert`` or ``properties`` (capinfos).
+        ``interval`` in seconds), ``expert``, ``properties`` (capinfos),
+        ``http`` (``type`` packets, requests or load), ``dns``, ``plen``
+        (packet lengths) or ``srt`` (service response time, ``type`` a
+        protocol of ``stats.SRT_PROTOCOLS`` or ``auto``).
         ``filter`` limits the statistics to packets matching a display filter.
         """
         kind = param(params, "kind", str)
@@ -2483,6 +2496,10 @@ class PcapService:
                 summary = self._tap(f, f"expert,comment{suffix}", ctx)
                 fields_text = fields_future.result().stdout.decode("utf-8", "replace")
                 table = stats.parse_expert(summary, fields_text)
+            case "http" | "dns" | "plen":
+                table = self._tree_stats(f, kind, param(params, "type", str, ""), suffix, ctx)
+            case "srt":
+                table = self._srt(f, param(params, "type", str, "auto"), suffix, ctx)
             case "properties":
                 if f.tshark.capinfos is None:
                     raise ToolError("capinfos (part of Wireshark) was not found")
@@ -2493,6 +2510,44 @@ class PcapService:
         result = table.to_json()
         result["filter"] = flt
         return result
+
+    def _tree_stats(self, f: _Open, kind: str, typ: str, suffix: str, ctx: RequestContext) -> Table:
+        """A stats_tree report: HTTP (``type`` packets, requests or load), DNS or
+        packet lengths."""
+        tree = kind
+        if kind == "http":
+            typ = typ or "packets"
+            trees = {"packets": "http", "requests": "http_requests", "load": "http_load"}
+            if typ not in trees:
+                raise InvalidParamsError("type must be packets, requests or load")
+            tree = trees[typ]
+        table = stats.parse_stats_tree(self._tap(f, stats.TREE_TAPS[tree] + suffix, ctx), tree)
+        table.kind = kind
+        if kind == "http":
+            table.extra["type"] = typ
+        return table
+
+    def _srt(self, f: _Open, protocol: str, suffix: str, ctx: RequestContext) -> Table:
+        """Service response times of one protocol. ``auto`` picks the first
+        protocol (in SRT_PROTOCOLS order) the protocol hierarchy shows traffic
+        for; the result's ``available`` lists every such protocol."""
+        phs = stats.parse_protocol_hierarchy(self._tap(f, "io,phs" + suffix, ctx))
+        present = {str(row["cells"][0]) for row in phs.rows}
+        available = [
+            p for p in stats.SRT_PROTOCOLS if present.intersection(stats.SRT_PHS_NAMES.get(p, (p,)))
+        ]
+        if protocol == "auto":
+            protocol = available[0] if available else "icmp"
+        if protocol not in stats.SRT_PROTOCOLS:
+            raise InvalidParamsError(
+                f"type must be auto or one of {', '.join(stats.SRT_PROTOCOLS)}"
+            )
+        text = self._tap(f, f"{protocol},srt{suffix}", ctx)
+        parse = stats.parse_icmp_srt if protocol in ("icmp", "icmpv6") else stats.parse_srt
+        table = parse(text, protocol)
+        table.extra["type"] = protocol
+        table.extra["available"] = available
+        return table
 
     def _tap(self, f: _Open, spec: str, ctx: RequestContext, extra: Sequence[str] = ()) -> str:
         # -n (after the name resolution options): report rows become address filters.
@@ -2894,6 +2949,50 @@ class PcapService:
             if res.returncode != 0 or not tmp.exists():
                 raise ToolError(res.stderr.strip() or "mergecap failed", res.stderr, res.returncode)
         return {"ok": True, "path": str(dest), "size": dest.stat().st_size, "inputs": len(inputs)}
+
+    def import_hexdump(self, params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
+        """Build a capture from a hex dump with text2pcap (hexdump.py): ``text``
+        (the dump itself) or ``input`` (a text file), written to ``dest`` as
+        pcapng (appears once complete), with the options of
+        ``hexdump.text2pcap_options``. Needs no open capture. A dump in which
+        text2pcap finds no packets is an error (nothing is written).
+        Returns ``{path, packets}``."""
+        text = params.get("text")
+        source = param(params, "input", str, "")
+        if (text is None) == (not source):
+            raise InvalidParamsError("give either text or input")
+        if text is not None and (not isinstance(text, str) or len(text) > hexdump.MAX_TEXT):
+            raise InvalidParamsError("text must be a string of at most 64 MB")
+        options = hexdump.text2pcap_options(params)
+        tshark = self._require_tshark()
+        try:
+            text2pcap = find_tool("text2pcap", sibling_of=tshark.path)
+        except ToolNotFoundError as exc:
+            raise ToolError("importing a hex dump needs text2pcap (part of Wireshark)") from exc
+        ctx.progress({"phase": "import", "fraction": None})
+        with tempfile.TemporaryDirectory(prefix="pcapviewer-hexdump-") as scratch:
+            if text is not None:
+                infile = Path(scratch) / "dump.txt"
+                infile.write_text(text, encoding="utf-8", newline="\n")
+            else:
+                infile = Path(source).expanduser()
+                if not infile.is_file():
+                    raise InvalidParamsError(f"file not found: {infile}")
+            dest = check_destination(param(params, "dest", str), infile)
+            with atomic_output(dest) as tmp:
+                argv = [str(text2pcap), "-F", "pcapng", *options, str(infile), str(tmp)]
+                res = run(argv, ctx.token)
+                if res.returncode != 0 or not tmp.exists():
+                    raise ToolError(
+                        res.stderr.strip() or "text2pcap failed", res.stderr, res.returncode
+                    )
+                counts = hexdump.written_packets(res.stderr)
+                if counts is not None and counts[1] == 0:
+                    raise InvalidParamsError(
+                        "no packets found in the hex dump: each line needs an offset "
+                        "(e.g. 0000) followed by hex bytes, unless offsets are none"
+                    )
+        return {"path": str(dest), "packets": counts[1] if counts else comments.packet_count(dest)}
 
     # ------------------------------------------------------------------ editing
 
@@ -3907,6 +4006,7 @@ def rpc_methods(service: PcapService) -> dict[str, Callable[[dict[str, Any], Req
         "field_types": service.field_types,
         "export": service.export,
         "merge": service.merge,
+        "import_hexdump": service.import_hexdump,
         "edit_capture": service.edit_capture,
         "flow_graph": service.flow_graph,
         "tcp_graph": service.tcp_graph,
