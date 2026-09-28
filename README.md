@@ -18,7 +18,8 @@ dissection and filtering, so results match Wireshark exactly.
    capture.
 
 Then open any capture file. Every command is in the Command Palette (`PCAP: …`)
-and in the viewer's **☰** menu at the end of the filter bar.
+and in the viewer's **☰** menu at the end of the filter bar, grouped under
+headings that unfold on click (or `→`); typing searches them all.
 
 ### Requirements
 
@@ -41,8 +42,12 @@ which editor VS Code offers.
 - **Offered in _Reopen Editor With…_ only**: `*.[0-9]`, `.log`, `.dmp`,
   `.trc`, `.ber` (generic names that are sometimes captures).
 
-Other formats tshark reads (Network Monitor, Sniffer…) work under one of these
-names. zstd and LZ4 need a tshark built with them (`tshark --version`).
+**Any other name**, or no extension at all: right-click the file in the
+Explorer, or run _PCAP: Open File in PCAP Viewer…_ and pick it. It opens if
+tshark reads it (Network Monitor, Sniffer, a raw BER/ASN.1 value…), else you
+are told why. A file of several BER records back to back isn't readable:
+tshark reads one BER value per file. zstd and LZ4 need a tshark built with
+them (`tshark --version`).
 
 ## Features
 
@@ -134,7 +139,10 @@ and never overwrite the open capture.
   File…_); the viewer offers a reload when the file gets new keys.
 - **Lua dissectors**: _PCAP: New Lua Dissector_ scaffolds one, _PCAP: Reload
   Dissectors_ checks it and links errors to their line (see
-  `backend/dissectors/example.lua`).
+  `backend/dissectors/example.lua`). _PCAP: Lua Dissectors…_ (or the status
+  bar's _Lua_ link) picks which scripts each capture loads; the choice is
+  remembered per file. A Lua dissector registered on `wtap_encap` 90 decodes
+  whole BER files: `DissectorTable.get("wtap_encap"):add(90, proto)`.
 - **Decode As** rules and tshark **preference overrides**, per workspace folder.
 
 ### AI help (optional)

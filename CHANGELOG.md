@@ -6,6 +6,18 @@ versions are plain `major.minor.patch`.
 
 ## Unreleased
 
+### Added
+
+- The ☰ menu's groups fold: it opens as a short list of headings with their
+  command counts; a click, `Enter` or `→` unfolds one, and typing still
+  searches every command. Open groups are remembered.
+- _PCAP: Lua Dissectors…_ (also the status bar's _Lua_ link): choose which of
+  the configured Lua scripts each capture loads, remembered per file.
+- _PCAP: Open File in PCAP Viewer…_ (also in the Explorer's right-click menu):
+  open any file tshark reads, whatever its name or without an extension, or
+  get told why it can't be read (for example several BER records back to
+  back).
+
 ## 0.2.0 — 2026-09-28
 
 The first published release. It adds everything since 0.1.0 below.
