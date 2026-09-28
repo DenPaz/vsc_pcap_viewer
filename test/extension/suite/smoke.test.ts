@@ -519,6 +519,46 @@ suite("PCAP Viewer smoke test", () => {
     }
   });
 
+  test("Open File in PCAP Viewer: any name when tshark reads it, a refusal otherwise", async () => {
+    const ext = vscode.extensions.all.find((e) => e.packageJSON.name === "pcap-viewer");
+    const api = (await ext!.activate()) as PcapViewerApi;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pcap-open-"));
+    const record = Buffer.from("300a020105040568656c6c6f", "hex"); // one BER value
+    const trace = path.join(dir, "trace"); // a pcap without an extension
+    fs.copyFileSync(path.join(FIXTURES, "http.pcap"), trace);
+    fs.writeFileSync(path.join(dir, "record"), record);
+    fs.writeFileSync(path.join(dir, "cdrs"), Buffer.concat([record, record, record]));
+    const open = (name: string) =>
+      vscode.commands.executeCommand<boolean>(
+        "pcapViewer.openFile",
+        vscode.Uri.file(path.join(dir, name)),
+      );
+    try {
+      for (const [name, frames] of [
+        ["trace", 11],
+        ["record", 1],
+      ] as const) {
+        assert.equal(await open(name), true, name);
+        const file = path.join(dir, name);
+        const tab = vscode.window.tabGroups.activeTabGroup.activeTab?.input;
+        assert.ok(tab instanceof vscode.TabInputCustom, `${name} opens in a custom editor`);
+        assert.equal(tab.viewType, "pcapViewer.editor");
+        const session = await waitFor(() =>
+          api.provider.allSessions.find((s) => s.uri.fsPath === file && indexed(s)),
+        );
+        assert.equal(session.openInfo?.frames, frames, name);
+      }
+      // Several BER records back to back: tshark can't read it, so it doesn't open.
+      const before = api.provider.allSessions.length;
+      assert.equal(await open("cdrs"), false);
+      assert.equal(api.provider.allSessions.length, before);
+    } finally {
+      await vscode.commands.executeCommand("workbench.action.closeAllEditors");
+      await waitFor(() => (api.provider.allSessions.length ? undefined : true), 10_000);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("file types: capture files open in the viewer, generic extensions only on request", async () => {
     const ext = vscode.extensions.all.find((e) => e.packageJSON.name === "pcap-viewer");
     const api = (await ext!.activate()) as PcapViewerApi;

@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { initLuaChoices } from "./luaChoice";
 import { registerAnalysisCommands } from "./commands/analysis";
+import { registerOpenFileCommand } from "./commands/openFile";
 import { registerColoringCommands } from "./commands/coloring";
 import { registerColumnCommands } from "./commands/columns";
 import { registerDissectorCommands } from "./commands/dissectors";
@@ -59,6 +60,7 @@ export function activate(context: vscode.ExtensionContext): PcapViewerApi {
   registerCaptureCommands(context, p, log);
   registerEditCaptureCommands(context, p, log);
   registerImportHexDumpCommand(context, p, log);
+  registerOpenFileCommand(context, p, log);
   registerSetupCommands(context, log);
   // Unsaved captures left behind (a crash, or a restored editor long closed).
   void pruneTemporaryCaptures(context, new Set(p.allSessions.map((s) => s.uri.fsPath)));

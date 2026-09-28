@@ -468,6 +468,11 @@
         "category": "PCAP"
       },
       {
+        "command": "pcapViewer.openFile",
+        "title": "Open File in PCAP Viewer…",
+        "category": "PCAP"
+      },
+      {
         "command": "pcapViewer.importHexDump",
         "title": "Import from Hex Dump…",
         "category": "PCAP"
@@ -571,6 +576,13 @@
       }
     ],
     "menus": {
+      "explorer/context": [
+        {
+          "command": "pcapViewer.openFile",
+          "when": "!explorerResourceIsFolder && resourceScheme == file",
+          "group": "navigation@90"
+        }
+      ],
       "commandPalette": [
         {
           "command": "pcapViewer.applyFilter",
