@@ -88,6 +88,7 @@ wireshark`, `C:\Program Files\Wireshark` added to PATH): lint, backend and
   `src/environment.ts` the setup check (pure); `src/commands/setup.ts` the
   walkthrough's commands and context keys. `src/remote.ts` remote-window
   helpers (pure); `src/commands/reveal.ts` shows saved files.
+  `src/commandMenu.ts` the viewer's ☰ command list from package.json (pure).
 - `src/webview/` plain JS/CSS/HTML (no build step). `lib.js` = pure helpers
   shared with Node tests; `main.js` = UI. Type-checked via JSDoc +
   `tsconfig.webview.json`.
@@ -959,6 +960,40 @@ stream, sessionId}`. The query stays short: expert rows (sanitized by
     _Apply as Column_, rename and remove write for the capture's folder.
     `lib.cellFilter` builds cell filters (ip/ipv6/eth by address form; none for
     Time or Info). `lib.formatBytesAs` has the bytes-pane copy formats.
+- **Commands menu** (☰ `#filter-menu` after `#filter-clear`; `commandMenu.ts`,
+  `main.js` `commandsMenu`): the list is built from package.json
+  (`context.extension.packageJSON`: `contributes.commands` plus the first
+  `contributes.keybindings` entry per command, `buildCommandMenu`), so a new
+  command appears by itself; `GROUP_OF` gives its heading (Filters, Packets,
+  Statistics, Export, Capture, Editing, Dissectors, AI, Other; "Packets" was
+  added for navigation, marks, time reference and comments; a unit test fails
+  when a command has no explicit heading, and category "PCAP Statistics"
+  falls back to Statistics) and `REQUIRES` what it needs (selection, marks,
+  filter, capturing, ai). `EXCLUDED_COMMANDS` names what is left out and why
+  (only `savedFilters`: the ★ button in the same bar). The host posts
+  `commands` on "ready", before the capture loads (Reload and Show Log help
+  when it fails), and `runCommand {id}` is accepted only for an id in that
+  list (`runMenuCommand`: anything else is logged and ignored); it calls
+  `activate()` first, since commands act on `provider.activeSession`, then
+  `executeCommand`. **Disabled, not hidden**: an entry whose requirement isn't
+  met (`lib.commandUnavailable`, from webview state) stays listed, dimmed,
+  `aria-disabled`, with the reason as its tooltip and in the hint line; click
+  and Enter do nothing, so the menu always shows everything there is.
+  Keyboard: the button opens on click, Enter or Space (native button) and ↓;
+  focus goes to the filter box and stays there: typing filters
+  (`lib.filterCommands`: every word in title, heading or category), ↑/↓ wrap,
+  Home/End jump (`aria-activedescendant` on the box), Enter runs, Esc or Tab
+  close and give the focus back to the button, as does running an entry; a
+  click outside or the window losing focus closes it without moving focus.
+  The box's keydown handler stops propagation, so the viewer's own keys
+  (Ctrl+F, F3…) don't fire while typing. Key bindings are shown per platform
+  (`lib.formatKeybinding`: "Ctrl+Shift+N", or the `mac` binding as "⌘⇧N";
+  macOS is detected from the webview's navigator, which is the local machine
+  even in a remote window). `.command-menu` reuses `.context-menu`; its
+  colors fall back to system colors when a theme variable is missing. The
+  filter bar wraps (`flex-wrap`, `#filter-field` 14em minimum), so on a
+  narrow editor the buttons go to a second line instead of squeezing the
+  input (e2e test at 320/480/800 px).
 - **Protocol**: JSON-RPC 2.0 framing (`"jsonrpc": "2.0"`), LSP-style
   cancellation code -32800; app codes in `backend/pcap_backend/protocol.py`
   and mirrored in `src/backendClient.ts` (`ErrorCodes`; -32011 unsupported format,

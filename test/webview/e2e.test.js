@@ -22,6 +22,12 @@ const {
 
 const deps = loadDeps();
 const maybe = deps && HAVE_TSHARK ? suite : suite.skip;
+/** The ☰ menu's list, as the host builds it (src/commandMenu.ts, compiled). */
+const menuCommands = deps
+  ? require(path.join(ROOT, "out", "src", "commandMenu.js")).buildCommandMenu(
+      JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8")),
+    )
+  : [];
 
 maybe("webview end-to-end (Chromium + real backend)", function () {
   this.timeout(60_000);
@@ -94,6 +100,8 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     await page.exposeFunction("__toHost", async (raw) => {
       const msg = JSON.parse(raw);
       if (msg.type === "ready") {
+        // Like PcapEditorSession: the ☰ menu's commands come first, built from package.json.
+        await post({ type: "commands", commands: menuCommands });
         const info = await client.request(
           "open",
           { path: path.join(ROOT, "test", "fixtures", "http.pcap"), columns: ["tcp.stream"] },
@@ -149,6 +157,7 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
           "exportSelected",
           "copy",
           "askAboutPackets",
+          "runCommand",
         ].includes(msg.type)
       ) {
         hostLog.push(msg);
@@ -1195,6 +1204,188 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     );
     await page.waitForTimeout(700); // past the stale validation
     assert.match(await notice(), /No packets are marked/);
+  });
+
+  test("☰ commands menu: button, groups, filter, keyboard, run, disabled entries", async () => {
+    // A fresh open (no packet selected, nothing marked), then no filter and no AI.
+    await reopenCapture("http.pcap");
+    await cleanView();
+    const menuOpen = () => page.$eval("#commands-menu", (m) => !m.classList.contains("hidden"));
+    const button = () =>
+      page.$eval("#filter-menu", (b) => ({
+        after: b.previousElementSibling?.id,
+        label: b.getAttribute("aria-label"),
+        title: b.title,
+        popup: b.getAttribute("aria-haspopup"),
+        expanded: b.getAttribute("aria-expanded"),
+        focused: document.activeElement === b,
+      }));
+    const items = () =>
+      page.$$eval("#commands-list [role=menuitem]", (nodes) =>
+        nodes.map((n) => ({
+          id: n.dataset.id,
+          title: n.querySelector(".title")?.textContent,
+          keys: n.querySelector(".keys")?.textContent,
+          disabled: n.getAttribute("aria-disabled") === "true",
+          reason: n.title,
+          active: n.classList.contains("active"),
+          group: n.closest("[role=group]")?.getAttribute("aria-label"),
+        })),
+      );
+    const activeId = () =>
+      page.$eval("#commands-filter", (i) => {
+        const id = i.getAttribute("aria-activedescendant");
+        return id ? document.getElementById(id)?.dataset.id : null;
+      });
+
+    let b = await button();
+    assert.deepEqual(
+      [b.after, b.label, b.title, b.popup, b.expanded],
+      ["filter-clear", "All PCAP commands", "All PCAP commands", "menu", "false"],
+    );
+
+    // Open with a click: every command, under the headings in their order.
+    await page.click("#filter-menu");
+    assert.equal(await menuOpen(), true);
+    assert.equal((await button()).expanded, "true");
+    assert.equal(
+      await page.evaluate(() => document.activeElement?.id),
+      "commands-filter",
+      "focus in the filter box",
+    );
+    assert.equal(await page.getAttribute("#commands-list", "role"), "menu");
+    if (process.env.PCAP_SCREENSHOTS) {
+      await page.screenshot({ path: `${process.env.PCAP_SCREENSHOTS}/commands-menu.png` });
+    }
+    const all = await items();
+    assert.equal(all.length, menuCommands.length, "every command is listed");
+    const groups = [...new Set(all.map((i) => i.group))];
+    assert.deepEqual(groups, [
+      "Filters",
+      "Packets",
+      "Statistics",
+      "Export",
+      "Capture",
+      "Editing",
+      "Dissectors",
+      "AI",
+      "Other",
+    ]);
+    assert.deepEqual(
+      await page.$$eval("#commands-list .heading", (h) => h.map((x) => x.textContent)),
+      groups,
+    );
+    const byId = Object.fromEntries(all.map((i) => [i.id, i]));
+    assert.equal(byId["pcapViewer.applyFilter"].keys, "Ctrl+/");
+    assert.equal(byId["pcapViewer.goBack"].keys, "Alt+Left");
+    assert.equal(byId["pcapViewer.statistics.conversations"].keys, "");
+    // What can't run now is disabled, with the reason.
+    assert.equal(byId["pcapViewer.toggleMark"].disabled, true);
+    assert.equal(byId["pcapViewer.toggleMark"].reason, "Select a packet first");
+    assert.equal(byId["pcapViewer.stopCapture"].reason, "No capture is running");
+    assert.match(byId["pcapViewer.summarizeCapture"].reason, /AI help isn't available/);
+    assert.equal(byId["pcapViewer.clearFilter"].reason, "No display filter is applied");
+    assert.equal(byId["pcapViewer.statistics.conversations"].disabled, false);
+    assert.equal(byId["pcapViewer.savedFilters"], undefined, "excluded");
+    assert.equal(await activeId(), "pcapViewer.applyFilter", "the first enabled entry is active");
+
+    // A disabled entry sends nothing (click or Enter); the hint says why.
+    const runs = () => hostLog.filter((m) => m.type === "runCommand").length;
+    // (force: Playwright won't click an aria-disabled element; a person can.)
+    await page.click("#commands-list [data-id='pcapViewer.toggleMark']", { force: true });
+    assert.equal(await menuOpen(), true, "stays open");
+    assert.equal(
+      await page.textContent("#commands-menu .command-hint"),
+      "Mark/Unmark Selected Packets: Select a packet first",
+    );
+    assert.equal(runs(), 0);
+
+    // Typing filters (title, heading or category); the arrows, Home/End move; Esc closes.
+    await page.fill("#commands-filter", "statistics conv");
+    assert.deepEqual(
+      (await items()).map((i) => i.id),
+      ["pcapViewer.statistics.conversations"],
+    );
+    await page.fill("#commands-filter", "EXPORT");
+    const exports = await items();
+    assert.ok(exports.length >= 7 && exports.every((i) => /export/i.test(`${i.title} ${i.group}`)));
+    assert.equal(await activeId(), exports.find((i) => !i.disabled).id);
+    await page.keyboard.press("End");
+    assert.equal(await activeId(), exports.at(-1).id);
+    await page.keyboard.press("ArrowDown"); // wraps
+    assert.equal(await activeId(), exports[0].id);
+    await page.keyboard.press("ArrowUp");
+    assert.equal(await activeId(), exports.at(-1).id);
+    await page.keyboard.press("Home");
+    assert.equal(await activeId(), exports[0].id);
+    await page.fill("#commands-filter", "no such command");
+    assert.equal((await items()).length, 0);
+    assert.equal(await page.textContent("#commands-menu .command-hint"), "No matching commands");
+    await page.keyboard.press("Escape");
+    assert.equal(await menuOpen(), false);
+    b = await button();
+    assert.deepEqual([b.expanded, b.focused], ["false", true], "focus back on the button");
+
+    // Keyboard: Enter opens it, typing filters, Enter runs the entry; focus comes back.
+    await page.keyboard.press("Enter");
+    assert.equal(await menuOpen(), true);
+    await page.keyboard.type("protocol hier");
+    await page.keyboard.press("Enter");
+    await waitForHost((m) => m.type === "runCommand");
+    assert.deepEqual(hostLog.filter((m) => m.type === "runCommand").at(-1), {
+      type: "runCommand",
+      id: "pcapViewer.statistics.protocolHierarchy",
+    });
+    assert.equal(await menuOpen(), false);
+    assert.equal((await button()).focused, true);
+
+    // Space opens it too; ↓ lands on the disabled Clear (Enter sends nothing), ↓ again runs Save.
+    await page.keyboard.press(" ");
+    assert.equal(await menuOpen(), true);
+    await page.keyboard.press("ArrowDown");
+    assert.equal(await activeId(), "pcapViewer.clearFilter");
+    await page.keyboard.press("Enter");
+    assert.equal(await menuOpen(), true);
+    assert.equal(runs(), 1);
+    await page.keyboard.press("ArrowDown");
+    assert.equal(await activeId(), "pcapViewer.saveFilter");
+    await page.keyboard.press("Enter");
+    await waitForHost((m) => m.type === "runCommand" && m.id === "pcapViewer.saveFilter");
+
+    // A click outside closes it; with a selected packet the entry is enabled and runs.
+    await page.click("#filter-menu");
+    await page.mouse.click(5, 300);
+    assert.equal(await menuOpen(), false);
+    await rowEl(2).click();
+    await waitSelected(2);
+    await page.click("#filter-menu");
+    assert.equal((await items()).find((i) => i.id === "pcapViewer.toggleMark").disabled, false);
+    await page.click("#commands-list [data-id='pcapViewer.toggleMark']");
+    await waitForHost((m) => m.type === "runCommand" && m.id === "pcapViewer.toggleMark");
+    assert.equal(runs(), 3);
+    await page.keyboard.press("Escape");
+  });
+
+  test("☰ does not squeeze the filter input on a narrow editor", async () => {
+    try {
+      for (const width of [320, 480, 800]) {
+        await page.setViewportSize({ width, height: 600 });
+        const box = await page.$eval("#filter-input", (i) => i.getBoundingClientRect().width);
+        const menu = await page.$eval("#filter-menu", (m) => {
+          const r = m.getBoundingClientRect();
+          return { right: r.right, visible: r.width > 0 };
+        });
+        assert.ok(box >= Math.min(180, width - 80), `input ${box}px wide at ${width}px`);
+        assert.ok(menu.visible && menu.right <= width, `☰ inside the window at ${width}px`);
+        if (process.env.PCAP_SCREENSHOTS) {
+          await page.screenshot({
+            path: `${process.env.PCAP_SCREENSHOTS}/filter-bar-${width}.png`,
+          });
+        }
+      }
+    } finally {
+      await page.setViewportSize({ width: 1200, height: 800 });
+    }
   });
 
   test("the busy bar goes away once a sort is done", async () => {

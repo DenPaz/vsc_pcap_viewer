@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- ☰ in the viewer's filter bar lists every PCAP Viewer command under headings
+  (Filters, Packets, Statistics, Export, Capture, Editing, Dissectors, AI,
+  Other) with its key binding, filters them as you type and runs the one you
+  pick on that capture. Commands that can't run right now are greyed out with
+  the reason. On narrow editors the filter bar's buttons now wrap to a second
+  line instead of squeezing the filter box.
+
 - VoIP calls: _PCAP Statistics: VoIP Calls_ lists the SIP calls (state, setup
   time, duration) with a sequence diagram of each call's messages and media,
   and the RTP streams with lost packets, delta and jitter. A stream can be

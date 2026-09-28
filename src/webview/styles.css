@@ -81,6 +81,7 @@ input:focus-visible {
 
 #filter-bar {
   display: flex;
+  flex-wrap: wrap; /* on a narrow editor the buttons wrap, the input keeps its width */
   gap: 4px;
   padding: 4px;
   border-bottom: 1px solid var(--border);
@@ -88,9 +89,13 @@ input:focus-visible {
 
 #filter-field {
   position: relative;
-  flex: 1;
-  min-width: 0;
+  flex: 1 1 14em;
+  min-width: min(14em, 100%);
   display: flex;
+}
+
+#filter-bar > button {
+  flex: none;
 }
 
 button.icon {
@@ -822,6 +827,77 @@ button.icon:hover {
   height: 1px;
   margin: 4px 0;
   background: var(--vscode-menu-separatorBackground, var(--border));
+}
+
+/* The ☰ commands menu (main.js commandsMenu), below its button. */
+.command-menu {
+  display: flex;
+  flex-direction: column;
+  width: min(380px, calc(100vw - 8px));
+  padding: 4px 0 0;
+  color: var(--vscode-menu-foreground, var(--vscode-foreground, CanvasText));
+  background: var(--vscode-menu-background, var(--vscode-editorWidget-background, Canvas));
+}
+
+.command-menu.hidden {
+  display: none;
+}
+
+.command-menu input {
+  margin: 0 6px 4px;
+}
+
+.command-menu [role="menu"] {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.command-menu .heading {
+  padding: 6px 12px 2px;
+  font-size: 0.85em;
+  font-weight: 600;
+  color: var(--vscode-descriptionForeground);
+}
+
+.command-menu .item {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 3px 12px;
+}
+
+.command-menu .item.active {
+  color: var(
+    --vscode-menu-selectionForeground,
+    var(--vscode-list-activeSelectionForeground, HighlightText)
+  );
+  background: var(
+    --vscode-menu-selectionBackground,
+    var(--vscode-list-activeSelectionBackground, Highlight)
+  );
+}
+
+.command-menu .item:hover:not(.active) {
+  color: inherit;
+  background: none;
+}
+
+.command-menu .item[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.command-menu .keys {
+  flex: none;
+  opacity: 0.8;
+  font-size: 0.9em;
+}
+
+.command-menu .command-hint {
+  padding: 4px 12px;
+  border-top: 1px solid var(--vscode-menu-separatorBackground, var(--border));
+  color: var(--vscode-descriptionForeground);
 }
 
 /* ------------------------------------------------------------------ find bar */
