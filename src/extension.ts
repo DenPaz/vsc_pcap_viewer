@@ -17,6 +17,7 @@ import { registerMergeCommands } from "./commands/merge";
 import { registerCommentCommands } from "./commands/comments";
 import { registerCaptureCommands } from "./commands/capture";
 import { registerEditCaptureCommands } from "./commands/editCapture";
+import { registerImportHexDumpCommand } from "./commands/importHexDump";
 import { registerSetupCommands } from "./commands/setup";
 import { pruneTemporaryCaptures } from "./tempCaptures";
 import { PcapEditorProvider } from "./pcapEditor";
@@ -54,6 +55,7 @@ export function activate(context: vscode.ExtensionContext): PcapViewerApi {
   registerCommentCommands(context, p);
   registerCaptureCommands(context, p, log);
   registerEditCaptureCommands(context, p, log);
+  registerImportHexDumpCommand(context, p, log);
   registerSetupCommands(context, log);
   // Unsaved captures left behind (a crash, or a restored editor long closed).
   void pruneTemporaryCaptures(context, new Set(p.allSessions.map((s) => s.uri.fsPath)));

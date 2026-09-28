@@ -499,6 +499,48 @@ def services_packets() -> list[Packet]:
     return [pkt for _, pkt in timed]
 
 
+def hex_dump(data: bytes, ascii_column: bool = True) -> str:
+    """One packet as Wireshark's *Copy as Hex Dump* writes it: 4-digit hex
+    offsets, 16 bytes per line and, optionally, the ASCII column."""
+    lines = []
+    for at in range(0, len(data), 16):
+        chunk = data[at : at + 16]
+        line = f"{at:04x}  " + " ".join(f"{b:02x}" for b in chunk)
+        if ascii_column:
+            text = "".join(chr(b) if 32 <= b < 127 else "." for b in chunk)
+            line = f"{line:<54}   {text}"
+        lines.append(line.rstrip())
+    return "\n".join(lines) + "\n"
+
+
+SIP_PAYLOADS = [
+    b"OPTIONS sip:bob@example.com SIP/2.0\r\nVia: SIP/2.0/UDP 10.0.0.1:5060\r\n"
+    b"From: <sip:alice@example.com>;tag=1\r\nTo: <sip:bob@example.com>\r\n"
+    b"Call-ID: hexdump-1@10.0.0.1\r\nCSeq: 1 OPTIONS\r\nContent-Length: 0\r\n\r\n",
+    b"SIP/2.0 200 OK\r\nVia: SIP/2.0/UDP 10.0.0.1:5060\r\n"
+    b"From: <sip:alice@example.com>;tag=1\r\nTo: <sip:bob@example.com>;tag=2\r\n"
+    b"Call-ID: hexdump-1@10.0.0.1\r\nCSeq: 1 OPTIONS\r\nContent-Length: 0\r\n\r\n",
+]
+
+
+def hexdump_fixtures() -> None:
+    """Hex dumps for Import from Hex Dump (text2pcap): the frames of http.pcap
+    as Wireshark copies them; two SIP payloads without headers (imported with a
+    dummy UDP header); raw IPv4 packets each after a time of day."""
+    folder = HERE / "hexdump"
+    folder.mkdir(exist_ok=True)
+    frames = [bytes(pkt) for pkt in http_packets()]
+    (folder / "frames.txt").write_text("\n".join(hex_dump(f) for f in frames), newline="\n")
+    (folder / "sip-payload.txt").write_text(
+        "\n".join(hex_dump(p, ascii_column=False) for p in SIP_PAYLOADS), newline="\n"
+    )
+    ips = [bytes(pkt[IP]) for pkt in dns_packets()[:2]]
+    timed = "".join(
+        f"10:15:{14 + i:02d}.25\n{hex_dump(ip, ascii_column=False)}" for i, ip in enumerate(ips)
+    )
+    (folder / "timed-ipv4.txt").write_text(timed, newline="\n")
+
+
 def mixed_packets() -> list[Packet]:
     extra: list[Packet] = [
         Ether(src=CLIENT_MAC, dst="ff:ff:ff:ff:ff:ff")
@@ -828,6 +870,7 @@ def main() -> None:
     wrpcap(str(HERE / "objects.pcap"), objects_packets())
     wrpcap(str(HERE / "voip.pcap"), voip_packets())
     wrpcap(str(HERE / "services.pcap"), services_packets())
+    hexdump_fixtures()
     (HERE / "comments.pcapng").write_bytes(
         comments_pcapng(_records(http_packets()), PACKET_COMMENTS)
     )

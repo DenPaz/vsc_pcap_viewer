@@ -426,6 +426,29 @@ suite("PCAP Viewer smoke test", () => {
     changed.dispose();
   });
 
+  test("import from hex dump: text2pcap's capture opens unsaved, with no capture open", async () => {
+    const ext = vscode.extensions.all.find((e) => e.packageJSON.name === "pcap-viewer");
+    const api = (await ext!.activate()) as PcapViewerApi;
+    await vscode.commands.executeCommand("workbench.action.closeAllEditors");
+    await waitFor(() => (api.provider.allSessions.length ? undefined : true), 10_000);
+    const imported = await vscode.commands.executeCommand<string | undefined>(
+      "pcapViewer.importHexDump",
+      { input: path.join(FIXTURES, "hexdump", "frames.txt"), options: { offsets: "hex" } },
+    );
+    assert.ok(imported, "the import succeeded");
+    assert.equal(path.basename(imported), "frames.pcapng");
+    const session = await waitFor(() =>
+      api.provider.allSessions.find((s) => s.uri.fsPath === imported),
+    );
+    assert.ok(session.document.temporary, "the import is an unsaved capture");
+    const info = await waitFor(() => (indexed(session) ? session.openInfo : undefined));
+    assert.equal(info.frames, 11);
+
+    await vscode.commands.executeCommand("workbench.action.revertAndCloseActiveEditor");
+    await vscode.commands.executeCommand("workbench.action.closeAllEditors");
+    await waitFor(() => (api.provider.allSessions.length ? undefined : true), 10_000);
+  });
+
   test("changing name resolution re-indexes open captures", async () => {
     const ext = vscode.extensions.all.find((e) => e.packageJSON.name === "pcap-viewer");
     const api = (await ext!.activate()) as PcapViewerApi;

@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import coloring, comments, editing, navigation, objects, pdml, stats, voip
+from . import coloring, comments, editing, hexdump, navigation, objects, pdml, stats, voip
 from .cache import FrameIndex, LruCache, RowStore, sort_frames, sort_frames_by_key
 from .cancellation import CancelledError, CancelToken
 from .capture import (
@@ -2941,6 +2941,50 @@ class PcapService:
                 raise ToolError(res.stderr.strip() or "mergecap failed", res.stderr, res.returncode)
         return {"ok": True, "path": str(dest), "size": dest.stat().st_size, "inputs": len(inputs)}
 
+    def import_hexdump(self, params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
+        """Build a capture from a hex dump with text2pcap (hexdump.py): ``text``
+        (the dump itself) or ``input`` (a text file), written to ``dest`` as
+        pcapng (appears once complete), with the options of
+        ``hexdump.text2pcap_options``. Needs no open capture. A dump in which
+        text2pcap finds no packets is an error (nothing is written).
+        Returns ``{path, packets}``."""
+        text = params.get("text")
+        source = param(params, "input", str, "")
+        if (text is None) == (not source):
+            raise InvalidParamsError("give either text or input")
+        if text is not None and (not isinstance(text, str) or len(text) > hexdump.MAX_TEXT):
+            raise InvalidParamsError("text must be a string of at most 64 MB")
+        options = hexdump.text2pcap_options(params)
+        tshark = self._require_tshark()
+        try:
+            text2pcap = find_tool("text2pcap", sibling_of=tshark.path)
+        except ToolNotFoundError as exc:
+            raise ToolError("importing a hex dump needs text2pcap (part of Wireshark)") from exc
+        ctx.progress({"phase": "import", "fraction": None})
+        with tempfile.TemporaryDirectory(prefix="pcapviewer-hexdump-") as scratch:
+            if text is not None:
+                infile = Path(scratch) / "dump.txt"
+                infile.write_text(text, encoding="utf-8", newline="\n")
+            else:
+                infile = Path(source).expanduser()
+                if not infile.is_file():
+                    raise InvalidParamsError(f"file not found: {infile}")
+            dest = check_destination(param(params, "dest", str), infile)
+            with atomic_output(dest) as tmp:
+                argv = [str(text2pcap), "-F", "pcapng", *options, str(infile), str(tmp)]
+                res = run(argv, ctx.token)
+                if res.returncode != 0 or not tmp.exists():
+                    raise ToolError(
+                        res.stderr.strip() or "text2pcap failed", res.stderr, res.returncode
+                    )
+                counts = hexdump.written_packets(res.stderr)
+                if counts is not None and counts[1] == 0:
+                    raise InvalidParamsError(
+                        "no packets found in the hex dump: each line needs an offset "
+                        "(e.g. 0000) followed by hex bytes, unless offsets are none"
+                    )
+        return {"path": str(dest), "packets": counts[1] if counts else comments.packet_count(dest)}
+
     # ------------------------------------------------------------------ editing
 
     def edit_capture(self, params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
@@ -3953,6 +3997,7 @@ def rpc_methods(service: PcapService) -> dict[str, Callable[[dict[str, Any], Req
         "field_types": service.field_types,
         "export": service.export,
         "merge": service.merge,
+        "import_hexdump": service.import_hexdump,
         "edit_capture": service.edit_capture,
         "flow_graph": service.flow_graph,
         "tcp_graph": service.tcp_graph,

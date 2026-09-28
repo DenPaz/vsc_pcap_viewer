@@ -73,6 +73,8 @@ class World:
     save_dir: Path | None = None
     voip: dict[str, Any] | None = None  # voip_calls' result
     saved: Path | None = None  # a file saved by a step
+    imported: dict[str, Any] | None = None  # import_hexdump's result
+    import_dest: Path | None = None
     release: Any = None  # slow_index's event: lets a held index pass finish
     saved_frames: int = 0  # rows of the unfinished saved index
     error: Exception | None = None
@@ -944,6 +946,64 @@ def stats_row_filter_matches(world: World, topic: str, parent: str | None, count
 def srt_protocol(world: World, protocol: str, available: str) -> None:
     table = _table(world)
     assert (table["type"], table["available"]) == (protocol, items(available))
+
+
+# ---------------------------------------------------------------------- import from hex dump
+
+
+def _import_options(text: str | None) -> dict[str, Any]:
+    """``header udp, srcPort 5060 and dstIp ::1`` -> params (numbers as ints)."""
+    options: dict[str, Any] = {}
+    for item in items(text or ""):
+        key, _, value = item.partition(" ")
+        options[key] = int(value) if value.isdigit() else value
+    return options
+
+
+def _import(world: World, tmp_path: Path, **params: Any) -> None:
+    world.import_dest = tmp_path / "imported.pcapng"
+    world.imported = world.call(
+        world.service.import_hexdump, {"dest": str(world.import_dest), **params}
+    )
+
+
+@when(
+    parsers.re(
+        r'I import the (?P<how>hex dump|text of the hex dump) "(?P<name>[^"]+)"'
+        r"(?: with (?P<opts>.+))?$"
+    )
+)
+def import_hexdump(world: World, tmp_path: Path, how: str, name: str, opts: str | None) -> None:
+    path = FIXTURES / "hexdump" / name
+    source = {"input": str(path)} if how == "hex dump" else {"text": path.read_text()}
+    _import(world, tmp_path, **source, **_import_options(opts))
+
+
+@when(parsers.re(r'I import the text "(?P<text>[^"]*)"$'))
+def import_text(world: World, tmp_path: Path, text: str) -> None:
+    _import(world, tmp_path, text=text + "\n")
+
+
+@then(parsers.re(r"the import wrote (?P<count>\d+) packets?$"))
+def import_wrote(world: World, count: str) -> None:
+    assert world.error is None, world.error
+    assert world.imported is not None
+    assert world.imported["packets"] == int(count)
+    assert Path(world.imported["path"]).is_file()
+
+
+@when("I open the imported capture")
+def open_imported(world: World) -> None:
+    assert world.imported is not None
+    open_capture(world, world.imported["path"])
+    assert world.error is None, world.error
+
+
+@then("no imported capture was written")
+def nothing_imported(world: World) -> None:
+    assert world.import_dest is not None
+    assert not world.import_dest.exists()
+    assert not list(world.import_dest.parent.glob(".imported.pcapng.*"))
 
 
 # ---------------------------------------------------------------------- dissector check / Decode As
