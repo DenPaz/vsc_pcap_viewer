@@ -59,6 +59,14 @@ import {
 } from "./settingsModel";
 
 const HISTORY_KEY = "pcapViewer.filterHistory";
+/**
+ * How long the backend may take to find tshark and run `tshark --version`.
+ * Usually well under a second, but a first run after installing or updating
+ * Wireshark can take much longer (macOS checks the app; seen above 30 s).
+ */
+const INITIALIZE_TIMEOUT_MS = 120_000;
+/** After this long, the viewer says tshark's first start can be slow. */
+const SLOW_START_MS = 5_000;
 /** Coloring problems already shown in a notification (each is reported once per window). */
 const reportedColoringErrors = new Set<string>();
 
@@ -536,6 +544,8 @@ export class PcapEditorSession {
   private readonly disposables: vscode.Disposable[] = [];
   private disposed = false;
   private loadSeq = 0;
+  /** When the latest load started (Date.now()), for the log's timings. */
+  private loadStarted = 0;
   private coloring?: { id: number; client: BackendClient };
   /** A streaming open is still indexing (coloring rules evaluated by the index pass). */
   private indexing = false;
@@ -606,8 +616,11 @@ export class PcapEditorSession {
     return this.filter;
   }
 
-  /** (Re)start the backend and index the file. */
-  async load(): Promise<void> {
+  /**
+   * (Re)start the backend and index the file. `reason` goes to the log
+   * ("open", "Reload", "settings changed"…), with the time each step took.
+   */
+  async load(reason = "open"): Promise<void> {
     if (this.capturing) {
       // Restarting would end the capture: apply the settings once it's done.
       this.reloadWhenCaptured = true;
@@ -618,6 +631,8 @@ export class PcapEditorSession {
       return;
     }
     const seq = ++this.loadSeq;
+    const name = path.basename(this.uri.fsPath);
+    this.log.info(`${name}: loading (${reason})`);
     const settings = readSettings(this.uri);
     this.watchKeyLog(settings.tlsKeyLogFile);
     this.names = settings.nameResolution;
@@ -657,14 +672,33 @@ export class PcapEditorSession {
     });
 
     const started = Date.now();
+    this.loadStarted = started;
+    const seconds = (from: number) => `${((Date.now() - from) / 1000).toFixed(1)} s`;
+    let initialized = false;
+    // tshark's first run can be slow (on macOS the system checks Wireshark.app
+    // the first time it runs after an install or update): say so meanwhile.
+    const slowStart = setTimeout(() => {
+      if (seq === this.loadSeq && !this.disposed) {
+        this.post({
+          type: "loading",
+          message:
+            "Starting tshark… Its first run after installing or updating Wireshark can take a minute.",
+        });
+      }
+    }, SLOW_START_MS);
     try {
       client.start();
-      const init = await client.request<{ version: string; tsharkPath: string }>(
-        "initialize",
-        { tsharkPath: settings.tsharkPath || undefined },
-        { timeoutMs: 30_000 },
+      const init = await client
+        .request<{ version: string; tsharkPath: string }>(
+          "initialize",
+          { tsharkPath: settings.tsharkPath || undefined },
+          { timeoutMs: INITIALIZE_TIMEOUT_MS },
+        )
+        .finally(() => clearTimeout(slowStart));
+      initialized = true;
+      this.log.info(
+        `using ${init.version} at ${init.tsharkPath} (python ${py.version}; ready after ${seconds(started)})`,
       );
-      this.log.info(`using ${init.version} at ${init.tsharkPath} (python ${py.version})`);
       setEnvironmentContext(true, true);
       this.post({ type: "loading", message: "Indexing packets…" });
       // A streaming open's "index" events can arrive before the open response:
@@ -690,12 +724,22 @@ export class PcapEditorSession {
       client.onNotification("capture", (p) =>
         this.onCaptureEvent(client, p as unknown as CaptureEvent),
       );
+      const opening = Date.now();
       const info = await this.openFile(client, settings);
       if (seq !== this.loadSeq || this.disposed) {
         stopIndexEvents();
         return;
       }
       this.info = info;
+      if (info.indexing && !info.capture) {
+        this.log.info(
+          `${name}: first ${info.frames.toLocaleString("en-US")} packets shown after ${seconds(opening)}; indexing the rest`,
+        );
+      } else if (!info.fromCache && !info.capture) {
+        this.log.info(
+          `${name}: ${info.frames.toLocaleString("en-US")} packets indexed in ${seconds(opening)}`,
+        );
+      }
       if (info.capture?.running) {
         this.capturing = true;
         this.captureEmitter.fire();
@@ -747,6 +791,7 @@ export class PcapEditorSession {
         void this.offerMerge();
       }
     } catch (err) {
+      clearTimeout(slowStart); // (also when the backend didn't even start)
       if (seq !== this.loadSeq || this.disposed) {
         return;
       }
@@ -754,6 +799,10 @@ export class PcapEditorSession {
         this.post({ type: "error", message: "Loading was cancelled.", canReload: true });
         await this.stopBackend();
         return;
+      }
+      if (!initialized) {
+        // (Don't leave a backend that never answered running until the next Reload.)
+        await this.stopBackend();
       }
       if (err instanceof RpcError && err.code === ErrorCodes.UnsupportedFormat) {
         this.unsupportedFormat(err);
@@ -796,7 +845,7 @@ export class PcapEditorSession {
         );
         asking = false;
         if (choice === "Reload" && !this.disposed) {
-          void this.load();
+          void this.load("TLS key log changed");
         }
       }, 1000); // browsers write one key at a time
     };
@@ -897,6 +946,11 @@ export class PcapEditorSession {
     const error = p.event === "failed" ? String(p.message ?? "indexing failed") : undefined;
     if (error) {
       this.log.warn(`${this.uri.fsPath}: indexing stopped: ${error}`);
+    } else if (info && !info.capture) {
+      const took = ((Date.now() - this.loadStarted) / 1000).toFixed(1);
+      this.log.info(
+        `${path.basename(this.uri.fsPath)}: ${info.frames.toLocaleString("en-US")} packets indexed, ${took} s after loading started`,
+      );
     }
     this.indexing = false;
     this.indexedWaiters.splice(0).forEach((resolve) => resolve());
@@ -906,7 +960,7 @@ export class PcapEditorSession {
     }
     if (this.reloadWhenCaptured) {
       this.reloadWhenCaptured = false;
-      setTimeout(() => void this.load(), 0);
+      setTimeout(() => void this.load("settings changed during the capture"), 0);
     }
     if (this.info) {
       this.post({
@@ -1092,7 +1146,7 @@ export class PcapEditorSession {
         }
         return;
       case "reload":
-        return this.load();
+        return this.load("Reload");
       case "filterApplied":
         this.filter = msg.expr;
         this.filterEmitter.fire(msg.expr);

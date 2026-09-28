@@ -10,13 +10,25 @@ versions are plain `major.minor.patch`.
 
 - The ☰ menu's groups fold: it opens as a short list of headings with their
   command counts; a click, `Enter` or `→` unfolds one, and typing still
-  searches every command. Open groups are remembered.
+  searches every command. Open groups are remembered. [#34]
 - _PCAP: Lua Dissectors…_ (also the status bar's _Lua_ link): choose which of
-  the configured Lua scripts each capture loads, remembered per file.
+  the configured Lua scripts each capture loads, remembered per file. [#34]
 - _PCAP: Open File in PCAP Viewer…_ (also in the Explorer's right-click menu):
   open any file tshark reads, whatever its name or without an extension, or
   get told why it can't be read (for example several BER records back to
-  back).
+  back). [#34]
+- The log says why each capture (re)loads and how long starting tshark, the
+  first rows and the whole index took. [#35]
+
+### Fixed
+
+- Opening a capture failed when tshark's first run took over 30 s (macOS
+  checks Wireshark.app the first time it runs after an install or update).
+  tshark now gets 2 minutes, the viewer says why it's waiting after 5 s, and
+  a backend that never answered is stopped. [#35]
+
+[#34]: https://github.com/DenPaz/vsc_pcap_viewer/pull/34
+[#35]: https://github.com/DenPaz/vsc_pcap_viewer/pull/35
 
 ## 0.2.0 — 2026-09-28
 

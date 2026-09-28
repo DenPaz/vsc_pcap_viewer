@@ -250,6 +250,7 @@ only, so an untrusted repository can't run its own programs.
 | A Lua dissector isn't applied                                   | Check _PCAP: Show Log_. tshark disables Lua as root. _PCAP: Reload Dissectors_ after editing.                                                                                                                              |
 | TLS stays encrypted                                             | The key log must contain the capture's sessions: set `SSLKEYLOGFILE` before capturing and don't clear the file.                                                                                                            |
 | Opening a huge file is slow                                     | That is tshark's speed. `"pcapViewer.prefs": { "tcp.analyze_sequence_numbers": false }` makes it cheaper.                                                                                                                  |
+| The first capture after installing Wireshark takes long to open | macOS checks Wireshark.app the first time tshark runs, which can take a minute; later opens are fast. _PCAP: Show Log_ shows how long each step took.                                                                      |
 
 _PCAP: Show Log_ shows backend and tshark messages.
 

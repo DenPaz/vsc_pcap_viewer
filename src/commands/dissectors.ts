@@ -84,7 +84,7 @@ export async function reloadDissectors(
       log.warn(`dissector check failed: ${(err as Error).message}`);
     }
   }
-  await Promise.all(sessions.map((s) => s.load()));
+  await Promise.all(sessions.map((s) => s.load("Reload Dissectors")));
   const n = scripts.size;
   vscode.window.setStatusBarMessage(
     `Reloaded ${sessions.length} capture(s) with ${n} Lua dissector${n === 1 ? "" : "s"}`,
@@ -162,7 +162,7 @@ async function chooseLuaDissectors(provider: PcapEditorProvider, args?: LuaChoic
   await setLuaChoice(session.uri, next);
   const file = path.normalize(session.uri.fsPath);
   const sessions = provider.allSessions.filter((s) => path.normalize(s.uri.fsPath) === file);
-  await Promise.all(sessions.map((s) => s.load()));
+  await Promise.all(sessions.map((s) => s.load("Lua dissectors changed")));
   const n = next?.length ?? available.length;
   vscode.window.setStatusBarMessage(
     next?.length === 0

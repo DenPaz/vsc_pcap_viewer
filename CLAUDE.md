@@ -387,6 +387,15 @@ matchCount, fraction}`; the end sends `done`, `stopped` (`stop_filter
   (`_apply_sort`): an index request must not overtake the page request that
   changes the sort (found by the multi-select e2e test: the selection was
   relocated with the old order).
+- **Load log and slow first start**: `PcapEditorSession.load(reason)` logs
+  why it (re)loads ("open", "Reload", "settings changed", "Lua dissectors
+  changed"…) and the time to a ready tshark, to the first rows (streaming)
+  and to "done" (`onIndexEvent`), so a slow open shows whether the time went
+  to tshark. `initialize` (find tshark, `tshark --version`) may take
+  `INITIALIZE_TIMEOUT_MS` (2 min): a first run after installing or updating
+  Wireshark took over 30 s on macOS (the system checks the app bundle), then
+  60 ms. After `SLOW_START_MS` (5 s) the overlay says so; a backend whose
+  `initialize` failed is stopped at once.
 - **Progress** during open is estimated from summed frame lengths vs file size
   (no capinfos needed up front); capinfos runs in parallel for metadata.
 - **Virtualized list**: fixed row height; above 10M px of content the scroll
