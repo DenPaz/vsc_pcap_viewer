@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.2.0 — 2026-09-28
+
 - More statistics: _PCAP Statistics: HTTP_ (packet counter by status code and
   method, requests by host and URI, load distribution by server), _DNS_,
   _Packet Lengths_ and _Service Response Time_ (ICMP/ICMPv6, SMB, SMB2, LDAP,
