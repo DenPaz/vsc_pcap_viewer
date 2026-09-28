@@ -10,6 +10,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { isDeepStrictEqual } = require("node:util");
 const { spawnSync } = require("node:child_process");
 const {
   ROOT,
@@ -59,6 +60,17 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
       }
       await new Promise((r) => setTimeout(r, 20));
     }
+  }
+
+  /** Assert that the host's last message (of `expected.type` with `ofType`) is `expected`,
+   * waiting for it: messages reach the host asynchronously, after the action resolves. */
+  async function expectHostLast(expected, { ofType = false } = {}) {
+    const last = () => (ofType ? hostLog.filter((m) => m.type === expected.type) : hostLog).at(-1);
+    const start = Date.now();
+    while (!isDeepStrictEqual(last(), expected) && Date.now() - start < 5000) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    assert.deepEqual(last(), expected);
   }
 
   suiteSetup(async function () {
@@ -441,7 +453,7 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
       JSON.stringify(items),
     );
     await page.click("#suggest .suggest-item:has-text('Manage saved filters')");
-    assert.equal(hostLog.at(-1).type, "manageSavedFilters");
+    await expectHostLast({ type: "manageSavedFilters" });
   });
 
   test("an unknown custom column is dropped instead of breaking the list", async () => {
@@ -491,10 +503,10 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
       ["Follow HTTP Stream", true],
     ]);
     await page.click("#context-menu .item:has-text('Follow HTTP Stream')");
-    assert.deepEqual(hostLog.at(-1), { type: "follow", proto: "http", frame: 4 });
+    await expectHostLast({ type: "follow", proto: "http", frame: 4 });
     await page.click("#list-rows .list-row >> nth=3", { button: "right" });
     await page.click("#context-menu .item:has-text('Decode As')");
-    assert.deepEqual(hostLog.at(-1), { type: "decodeAs", frame: 4 });
+    await expectHostLast({ type: "decodeAs", frame: 4 });
   });
 
   test("coloring rules color the rows; Colorize and Export Bytes reach the host", async () => {
@@ -547,10 +559,10 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
 
     await page.click("#detail-tree .node-row:has-text('Source Address')", { button: "right" });
     await page.click("#context-menu .item:has-text('Colorize with Filter')");
-    assert.deepEqual(hostLog.at(-1), { type: "colorize", filter: "ip.src == 192.168.1.10" });
+    await expectHostLast({ type: "colorize", filter: "ip.src == 192.168.1.10" });
     await page.click("#list-rows .list-row >> nth=3", { button: "right" });
     await page.click("#context-menu .item:has-text('Export Packet Bytes')");
-    assert.deepEqual(hostLog.at(-1), { type: "exportBytes", frame: 4 });
+    await expectHostLast({ type: "exportBytes", frame: 4 });
 
     await post({ type: "coloring", coloringId: 0, rules: [] }); // coloring turned off
     await page.waitForFunction(() => !document.querySelector("#list-rows .list-row.colored"));
@@ -845,7 +857,7 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     await page.waitForFunction(() =>
       /Marked: 2/.test(document.querySelector("#status-left").textContent),
     );
-    assert.deepEqual(hostLog.filter((m) => m.type === "marks").at(-1), { type: "marks", count: 2 });
+    await expectHostLast({ type: "marks", count: 2 }, { ofType: true });
     await rowEl(1).click(); // select another row so row 2 isn't drawn as selected
     const marked = await rowEl(2).evaluate((r) => ({
       marked: r.classList.contains("marked"),
@@ -878,11 +890,14 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     await src.waitFor();
     await src.click({ button: "right" });
     await page.click("#context-menu .item:has-text('Apply as Column')");
-    assert.deepEqual(hostLog.filter((m) => m.type === "applyColumn").at(-1), {
-      type: "applyColumn",
-      field: "ip.src",
-      title: "Source Address",
-    });
+    await expectHostLast(
+      {
+        type: "applyColumn",
+        field: "ip.src",
+        title: "Source Address",
+      },
+      { ofType: true },
+    );
     await page.waitForFunction(() =>
       [...document.querySelectorAll("#list-header > div")].some(
         (c) => c.dataset.id === "custom:ip.src",
@@ -959,7 +974,7 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     await cleanView();
     const timeCell = (frame) => rowEl(frame).locator("div").nth(1).textContent();
     await page.click("#status-time");
-    assert.deepEqual(hostLog.at(-1), { type: "pickTimeFormat" });
+    await expectHostLast({ type: "pickTimeFormat" });
     await post({ type: "timeFormat", format: "utc" }); // the host saved pcapViewer.timeFormat
     await page.waitForFunction(
       () =>
@@ -1173,10 +1188,13 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     await rowEl(4).click({ button: "right" });
     await page.click("#context-menu .item:text-is('Ask Copilot About This Packet…')");
     await waitForHost((m) => m.type === "askAboutPackets");
-    assert.deepEqual(hostLog.filter((m) => m.type === "askAboutPackets").at(-1), {
-      type: "askAboutPackets",
-      frames: [4],
-    });
+    await expectHostLast(
+      {
+        type: "askAboutPackets",
+        frames: [4],
+      },
+      { ofType: true },
+    );
 
     await rowEl(7).click({ modifiers: ["ControlOrMeta"] });
     await rowEl(2).click({ modifiers: ["ControlOrMeta"] });
@@ -1339,10 +1357,13 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     await page.keyboard.type("protocol hier");
     await page.keyboard.press("Enter");
     await waitForHost((m) => m.type === "runCommand");
-    assert.deepEqual(hostLog.filter((m) => m.type === "runCommand").at(-1), {
-      type: "runCommand",
-      id: "pcapViewer.statistics.protocolHierarchy",
-    });
+    await expectHostLast(
+      {
+        type: "runCommand",
+        id: "pcapViewer.statistics.protocolHierarchy",
+      },
+      { ofType: true },
+    );
     assert.equal(await menuOpen(), false);
     assert.equal((await button()).focused, true);
 
@@ -1456,10 +1477,13 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     });
     await page.click("#filter-button-add");
     await waitForHost((m) => m.type === "addFilterButton");
-    assert.deepEqual(hostLog.filter((m) => m.type === "addFilterButton").at(-1), {
-      type: "addFilterButton",
-      filter: "dns",
-    });
+    await expectHostLast(
+      {
+        type: "addFilterButton",
+        filter: "dns",
+      },
+      { ofType: true },
+    );
     await page.click("#filter-buttons button:text-is('HTTP')", { button: "right" });
     await waitForHost((m) => m.type === "editFilterButton");
     await page.focus("#filter-buttons button:text-is('Handshake')");
@@ -1947,7 +1971,7 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     await cleanView();
     assert.equal(await page.textContent("#status-names"), "Names: MAC");
     await page.click("#status-names");
-    assert.deepEqual(hostLog.at(-1), { type: "pickNameResolution" });
+    await expectHostLast({ type: "pickNameResolution" });
     const names = { mac: true, network: true, capturedDns: true, transport: true };
     try {
       await reopenCapture("mixed.pcapng", { names }, "Names: MAC, network (capture), ports");
@@ -2001,7 +2025,7 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
       assert.equal(await page.inputValue("#comment-input"), "The request\nsecond line\twith a tab");
       await page.fill("#comment-input", "edited request");
       await page.press("#comment-input", "Control+Enter");
-      assert.deepEqual(hostLog.at(-1), { type: "setComment", frame: 4, text: "edited request" });
+      await expectHostLast({ type: "setComment", frame: 4, text: "edited request" });
       await page.waitForFunction(
         () => document.querySelector("#comment-text").textContent === "edited request",
       );
@@ -2011,7 +2035,7 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
       );
 
       await page.click("#comment-delete");
-      assert.deepEqual(hostLog.at(-1), { type: "setComment", frame: 4, text: "" });
+      await expectHostLast({ type: "setComment", frame: 4, text: "" });
       await page.waitForFunction(
         () => document.querySelector("#comment-text").textContent === "(comment deleted)",
       );
@@ -2026,7 +2050,7 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
       await page.waitForFunction(() => document.activeElement?.id === "comment-input");
       await page.keyboard.type("first packet");
       await page.click("#comment-apply");
-      assert.deepEqual(hostLog.at(-1), { type: "setComment", frame: 1, text: "first packet" });
+      await expectHostLast({ type: "setComment", frame: 1, text: "first packet" });
       await page.waitForFunction(() =>
         document.querySelectorAll("#list-rows .list-row")[0]?.classList.contains("has-comment"),
       );
