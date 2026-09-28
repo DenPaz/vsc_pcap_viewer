@@ -115,7 +115,7 @@ export function activate(context: vscode.ExtensionContext): PcapViewerApi {
           for (const s of p.allSessions.filter(
             (s) => !sameNameResolution(readSettings(s.uri).nameResolution, s.names),
           )) {
-            void s.load();
+            void s.load("name resolution changed");
           }
         }, 300);
       }
@@ -124,7 +124,7 @@ export function activate(context: vscode.ExtensionContext): PcapViewerApi {
         await Promise.all(
           p.allSessions
             .filter((s) => readSettings(s.uri).tlsKeyLogFile !== s.keyLogFile)
-            .map((s) => s.load()),
+            .map((s) => s.load("TLS key log setting changed")),
         );
       }
       if (RELOAD_KEYS.some((k) => e.affectsConfiguration(k)) && p.allSessions.length) {
@@ -133,7 +133,7 @@ export function activate(context: vscode.ExtensionContext): PcapViewerApi {
           "Reload",
         );
         if (choice === "Reload") {
-          await Promise.all(p.allSessions.map((s) => s.load()));
+          await Promise.all(p.allSessions.map((s) => s.load("settings changed")));
         }
       }
     }),

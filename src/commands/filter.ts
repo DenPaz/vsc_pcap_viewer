@@ -63,6 +63,8 @@ export function registerFilterCommands(
         session.goTo(Number(value));
       }
     }),
-    vscode.commands.registerCommand("pcapViewer.reload", () => requireSession(provider)?.load()),
+    vscode.commands.registerCommand("pcapViewer.reload", () =>
+      requireSession(provider)?.load("Reload"),
+    ),
   );
 }
