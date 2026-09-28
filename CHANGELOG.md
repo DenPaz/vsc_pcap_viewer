@@ -18,16 +18,17 @@ versions are plain `major.minor.patch`.
   get told why it can't be read (for example several BER records back to
   back). [#34]
 - The log says why each capture (re)loads and how long starting tshark, the
-  first rows and the whole index took.
+  first rows and the whole index took. [#35]
 
 ### Fixed
 
 - Opening a capture failed when tshark's first run took over 30 s (macOS
   checks Wireshark.app the first time it runs after an install or update).
   tshark now gets 2 minutes, the viewer says why it's waiting after 5 s, and
-  a backend that never answered is stopped.
+  a backend that never answered is stopped. [#35]
 
 [#34]: https://github.com/DenPaz/vsc_pcap_viewer/pull/34
+[#35]: https://github.com/DenPaz/vsc_pcap_viewer/pull/35
 
 ## 0.2.0 — 2026-09-28
 
