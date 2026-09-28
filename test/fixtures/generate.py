@@ -21,10 +21,10 @@ import ssl
 import struct
 from pathlib import Path
 
+from scapy.asn1.asn1 import ASN1_OID
 from scapy.layers.dns import DNS, DNSQR, DNSRR
 from scapy.layers.inet import ICMP, IP, TCP, UDP
 from scapy.layers.l2 import ARP, Ether
-from scapy.asn1.asn1 import ASN1_OID
 from scapy.layers.rtp import RTP
 from scapy.layers.snmp import SNMP, SNMPget, SNMPnext, SNMPresponse, SNMPvarbind
 from scapy.packet import Packet, Raw
@@ -514,12 +514,16 @@ def hex_dump(data: bytes, ascii_column: bool = True) -> str:
 
 
 SIP_PAYLOADS = [
-    b"OPTIONS sip:bob@example.com SIP/2.0\r\nVia: SIP/2.0/UDP 10.0.0.1:5060\r\n"
-    b"From: <sip:alice@example.com>;tag=1\r\nTo: <sip:bob@example.com>\r\n"
-    b"Call-ID: hexdump-1@10.0.0.1\r\nCSeq: 1 OPTIONS\r\nContent-Length: 0\r\n\r\n",
-    b"SIP/2.0 200 OK\r\nVia: SIP/2.0/UDP 10.0.0.1:5060\r\n"
-    b"From: <sip:alice@example.com>;tag=1\r\nTo: <sip:bob@example.com>;tag=2\r\n"
-    b"Call-ID: hexdump-1@10.0.0.1\r\nCSeq: 1 OPTIONS\r\nContent-Length: 0\r\n\r\n",
+    (
+        b"OPTIONS sip:bob@example.com SIP/2.0\r\nVia: SIP/2.0/UDP 10.0.0.1:5060\r\n"
+        b"From: <sip:alice@example.com>;tag=1\r\nTo: <sip:bob@example.com>\r\n"
+        b"Call-ID: hexdump-1@10.0.0.1\r\nCSeq: 1 OPTIONS\r\nContent-Length: 0\r\n\r\n"
+    ),
+    (
+        b"SIP/2.0 200 OK\r\nVia: SIP/2.0/UDP 10.0.0.1:5060\r\n"
+        b"From: <sip:alice@example.com>;tag=1\r\nTo: <sip:bob@example.com>;tag=2\r\n"
+        b"Call-ID: hexdump-1@10.0.0.1\r\nCSeq: 1 OPTIONS\r\nContent-Length: 0\r\n\r\n"
+    ),
 ]
 
 
