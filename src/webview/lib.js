@@ -1139,6 +1139,34 @@
   }
 
   /**
+   * The ☰ menu's rows: a heading per group, then the commands of the groups
+   * that are open. While searching every group with a match is open and its
+   * heading is only a label (`foldable: false`), so results show at once.
+   * @param {{group: string, commands: MenuCommand[]}[]} groups
+   * @param {ReadonlySet<string>} openGroups @param {boolean} searching
+   */
+  function commandMenuRows(groups, openGroups, searching) {
+    /** @type {({kind: "group", group: string, count: number, open: boolean, foldable: boolean} | {kind: "command", group: string, command: MenuCommand})[]} */
+    const rows = [];
+    for (const g of groups) {
+      const open = searching || openGroups.has(g.group);
+      rows.push({
+        kind: "group",
+        group: g.group,
+        count: g.commands.length,
+        open,
+        foldable: !searching,
+      });
+      if (open) {
+        for (const command of g.commands) {
+          rows.push({ kind: "command", group: g.group, command });
+        }
+      }
+    }
+    return rows;
+  }
+
+  /**
    * The commands matching typed text: every word must occur (case-insensitive)
    * in the title, the heading or the package.json category.
    * @param {MenuCommand[]} commands @param {string} text
@@ -1341,6 +1369,7 @@
   const api = {
     COMMAND_GROUP_ORDER,
     groupCommands,
+    commandMenuRows,
     filterCommands,
     formatKeybinding,
     commandUnavailable,
