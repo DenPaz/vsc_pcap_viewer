@@ -1450,7 +1450,10 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
     );
 
     // "+" asks the host to add the filter bar's filter; right-click (or Shift+F10) edits.
-    await page.fill("#filter-input", "dns");
+    // (The value is set without typing: typing opens suggestions over the buttons.)
+    await page.$eval("#filter-input", (input) => {
+      /** @type {HTMLInputElement} */ (input).value = "dns";
+    });
     await page.click("#filter-button-add");
     await waitForHost((m) => m.type === "addFilterButton");
     assert.deepEqual(hostLog.filter((m) => m.type === "addFilterButton").at(-1), {

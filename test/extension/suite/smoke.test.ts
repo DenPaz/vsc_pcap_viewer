@@ -51,7 +51,10 @@ async function waitForAsync<T>(fn: () => Promise<T | undefined>, timeoutMs = 30_
 }
 
 suite("PCAP Viewer smoke test", () => {
-  test("opens a capture and the backend responds", async () => {
+  test("opens a capture and the backend responds", async function () {
+    // The first open pays for every cold start (the webview, Python, the
+    // backend, tshark's first run): close to 30 s on a slow Windows runner.
+    this.timeout(120_000);
     const ext = vscode.extensions.all.find((e) => e.packageJSON.name === "pcap-viewer");
     assert.ok(ext, "extension is installed");
     const api = (await ext.activate()) as PcapViewerApi;
@@ -62,7 +65,7 @@ suite("PCAP Viewer smoke test", () => {
     const session = await waitFor(() =>
       api.provider.allSessions.find((s) => s.uri.fsPath === uri.fsPath),
     );
-    const info = await waitFor(() => (indexed(session) ? session.openInfo : undefined));
+    const info = await waitFor(() => (indexed(session) ? session.openInfo : undefined), 90_000);
     assert.equal(info.frames, 11);
 
     const backend = session.backend;
