@@ -7,6 +7,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const { isDeepStrictEqual } = require("node:util");
 const {
   FIXTURES,
   HAVE_TSHARK,
@@ -18,6 +19,32 @@ const {
 } = require("./harness");
 
 const deps = loadDeps();
+
+/**
+ * The stand-in host's last message, once `accept` takes it: messages reach the
+ * host through an exposed function, asynchronously, so the action that posts
+ * one can resolve before it arrives.
+ */
+async function lastMessage(log, accept, timeoutMs = 2000) {
+  const end = Date.now() + timeoutMs;
+  while (!(log.length && accept(log.at(-1))) && Date.now() < end) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  return log.at(-1);
+}
+
+/** Assert the host's last message is `expected` (waiting for it to arrive). */
+async function expectLast(log, expected) {
+  assert.deepEqual(await lastMessage(log, (m) => isDeepStrictEqual(m, expected)), expected);
+}
+
+/** The host's last message, asserting its type (waiting for it to arrive). */
+async function lastOfType(log, type) {
+  const msg = await lastMessage(log, (m) => m.type === type);
+  assert.equal(msg?.type, type);
+  return msg;
+}
+
 const maybe = deps && HAVE_TSHARK ? suite : suite.skip;
 
 const TITLES = {
@@ -544,7 +571,7 @@ maybe("statistics and follow panels (Chromium + real backend)", function () {
       ["DNS"],
     );
     await page.click("button:has-text('Open settings.json')");
-    assert.equal(log.at(-1).type, "openSettings");
+    await lastOfType(log, "openSettings");
   });
 
   test("export objects: list, filter, sort, go to packet and save", async () => {
@@ -609,18 +636,18 @@ maybe("statistics and follow panels (Chromium + real backend)", function () {
       await page.click("table.stats tbody tr:has-text('config.bin')");
       assert.ok(!(await page.isDisabled("#objects-save")));
       await page.click("#objects-save");
-      assert.deepEqual(log.at(-1), { type: "save", id: 5 });
+      await expectLast(log, { type: "save", id: 5 });
       await page.click("#objects-goto");
-      assert.deepEqual(log.at(-1), { type: "goto", frame: 27 });
+      await expectLast(log, { type: "goto", frame: 27 });
       await page.focus("table.stats");
       await page.keyboard.press("ArrowUp"); // (sorted by size, ascending: the mail comes before)
       await page.keyboard.press("Enter");
-      assert.deepEqual(log.at(-1), { type: "goto", frame: 53 });
+      await expectLast(log, { type: "goto", frame: 53 });
       await page.dblclick("table.stats tbody tr:has-text('logo.png')");
-      assert.deepEqual(log.at(-1), { type: "goto", frame: 6 });
+      await expectLast(log, { type: "goto", frame: 6 });
       await page.click("#objects-save-all");
-      assert.deepEqual(log.at(-1).type, "saveAll");
-      assert.deepEqual([...log.at(-1).ids].sort(), [0, 1, 2, 3, 4, 5, 6]);
+      const saveAll = await lastOfType(log, "saveAll");
+      assert.deepEqual([...saveAll.ids].sort(), [0, 1, 2, 3, 4, 5, 6]);
 
       await page.click("button:has-text('Refresh')");
       await page.waitForFunction(() =>
@@ -674,11 +701,11 @@ maybe("statistics and follow panels (Chromium + real backend)", function () {
     });
 
     await page.click(".flow-row:nth-of-type(4)");
-    assert.deepEqual(log.at(-1), { type: "goto", frame: 4 });
+    await expectLast(log, { type: "goto", frame: 4 });
     await page.focus(".flow-scroll");
     await page.keyboard.press("ArrowDown");
     await page.keyboard.press("Enter");
-    assert.deepEqual(log.at(-1), { type: "goto", frame: 5 });
+    await expectLast(log, { type: "goto", frame: 5 });
 
     // The capture's filter changes: the graph follows it.
     await client.request("set_filter", { expr: "dns" });
@@ -744,17 +771,11 @@ maybe("statistics and follow panels (Chromium + real backend)", function () {
       /^Packet \d+/.test(document.querySelector(".chart .tooltip").textContent),
     );
     await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
-    for (let i = 0; i < 50 && log.at(-1).type !== "goto"; i++) {
-      await page.waitForTimeout(20); // (the message reaches the stand-in host asynchronously)
-    }
-    assert.equal(log.at(-1).type, "goto");
+    await lastOfType(log, "goto");
 
     // Ask Copilot… posts the stream shown; the host runs the request.
     await page.click("#tcp-ask");
-    for (let i = 0; i < 50 && log.at(-1).type !== "askCopilot"; i++) {
-      await page.waitForTimeout(20);
-    }
-    assert.deepEqual(log.at(-1), { type: "askCopilot", stream: 0 });
+    await expectLast(log, { type: "askCopilot", stream: 0 });
 
     await page.click("button[title='Next stream']");
     await page.waitForFunction(() =>

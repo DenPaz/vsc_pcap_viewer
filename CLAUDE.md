@@ -2,7 +2,8 @@
 
 Wireshark-like `.pcap`/`.pcapng` viewer for VS Code. TypeScript extension +
 stdlib-only Python backend that orchestrates `tshark`. See README.md for the
-user-facing description.
+user-facing description (users only: it is the Marketplace page) and
+CONTRIBUTING.md for building, testing and releasing (not packaged).
 
 ## Commands
 
@@ -918,7 +919,10 @@ stream, sessionId}`. The query stays short: expert rows (sanitized by
   into the installed extension. A unit test checks that every step's command
   links, setting links, media and completion events exist.
 - **Releases** (`scripts/release.mjs`, `.github/workflows/release.yml`):
-  `CHANGELOG.md` keeps `## Unreleased` on top; `prepare <version>` moves it
+  `CHANGELOG.md` keeps `## Unreleased` on top, entries grouped under
+  `### Added` / `### Changed` / `### Fixed`, one line or two each, ending in
+  the PR link `[#N]` whose definition sits at the end of the same `##`
+  section (the release notes are cut per section); `prepare <version>` moves it
   under `## <version> — <date>` and bumps `package.json` (a regex, keeping
   its formatting); versions are plain x.y.z (the Marketplace has no semver
   pre-releases). A `v*` tag (or a manual run on one) calls `ci.yml`
