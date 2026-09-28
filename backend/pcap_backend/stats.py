@@ -501,11 +501,14 @@ def _http_load_filter(path: list[str]) -> str | None:
 
 
 def _dns_filter(path: list[str]) -> str | None:
-    if len(path) == 1:
-        return "dns" if path[0] == "Total Packets" else None
-    if len(path) == 2:
+    """By the row's parent only: tshark 4.2 nests rcode, opcodes, Query/Response,
+    Query Type and Class under "Total Packets", 4.6 puts them at the top level
+    (and adds Query Name and Answer Type)."""
+    if path == ["Total Packets"]:
+        return "dns"
+    if len(path) < 2:
         return None
-    parent, topic = path[1], path[2]
+    parent, topic = path[-2], path[-1]
     if parent == "rcode" and topic in _DNS_RCODES:
         return f"dns.flags.rcode == {_DNS_RCODES[topic]}"
     if parent == "opcodes" and topic == "Standard query":
@@ -514,8 +517,12 @@ def _dns_filter(path: list[str]) -> str | None:
         return f"dns.flags.response == {int(topic == 'Response')}"
     if parent == "Query Type" and topic in _DNS_TYPES:
         return f"dns.qry.type == {_DNS_TYPES[topic]}"
+    if parent == "Answer Type" and topic in _DNS_TYPES:
+        return f"dns.resp.type == {_DNS_TYPES[topic]}"
     if parent == "Class" and topic in _DNS_CLASSES:
         return f"dns.qry.class == {_DNS_CLASSES[topic]}"
+    if parent == "Query Name" and topic:
+        return f"dns.qry.name == {dfilter_string(topic)}"
     return None
 
 

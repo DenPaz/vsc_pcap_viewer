@@ -435,3 +435,26 @@ def test_stats_tree_first_column_name_longer_than_every_topic() -> None:
         ["GET", 3, 0.0099, 75.0, 0.01],
         ["POST", 1, 0.0033, 25.0, 0.01],
     ]
+
+
+def test_dns_filters_follow_the_parent_whatever_the_depth() -> None:
+    """tshark 4.2 nests Query Type under Total Packets; 4.6 puts it on top."""
+    for rows in (
+        [(0, "Total Packets"), (1, "Query Type"), (2, "AAAA")],
+        [(0, "Total Packets"), (0, "Query Type"), (1, "AAAA")],
+    ):
+        text = _tree_46(
+            "Packet Type",
+            [(d, n, ["2", "", "", "", "0.0061", "25.00%", "0.0200"]) for d, n in rows],
+        )
+        by_name = {r["cells"][0]: r for r in stats.parse_stats_tree(text, "dns").rows}
+        assert by_name["AAAA"]["filter"] == "dns.qry.type == 28"
+        assert by_name["Total Packets"]["filter"] == "dns"
+    text = _tree_46(
+        "Packet Type",
+        [(0, "Query Name", ["1"] + [""] * 6), (1, "example.com", ["1"] + [""] * 6),
+         (0, "Answer Type", ["1"] + [""] * 6), (1, "MX", ["1"] + [""] * 6)],
+    )  # fmt: skip
+    rows = stats.parse_stats_tree(text, "dns").rows
+    assert rows[1]["filter"] == 'dns.qry.name == "example.com"'
+    assert rows[3]["filter"] == "dns.resp.type == 15"

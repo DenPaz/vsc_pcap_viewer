@@ -467,7 +467,8 @@ matchCount, fraction}`; the end sends `done`, `stopped` (`stop_filter
   length is the shift. One space of indentation per level; columns empty in
   every row are dropped. Rows whose path maps onto a filter carry it (`_TREE_FILTERS`:
   status classes/codes, methods, host + URI, address/host/OK-Error chains in the
-  load tree, DNS rcode/opcode/type/class by value, length buckets); the
+  load tree, DNS rcode/opcode/type/class/name by value, by the row's parent only (4.2 nests them
+  under Total Packets, 4.6 puts them on top and adds Query Name and Answer Type), length buckets); the
   acceptance tests count each filter's matches against the row. Service response
   time: `-z icmp,srt` / `icmpv6,srt` (own format, one row going to the slowest
   reply) and the generic SRT table of the taps that need no arguments
