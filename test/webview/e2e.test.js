@@ -1276,8 +1276,13 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
       groups,
     );
     const byId = Object.fromEntries(all.map((i) => [i.id, i]));
-    assert.equal(byId["pcapViewer.applyFilter"].keys, "Ctrl+/");
-    assert.equal(byId["pcapViewer.goBack"].keys, "Alt+Left");
+    // Key bindings follow the platform the webview runs on (macOS CI shows ⌘ and ⌥).
+    const mac = await page.evaluate(() =>
+      /Mac|iPhone|iPad/i.test(window.navigator.platform || window.navigator.userAgent),
+    );
+    assert.equal(mac, process.platform === "darwin");
+    assert.equal(byId["pcapViewer.applyFilter"].keys, mac ? "⌘/" : "Ctrl+/");
+    assert.equal(byId["pcapViewer.goBack"].keys, mac ? "⌥←" : "Alt+Left");
     assert.equal(byId["pcapViewer.statistics.conversations"].keys, "");
     // What can't run now is disabled, with the reason.
     assert.equal(byId["pcapViewer.toggleMark"].disabled, true);

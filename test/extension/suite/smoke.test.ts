@@ -256,6 +256,9 @@ suite("PCAP Viewer smoke test", () => {
       editors,
       "nothing was closed",
     );
+    // Leave the window as the later tests expect it: just the capture editor.
+    endpoints.panel.dispose();
+    await waitFor(() => (StatsPanel.all.includes(endpoints) ? undefined : true));
 
     await vscode.commands.executeCommand("workbench.action.closeAllEditors");
     await waitFor(() => (api.provider.allSessions.length ? undefined : true), 10_000);
