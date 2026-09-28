@@ -383,6 +383,26 @@
         "category": "PCAP Statistics"
       },
       {
+        "command": "pcapViewer.statistics.http",
+        "title": "HTTP",
+        "category": "PCAP Statistics"
+      },
+      {
+        "command": "pcapViewer.statistics.dns",
+        "title": "DNS",
+        "category": "PCAP Statistics"
+      },
+      {
+        "command": "pcapViewer.statistics.packetLengths",
+        "title": "Packet Lengths",
+        "category": "PCAP Statistics"
+      },
+      {
+        "command": "pcapViewer.statistics.serviceResponseTime",
+        "title": "Service Response Time",
+        "category": "PCAP Statistics"
+      },
+      {
         "command": "pcapViewer.reloadDissectors",
         "title": "Reload Dissectors",
         "category": "PCAP"
@@ -606,6 +626,22 @@
         },
         {
           "command": "pcapViewer.statistics.captureProperties",
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
+        },
+        {
+          "command": "pcapViewer.statistics.http",
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
+        },
+        {
+          "command": "pcapViewer.statistics.dns",
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
+        },
+        {
+          "command": "pcapViewer.statistics.packetLengths",
+          "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
+        },
+        {
+          "command": "pcapViewer.statistics.serviceResponseTime",
           "when": "activeCustomEditorId =~ /^pcapViewer\\.editor(Optional)?$/ || activeWebviewPanelId == pcapViewer.stats || activeWebviewPanelId == pcapViewer.follow"
         },
         {

@@ -239,3 +239,148 @@ def test_parse_follow_raw_merges_directions_and_skips_garbage() -> None:
 def test_parse_follow_raw_truncated_output() -> None:
     res = stats.parse_follow_raw("Filter: udp.stream eq 0\nNode 0: a:1\nNode 1: b:2\n00ff\n\t012")
     assert res["segments"] == [{"dir": 0, "hex": "00ff"}]  # odd-length trailing chunk dropped
+
+
+# test/fixtures/services.pcap, as tshark 4.2.2 prints ``-z http,tree`` (trimmed).
+HTTP_TREE = """\
+
+=========================================================================================================
+HTTP/Packet Counter:
+Topic / Item              Count         Average       Min Val       Max Val       Rate (ms)     Percent
+---------------------------------------------------------------------------------------------------------
+Total HTTP Packets        8                                                       0.0265        100%
+ HTTP Response Packets    4                                                       0.0132        50.00%
+  2xx: Success            2                                                       0.0066        50.00%
+   200 OK                 2                                                       0.0066        100.00%
+  ???: broken             0                                                       0.0000        0.00%
+ HTTP Request Packets     4                                                       0.0132        50.00%
+  GET                     3                                                       0.0099        75.00%
+  M-SEARCH                1                                                       0.0033        25.00%
+
+---------------------------------------------------------------------------------------------------------
+"""
+
+
+def test_parse_stats_tree_depths_empty_columns_and_filters() -> None:
+    table = stats.parse_stats_tree(HTTP_TREE, "http").to_json()
+    # Average/Min/Max are blank in every row: dropped.
+    assert [c["label"] for c in table["columns"]] == [
+        "Topic / Item",
+        "Count",
+        "Rate (ms)",
+        "Percent",
+    ]
+    rows = {r["cells"][0]: r for r in table["rows"]}
+    assert rows["200 OK"]["depth"] == 3
+    assert rows["200 OK"]["cells"] == ["200 OK", 2, 0.0066, 100.0]
+    assert rows["Total HTTP Packets"]["cells"][3] == 100
+    assert rows["200 OK"]["filter"] == "http.response.code == 200"
+    assert rows["2xx: Success"]["filter"] == (
+        "http.response.code >= 200 && http.response.code <= 299"
+    )
+    assert rows["M-SEARCH"]["filter"] == 'http.request.method == "M-SEARCH"'
+    assert "filter" not in rows["???: broken"]
+
+
+def test_stats_tree_filters_quote_hosts_and_uris() -> None:
+    text = """\
+Topic / Item                Count         Rate (ms)     Percent
+---------------------------------------------------------------
+HTTP Requests by HTTP Host  1             0.0100        100%
+ we"ird.example             1             0.0100        100.00%
+  /a b\\c                    1             0.0100        100.00%
+"""
+    rows = stats.parse_stats_tree(text, "http_requests").rows
+    assert rows[1]["filter"] == 'http.host == "we\\"ird.example"'
+    assert rows[2]["filter"] == (
+        'http.host == "we\\"ird.example" && http.request.uri == "/a b\\\\c"'
+    )
+
+
+def test_stats_tree_packet_length_buckets() -> None:
+    text = """\
+Topic / Item       Count         Average       Min Val       Max Val
+--------------------------------------------------------------------
+Packet Lengths     2             60.00         54            66
+ 40-79             2             60.00         54            66
+ 5120 and greater  0             -             -             -
+"""
+    rows = stats.parse_stats_tree(text, "plen").rows
+    assert "filter" not in rows[0]
+    assert rows[1]["filter"] == "frame.len >= 40 && frame.len <= 79"
+    assert rows[1]["cells"] == ["40-79", 2, 60.0, 54, 66]
+    assert rows[2]["filter"] == "frame.len >= 5120"
+    assert rows[2]["cells"] == ["5120 and greater", 0, None, None, None]
+
+
+def test_stats_tree_without_a_header_is_empty() -> None:
+    assert stats.parse_stats_tree("tshark: nothing\n", "dns").rows == []
+
+
+SNMP_SRT = """\
+
+===================================================================
+SNMP SRT Statistics:
+Filter: snmp.data
+Index  Procedure              Calls    Min SRT    Max SRT    Avg SRT    Sum SRT
+    0  Get                         3   0.004000   0.010000   0.007000   0.021000
+    1  GetNext                     1   0.002000   0.002000   0.002000   0.002000
+==================================================================
+"""
+
+
+def test_parse_srt_rows_filter_on_the_reported_field() -> None:
+    table = stats.parse_srt(SNMP_SRT, "snmp").to_json()
+    assert table["title"] == "SNMP Service Response Time"
+    assert table["rows"][0]["cells"] == ["Get", 0, 3, 0.004, 0.01, 0.007, 0.021]
+    assert table["rows"][1]["filter"] == "snmp.data == 1"
+
+
+def test_parse_srt_several_tables_get_a_table_column_and_no_filter() -> None:
+    text = """\
+===================================================================
+SMB SRT Statistics:
+Filter: smb.cmd
+Index  Commands               Calls    Min SRT    Max SRT    Avg SRT    Sum SRT
+  114  Negotiate Protocol          1   0.001000   0.001000   0.001000   0.001000
+
+Transaction2 Commands
+Index  Transaction2 Commands  Calls    Min SRT    Max SRT    Avg SRT    Sum SRT
+    1  FIND_FIRST2                 2   0.002000   0.004000   0.003000   0.006000
+==================================================================
+"""
+    table = stats.parse_srt(text, "smb").to_json()
+    assert table["columns"][0]["label"] == "Table"
+    assert [r["cells"][:2] for r in table["rows"]] == [
+        ["Commands", "Negotiate Protocol"],
+        ["Transaction2 Commands", "FIND_FIRST2"],
+    ]
+    assert all("filter" not in r for r in table["rows"])
+
+
+def test_parse_icmp_srt_goes_to_the_slowest_reply() -> None:
+    text = """\
+==========================================================================
+ICMP Service Response Time (SRT) Statistics (all times in ms):
+Filter: <none>
+
+Requests  Replies   Lost      % Loss
+3         2         1          33.3%
+
+Minimum   Maximum   Mean      Median    SDeviation     Min Frame Max Frame
+3.000     9.000     6.000     6.000     4.243          58        60
+==========================================================================
+"""
+    table = stats.parse_icmp_srt(text, "icmp").to_json()
+    assert table["rows"] == [
+        {
+            "cells": [3, 2, 1, 33.3, 3, 9, 6, 6, 4.243, 58, 60],
+            "frame": 60,
+            "filter": "icmp.type == 8 || icmp.type == 0",
+        }
+    ]
+    no_replies = text.replace(
+        "3         2         1          33.3%", "1         0         1         100.0%"
+    )
+    no_replies = no_replies.split("Minimum")[0]
+    assert stats.parse_icmp_srt(no_replies, "icmp").rows[0]["cells"][:4] == [1, 0, 1, 100]

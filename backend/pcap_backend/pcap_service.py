@@ -70,6 +70,7 @@ from .protocol import (
     param,
     str_list,
 )
+from .stats import Table
 from .tshark import (
     EMPTY_CAPTURE,
     DissectionOptions,
@@ -2431,7 +2432,10 @@ class PcapService:
 
         ``kind``: ``conversations`` / ``endpoints`` (with ``type`` eth, ip, ipv6,
         tcp, udp), ``phs`` (protocol hierarchy), ``io`` (with optional
-        ``interval`` in seconds), ``expert`` or ``properties`` (capinfos).
+        ``interval`` in seconds), ``expert``, ``properties`` (capinfos),
+        ``http`` (``type`` packets, requests or load), ``dns``, ``plen``
+        (packet lengths) or ``srt`` (service response time, ``type`` a
+        protocol of ``stats.SRT_PROTOCOLS`` or ``auto``).
         ``filter`` limits the statistics to packets matching a display filter.
         """
         kind = param(params, "kind", str)
@@ -2483,6 +2487,10 @@ class PcapService:
                 summary = self._tap(f, f"expert,comment{suffix}", ctx)
                 fields_text = fields_future.result().stdout.decode("utf-8", "replace")
                 table = stats.parse_expert(summary, fields_text)
+            case "http" | "dns" | "plen":
+                table = self._tree_stats(f, kind, param(params, "type", str, ""), suffix, ctx)
+            case "srt":
+                table = self._srt(f, param(params, "type", str, "auto"), suffix, ctx)
             case "properties":
                 if f.tshark.capinfos is None:
                     raise ToolError("capinfos (part of Wireshark) was not found")
@@ -2493,6 +2501,44 @@ class PcapService:
         result = table.to_json()
         result["filter"] = flt
         return result
+
+    def _tree_stats(self, f: _Open, kind: str, typ: str, suffix: str, ctx: RequestContext) -> Table:
+        """A stats_tree report: HTTP (``type`` packets, requests or load), DNS or
+        packet lengths."""
+        tree = kind
+        if kind == "http":
+            typ = typ or "packets"
+            trees = {"packets": "http", "requests": "http_requests", "load": "http_load"}
+            if typ not in trees:
+                raise InvalidParamsError("type must be packets, requests or load")
+            tree = trees[typ]
+        table = stats.parse_stats_tree(self._tap(f, stats.TREE_TAPS[tree] + suffix, ctx), tree)
+        table.kind = kind
+        if kind == "http":
+            table.extra["type"] = typ
+        return table
+
+    def _srt(self, f: _Open, protocol: str, suffix: str, ctx: RequestContext) -> Table:
+        """Service response times of one protocol. ``auto`` picks the first
+        protocol (in SRT_PROTOCOLS order) the protocol hierarchy shows traffic
+        for; the result's ``available`` lists every such protocol."""
+        phs = stats.parse_protocol_hierarchy(self._tap(f, "io,phs" + suffix, ctx))
+        present = {str(row["cells"][0]) for row in phs.rows}
+        available = [
+            p for p in stats.SRT_PROTOCOLS if present.intersection(stats.SRT_PHS_NAMES.get(p, (p,)))
+        ]
+        if protocol == "auto":
+            protocol = available[0] if available else "icmp"
+        if protocol not in stats.SRT_PROTOCOLS:
+            raise InvalidParamsError(
+                f"type must be auto or one of {', '.join(stats.SRT_PROTOCOLS)}"
+            )
+        text = self._tap(f, f"{protocol},srt{suffix}", ctx)
+        parse = stats.parse_icmp_srt if protocol in ("icmp", "icmpv6") else stats.parse_srt
+        table = parse(text, protocol)
+        table.extra["type"] = protocol
+        table.extra["available"] = available
+        return table
 
     def _tap(self, f: _Open, spec: str, ctx: RequestContext, extra: Sequence[str] = ()) -> str:
         # -n (after the name resolution options): report rows become address filters.

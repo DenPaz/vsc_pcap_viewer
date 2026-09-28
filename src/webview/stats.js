@@ -1,7 +1,8 @@
 // @ts-check
 /**
  * Statistics panel: renders a backend `stats` table (conversations, endpoints,
- * protocol hierarchy, IO graph, expert info, capture properties) with sorting,
+ * protocol hierarchy, IO graph, expert info, capture properties, HTTP, DNS,
+ * packet lengths, service response time) with sorting (not of trees),
  * row actions (apply/prepare filter, go to packet), CSV copy and, for the IO
  * graph, a line chart. Untrusted text only goes through textContent.
  */
@@ -14,6 +15,31 @@
   const SVG = "http://www.w3.org/2000/svg";
 
   const TYPE_LABELS = { eth: "Ethernet", ip: "IPv4", ipv6: "IPv6", tcp: "TCP", udp: "UDP" };
+  const HTTP_REPORTS = {
+    packets: "Packet Counter",
+    requests: "Requests",
+    load: "Load Distribution",
+  };
+  // Mirrors stats.SRT_PROTOCOLS in the backend.
+  const SRT_PROTOCOLS = {
+    icmp: "ICMP",
+    icmpv6: "ICMPv6",
+    smb: "SMB",
+    smb2: "SMB2",
+    ldap: "LDAP",
+    snmp: "SNMP",
+    diameter: "Diameter",
+    gtp: "GTP",
+    gtpv2: "GTPv2",
+    ncp: "NCP",
+    afp: "AFP",
+    camel: "CAMEL",
+    fc: "Fibre Channel",
+  };
+  /** Reports that are trees: their row order is the tree's, so no sorting. */
+  const TREES = ["phs", "http", "dns", "plen"];
+  /** @type {Record<string, string>} */
+  const DEFAULT_TYPE = { http: "packets", srt: "auto" };
   const INTERVALS = [
     ["", "Auto"],
     ["0.001", "1 ms"],
@@ -123,6 +149,9 @@
       });
       toolbar.append(h("label", {}, ["Type ", select]));
     }
+    if (state.kind === "http" || state.kind === "srt") {
+      toolbar.append(typeSelect());
+    }
     if (state.kind === "io") {
       const interval = h("select", { "aria-label": "Interval" });
       for (const [value, label] of INTERVALS) {
@@ -167,12 +196,38 @@
     actions.replaceChildren(
       ...(state.kind === "expert"
         ? [gotoBtn, applyBtn, prepareBtn, ...(state.ai ? [askBtn] : [])]
-        : state.kind === "properties" || state.kind === "io"
-          ? []
-          : [applyBtn, prepareBtn]),
+        : state.kind === "srt"
+          ? [applyBtn, prepareBtn, gotoBtn]
+          : state.kind === "properties" || state.kind === "io"
+            ? []
+            : [applyBtn, prepareBtn]),
       copyBtn,
     );
     updateActions();
+  }
+
+  /** The HTTP report or SRT protocol picker; protocols with traffic are marked. */
+  function typeSelect() {
+    const http = state.kind === "http";
+    const select = /** @type {HTMLSelectElement} */ (
+      h("select", { id: "stats-type", "aria-label": http ? "Report" : "Protocol" })
+    );
+    /** @type {Record<string, string>} */
+    const choices = http ? HTTP_REPORTS : SRT_PROTOCOLS;
+    const available = (state.table && state.table.available) || [];
+    for (const [value, label] of Object.entries(choices)) {
+      const withTraffic = !http && available.includes(value);
+      select.append(h("option", { value }, [withTraffic ? `${label} ●` : label]));
+    }
+    select.value = state.type in choices ? state.type : Object.keys(choices)[0];
+    select.title = http
+      ? ""
+      : "● marks protocols this capture has traffic for (DCE-RPC, ONC-RPC and SCSI need arguments and aren't offered)";
+    select.addEventListener("change", () => {
+      state.type = select.value;
+      query();
+    });
+    return h("label", {}, [http ? "Report " : "Protocol ", select]);
   }
 
   // ------------------------------------------------------------------ data
@@ -200,6 +255,7 @@
     const msg = event.data;
     if (msg.type === "init") {
       state.kind = msg.kind;
+      state.type = DEFAULT_TYPE[msg.kind] || state.type;
       state.filter = msg.filter || "";
       state.ai = !!msg.ai;
       title.textContent = msg.title;
@@ -211,6 +267,11 @@
       state.selected = null;
       state.sort = null;
       title.textContent = msg.table.title;
+      if (state.kind === "srt") {
+        // "auto" came back as the protocol it picked, with the ones that have traffic.
+        state.type = msg.table.type || state.type;
+        buildToolbar();
+      }
       render();
     } else if (msg.type === "error" && msg.id === state.pending) {
       state.pending = null;
@@ -224,8 +285,8 @@
 
   function sortedRows() {
     const rows = state.table ? state.table.rows : [];
-    // The protocol hierarchy is a tree: keep its order.
-    if (!state.sort || state.kind === "phs") {
+    // Trees keep their order.
+    if (!state.sort || TREES.includes(state.kind)) {
       return rows;
     }
     return lib.sortRows(rows, state.sort.col, state.sort.desc);
@@ -259,7 +320,7 @@
       const th = h("th", { class: col.numeric ? "num" : "", scope: "col" }, [
         col.label + indicator,
       ]);
-      if (state.kind !== "phs" && state.kind !== "properties") {
+      if (!TREES.includes(state.kind) && state.kind !== "properties") {
         th.setAttribute(
           "aria-sort",
           state.sort && state.sort.col === i

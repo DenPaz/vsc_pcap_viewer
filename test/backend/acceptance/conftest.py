@@ -897,6 +897,55 @@ def property_is(world: World, key: str, value: str) -> None:
     assert rows.get(key) == value, rows
 
 
+def _stats_row(world: World, topic: str, parent: str | None) -> dict[str, Any]:
+    """The row whose first cell is ``topic`` (and whose nearest ancestor row,
+    by depth, is ``parent`` when given)."""
+    rows = _table(world)["rows"]
+    for i, row in enumerate(rows):
+        if row["cells"][0] != topic:
+            continue
+        if parent is None:
+            return row
+        depth = row.get("depth", 0)
+        up = next((r for r in reversed(rows[:i]) if r.get("depth", 0) < depth), None)
+        if up is not None and up["cells"][0] == parent:
+            return row
+    raise AssertionError(f"no row {topic!r} below {parent!r}")
+
+
+@then(
+    parsers.re(
+        r'the statistics row "(?P<topic>[^"]+)"(?: below "(?P<parent>[^"]+)")? '
+        r'has "(?P<label>[^"]+)" (?P<value>\d+)$'
+    )
+)
+def stats_named_row_has(
+    world: World, topic: str, parent: str | None, label: str, value: str
+) -> None:
+    assert _stats_cell(world, _stats_row(world, topic, parent), label) == int(value)
+
+
+@then(
+    parsers.re(
+        r'the filter of the statistics row "(?P<topic>[^"]+)"(?: below "(?P<parent>[^"]+)")? '
+        r"matches (?P<count>\d+) packets?$"
+    )
+)
+def stats_row_filter_matches(world: World, topic: str, parent: str | None, count: str) -> None:
+    row = _stats_row(world, topic, parent)
+    assert row.get("filter"), row
+    found = world.service.count_matches({"filter": row["filter"]}, RequestContext())
+    assert found["count"] == int(count), (row["filter"], found)
+
+
+@then(
+    parsers.re(r'the service response time is for "(?P<protocol>\w+)", out of (?P<available>.+)$')
+)
+def srt_protocol(world: World, protocol: str, available: str) -> None:
+    table = _table(world)
+    assert (table["type"], table["available"]) == (protocol, items(available))
+
+
 # ---------------------------------------------------------------------- dissector check / Decode As
 
 

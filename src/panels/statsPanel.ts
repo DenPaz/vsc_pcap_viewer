@@ -5,7 +5,17 @@ import { ANOMALY_LIMITS, ExpertRow } from "../aiAnomaly";
 import type { PcapEditorSession } from "../pcapEditor";
 import { panelHtml, webviewRoot } from "./panelHtml";
 
-export type StatsKind = "conversations" | "endpoints" | "phs" | "io" | "expert" | "properties";
+export type StatsKind =
+  | "conversations"
+  | "endpoints"
+  | "phs"
+  | "io"
+  | "expert"
+  | "properties"
+  | "http"
+  | "dns"
+  | "plen"
+  | "srt";
 
 export const STATS_TITLES: Record<StatsKind, string> = {
   conversations: "Conversations",
@@ -14,6 +24,10 @@ export const STATS_TITLES: Record<StatsKind, string> = {
   io: "I/O Graph",
   expert: "Expert Information",
   properties: "Capture File Properties",
+  http: "HTTP",
+  dns: "DNS",
+  plen: "Packet Lengths",
+  srt: "Service Response Time",
 };
 
 /** Expert rows as the panel sent them, checked (the webview is ours, but its data came from the capture). */

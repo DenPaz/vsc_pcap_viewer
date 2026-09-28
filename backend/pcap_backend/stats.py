@@ -12,8 +12,11 @@ captured output; the tshark invocations live in ``pcap_service``.
 """
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
+
+from .navigation import dfilter_string
 
 # ---------------------------------------------------------------------- tables
 
@@ -381,6 +384,345 @@ def parse_expert(summary_text: str, fields_text: str, max_frames: int = 1000) ->
             row["frames"] = hits
         table.rows.append(row)
     table.rows.sort(key=lambda r: _SEVERITY_ORDER.get(r["cells"][0], 3))
+    return table
+
+
+# ---------------------------------------------------------------------- stats trees
+
+# Taps printed by tshark's generic stats_tree code (a "Topic / Item" table).
+TREE_TAPS = {
+    "http": "http,tree",
+    "http_requests": "http_req,tree",
+    "http_load": "http_srv,tree",
+    "dns": "dns,tree",
+    "plen": "plen,tree",
+}
+TREE_TITLES = {
+    "http": "HTTP Packet Counter",
+    "http_requests": "HTTP Requests",
+    "http_load": "HTTP Load Distribution",
+    "dns": "DNS",
+    "plen": "Packet Lengths",
+}
+_IPV4 = re.compile(r"\d{1,3}(\.\d{1,3}){3}")
+_HEADER_CELL = re.compile(r"\S+(?: \S+)*")
+_STATUS_CLASS = re.compile(r"^(?P<d>[1-5])xx: ")
+_STATUS_CODE = re.compile(r"^(?P<code>[1-5]\d\d) ")
+_METHOD = re.compile(r"^[A-Z][A-Z-]*$")
+_BUCKET = re.compile(r"^(?P<lo>\d+)-(?P<hi>\d+)$")
+_BUCKET_UP = re.compile(r"^(?P<lo>\d+) and greater$")
+# Labels tshark's DNS tree uses (packet-dns.c value strings) -> field values.
+_DNS_RCODES = {
+    "No error": 0,
+    "Format error": 1,
+    "Server failure": 2,
+    "No such name": 3,
+    "Not implemented": 4,
+    "Refused": 5,
+}
+_DNS_TYPES = {
+    "A": 1, "NS": 2, "CNAME": 5, "SOA": 6, "PTR": 12, "HINFO": 13, "MX": 15, "TXT": 16,
+    "AAAA": 28, "SRV": 33, "NAPTR": 35, "OPT": 41, "DS": 43, "RRSIG": 46, "NSEC": 47,
+    "DNSKEY": 48, "SVCB": 64, "HTTPS": 65, "ANY": 255, "CAA": 257,
+}  # fmt: skip
+_DNS_CLASSES = {"IN": 1, "CH": 3, "HS": 4}
+
+
+def _tree_value(text: str) -> int | float | None:
+    """A stats_tree cell: ``'8'``, ``'30.00'``, ``'87.50%'``; ``'-'`` or blank = none."""
+    text = text.strip().removesuffix("%")
+    if not text or text == "-":
+        return None
+    try:
+        f = float(text)
+    except ValueError:
+        return None
+    return int(f) if f == int(f) and "." not in text else f
+
+
+def _address_filter(addr: str) -> str | None:
+    if _IPV4.fullmatch(addr):
+        return f"ip.addr == {addr}"
+    if addr.count(":") > 1 and re.fullmatch(r"[0-9A-Fa-f:.]+", addr):
+        return f"ipv6.addr == {addr}"
+    return None
+
+
+def _http_filter(path: list[str]) -> str | None:
+    topic = path[-1]
+    if len(path) == 1:
+        return "http"
+    if len(path) == 2:
+        return {
+            "HTTP Response Packets": "http.response",
+            "HTTP Request Packets": "http.request",
+        }.get(topic)
+    if path[1] == "HTTP Response Packets":
+        if m := _STATUS_CLASS.match(topic):
+            d = int(m["d"])
+            return f"http.response.code >= {d}00 && http.response.code <= {d}99"
+        if m := _STATUS_CODE.match(topic):
+            return f"http.response.code == {m['code']}"
+    if path[1] == "HTTP Request Packets" and _METHOD.fullmatch(topic):
+        return f"http.request.method == {dfilter_string(topic)}"
+    return None
+
+
+def _http_requests_filter(path: list[str]) -> str | None:
+    if len(path) == 1:
+        return "http.request"
+    host = f"http.host == {dfilter_string(path[1])}"
+    if len(path) == 2:
+        return host
+    return f"{host} && http.request.uri == {dfilter_string(path[2])}"
+
+
+def _http_load_filter(path: list[str]) -> str | None:
+    """Rows nest addresses and hosts (either way round) under requests, and
+    OK/Error under the responses of each server address (tshark counts codes
+    of 400 and above as errors); a row filters on everything above it."""
+    requests = path[0] == "HTTP Requests by Server"
+    terms = ["http.request" if requests else "http.response"]
+    for topic in path[1:]:
+        if topic.startswith("HTTP Requests by "):
+            continue  # a grouping node
+        if addr := _address_filter(topic):
+            terms.append(addr)
+        elif requests:
+            terms.append(f"http.host == {dfilter_string(topic)}")
+        elif topic in ("OK", "Error"):
+            terms.append(f"http.response.code {'<' if topic == 'OK' else '>='} 400")
+        else:
+            return None
+    return " && ".join(terms)
+
+
+def _dns_filter(path: list[str]) -> str | None:
+    if len(path) == 1:
+        return "dns" if path[0] == "Total Packets" else None
+    if len(path) == 2:
+        return None
+    parent, topic = path[1], path[2]
+    if parent == "rcode" and topic in _DNS_RCODES:
+        return f"dns.flags.rcode == {_DNS_RCODES[topic]}"
+    if parent == "opcodes" and topic == "Standard query":
+        return "dns.flags.opcode == 0"
+    if parent == "Query/Response" and topic in ("Query", "Response"):
+        return f"dns.flags.response == {int(topic == 'Response')}"
+    if parent == "Query Type" and topic in _DNS_TYPES:
+        return f"dns.qry.type == {_DNS_TYPES[topic]}"
+    if parent == "Class" and topic in _DNS_CLASSES:
+        return f"dns.qry.class == {_DNS_CLASSES[topic]}"
+    return None
+
+
+def _plen_filter(path: list[str]) -> str | None:
+    topic = path[-1]
+    if m := _BUCKET.match(topic):
+        return f"frame.len >= {m['lo']} && frame.len <= {m['hi']}"
+    if m := _BUCKET_UP.match(topic):
+        return f"frame.len >= {m['lo']}"
+    return None
+
+
+_TREE_FILTERS: dict[str, Callable[[list[str]], str | None]] = {
+    "http": _http_filter,
+    "http_requests": _http_requests_filter,
+    "http_load": _http_load_filter,
+    "dns": _dns_filter,
+    "plen": _plen_filter,
+}
+
+
+def parse_stats_tree(text: str, kind: str) -> Table:
+    """tshark's generic stats_tree report (``-z http,tree``, ``dns,tree``, ``plen,tree``…).
+
+    Fixed-width columns under a ``Topic / Item`` header; one space of
+    indentation per tree level. The header's column positions cut each row
+    (topics may hold spaces, and empty cells are blank). Columns that are empty
+    in every row (Average/Min/Max of plain counters) are dropped. Rows whose
+    topic maps onto a display filter (a status code, a host, a length bucket…)
+    carry it.
+    """
+    lines = _lines(text)
+    header = next((i for i, line in enumerate(lines) if line.startswith("Topic / Item")), None)
+    table = Table(kind, TREE_TITLES.get(kind, kind), [])
+    if header is None:
+        return table
+    spans = [(m.start(), m.group()) for m in _HEADER_CELL.finditer(lines[header])]
+    starts = [start for start, _ in spans]
+    labels = [label for _, label in spans]
+    to_filter = _TREE_FILTERS.get(kind)
+    path: list[str] = []
+    parsed: list[tuple[int, list[Any], str | None]] = []
+    for line in lines[header + 1 :]:
+        if not line.strip() or set(line.strip()) <= {"-", "="}:
+            continue
+        name_part = line[: starts[1]] if len(starts) > 1 else line
+        topic = name_part.strip()
+        depth = len(name_part) - len(name_part.lstrip(" "))
+        del path[depth:]
+        path.append(topic)
+        cells: list[Any] = [topic]
+        for i in range(1, len(starts)):
+            end = starts[i + 1] if i + 1 < len(starts) else len(line)
+            cells.append(_tree_value(line[starts[i] : end]))
+        parsed.append((depth, cells, to_filter(list(path)) if to_filter else None))
+    keep = [0] + [i for i in range(1, len(labels)) if any(p[1][i] is not None for p in parsed)]
+    table.columns = [
+        _col(re.sub(r"\W+", "_", labels[i].lower()).strip("_"), labels[i], i > 0) for i in keep
+    ]
+    for depth, cells, flt in parsed:
+        row: dict[str, Any] = {"cells": [cells[i] for i in keep], "depth": depth}
+        if flt:
+            row["filter"] = flt
+        table.rows.append(row)
+    return table
+
+
+# ---------------------------------------------------------------------- service response time
+
+# Protocols with a generic ``-z <proto>,srt`` table that needs no arguments,
+# plus ICMP/ICMPv6 (their own report). DCE-RPC and ONC-RPC need a program or
+# interface, SCSI a command set: not offered.
+SRT_PROTOCOLS = {
+    "icmp": "ICMP",
+    "icmpv6": "ICMPv6",
+    "smb": "SMB",
+    "smb2": "SMB2",
+    "ldap": "LDAP",
+    "snmp": "SNMP",
+    "diameter": "Diameter",
+    "gtp": "GTP",
+    "gtpv2": "GTPv2",
+    "ncp": "NCP",
+    "afp": "AFP",
+    "camel": "CAMEL",
+    "fc": "Fibre Channel",
+}
+# Protocol hierarchy names that mean a protocol has traffic to report on.
+SRT_PHS_NAMES = {"fc": ("fc", "fcp", "fcels"), "gtpv2": ("gtpv2",), "gtp": ("gtp", "gtpprime")}
+
+_SRT_HEADER = re.compile(r"^Index\s+(?P<proc>.+?)\s+Calls\s+Min SRT")
+_SRT_ROW = re.compile(
+    r"^\s*(?P<index>\d+)\s+(?P<name>.+?)\s+(?P<calls>\d+)\s+(?P<min>[\d.]+)\s+"
+    r"(?P<max>[\d.]+)\s+(?P<avg>[\d.]+)\s+(?P<sum>[\d.]+)\s*$"
+)
+_ICMP_COUNTS = re.compile(r"^(?P<req>\d+)\s+(?P<rep>\d+)\s+(?P<lost>\d+)\s+(?P<loss>[\d.]+)%\s*$")
+_ICMP_TIMES = re.compile(
+    r"^(?P<min>[\d.]+)\s+(?P<max>[\d.]+)\s+(?P<mean>[\d.]+)\s+(?P<median>[\d.]+)\s+"
+    r"(?P<sd>[\d.]+)\s+(?P<minf>\d+)?\s*(?P<maxf>\d+)?\s*$"
+)
+_FILTER_FIELD = re.compile(r"^[a-z][a-z0-9_.]*$")
+
+
+def parse_srt(text: str, protocol: str) -> Table:
+    """``tshark -z <proto>,srt``: one or more tables of procedures.
+
+    Each row is ``Index  Procedure  Calls  Min SRT  Max SRT  Avg SRT  Sum SRT``
+    (seconds). With one table, the report's ``Filter:`` line names the field
+    the index is a value of (``snmp.data``, ``smb2.cmd``…), so rows filter on
+    it. With several (SMB: commands, Transaction2, NT Transaction), a Table
+    column names each row's table and rows get no filter.
+    """
+    label = SRT_PROTOCOLS.get(protocol, protocol)
+    cols = [
+        _col("procedure", "Procedure"),
+        _col("index", "Index", True),
+        _col("calls", "Calls", True),
+        _col("min", "Min SRT (s)", True),
+        _col("max", "Max SRT (s)", True),
+        _col("avg", "Avg SRT (s)", True),
+        _col("sum", "Sum SRT (s)", True),
+    ]
+    field_name = ""
+    tables: list[tuple[str, list[list[Any]]]] = []
+    previous = ""
+    for line in _lines(text):
+        stripped = line.strip()
+        if stripped.startswith("Filter:"):
+            field_name = stripped.removeprefix("Filter:").strip()
+        elif m := _SRT_HEADER.match(stripped):
+            name = previous if previous and not previous.startswith(("Filter:", "=")) else ""
+            tables.append((name or m["proc"], []))
+        elif (m := _SRT_ROW.match(line)) and tables:
+            tables[-1][1].append(
+                [
+                    m["name"],
+                    int(m["index"]),
+                    int(m["calls"]),
+                    _number(m["min"]),
+                    _number(m["max"]),
+                    _number(m["avg"]),
+                    _number(m["sum"]),
+                ]
+            )
+        if stripped:
+            previous = stripped
+    several = len(tables) > 1
+    table = Table(
+        "srt",
+        f"{label} Service Response Time",
+        ([_col("table", "Table")] if several else []) + cols,
+    )
+    table.extra["protocol"] = protocol
+    for name, rows in tables:
+        for cells in rows:
+            row: dict[str, Any] = {"cells": ([name] if several else []) + cells}
+            if not several and _FILTER_FIELD.fullmatch(field_name):
+                row["filter"] = f"{field_name} == {cells[1]}"
+            table.rows.append(row)
+    return table
+
+
+def parse_icmp_srt(text: str, protocol: str) -> Table:
+    """``tshark -z icmp,srt`` / ``icmpv6,srt``: counts and times (ms) of echo
+    requests and replies, one row; it goes to the slowest reply's frame."""
+    label = SRT_PROTOCOLS.get(protocol, protocol)
+    table = Table(
+        "srt",
+        f"{label} Service Response Time",
+        [
+            _col("requests", "Requests", True),
+            _col("replies", "Replies", True),
+            _col("lost", "Lost", True),
+            _col("loss", "% Loss", True),
+            _col("min", "Min (ms)", True),
+            _col("max", "Max (ms)", True),
+            _col("mean", "Mean (ms)", True),
+            _col("median", "Median (ms)", True),
+            _col("sd", "Std Dev (ms)", True),
+            _col("min_frame", "Min Frame", True),
+            _col("max_frame", "Max Frame", True),
+        ],
+        extra={"protocol": protocol},
+    )
+    counts: list[Any] | None = None
+    times: list[Any] = [None] * 7
+    for line in _lines(text):
+        stripped = line.strip()
+        if m := _ICMP_COUNTS.match(stripped):
+            counts = [int(m["req"]), int(m["rep"]), int(m["lost"]), _number(m["loss"])]
+        elif counts is not None and (m := _ICMP_TIMES.match(stripped)):
+            times = [
+                _number(m["min"]),
+                _number(m["max"]),
+                _number(m["mean"]),
+                _number(m["median"]),
+                _number(m["sd"]),
+                int(m["minf"]) if m["minf"] else None,
+                int(m["maxf"]) if m["maxf"] else None,
+            ]
+    if counts is not None:
+        row: dict[str, Any] = {"cells": counts + times}
+        if times[6]:
+            row["frame"] = times[6]
+        row["filter"] = (
+            "icmp.type == 8 || icmp.type == 0"
+            if protocol == "icmp"
+            else ("icmpv6.type == 128 || icmpv6.type == 129")
+        )
+        table.rows.append(row)
     return table
 
 
