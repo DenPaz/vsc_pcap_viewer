@@ -1624,7 +1624,10 @@ maybe("webview end-to-end (Chromium + real backend)", function () {
       await page.click("#list-header > div[data-id='length']"); // back to capture order
     } finally {
       stop();
-      fs.rmSync(big, { force: true });
+      // Windows can't delete a file that is open: close the capture first (closing
+      // cancels its passes and waits for them), then retry while a last tshark exits.
+      await client.request("close", {}).catch(() => undefined);
+      fs.rmSync(big, { force: true, maxRetries: 20, retryDelay: 250 });
     }
     // Back to the small capture for the other tests.
     const info = await client.request(
