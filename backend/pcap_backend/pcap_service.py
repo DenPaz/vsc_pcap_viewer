@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import coloring, comments, editing, hexdump, navigation, objects, pdml, stats, voip
+from . import coloring, comments, editing, hexdump, navigation, objects, pdml, procs, stats, voip
 from .cache import FrameIndex, LruCache, RowStore, sort_frames, sort_frames_by_key
 from .cancellation import CancelledError, CancelToken
 from .capture import (
@@ -470,6 +470,9 @@ class PcapService:
         self._rtp_streams: LruCache[tuple[voip.StreamKey, bool], dict[str, Any]] = LruCache(8)
         self._quick_seq = itertools.count()
         self._catalog_warming = threading.Event()
+        # Background work nobody asked for (the catalogue warm-up): stopped by shutdown.
+        self._background = CancelToken()
+        self._warm_future: Future[None] | None = None
         self._field_index: LruCache[tuple[str, ...], FieldCatalog] = LruCache(2)
         self._decode_as: LruCache[str, list[dict[str, str]]] = LruCache(32)
         # Coloring: rule index + 1 per frame (0 = no rule), from the latest set_coloring.
@@ -509,6 +512,10 @@ class PcapService:
 
     def shutdown(self) -> None:
         self.close()
+        # Its tshark must not outlive the service (a test's process count).
+        self._background.cancel()
+        if self._warm_future is not None:
+            wait([self._warm_future], timeout=procs.STOP_TIMEOUT)
         EMPTY_CAPTURE.remove()
         self._pool.shutdown(wait=False, cancel_futures=True)
 
@@ -2205,7 +2212,7 @@ class PcapService:
         if catalog is None:
             if not self._catalog_warming.is_set():
                 self._catalog_warming.set()
-                self._pool.submit(self._warm_catalog)
+                self._warm_future = self._pool.submit(self._warm_catalog)
             return lambda name: bool(_FRAMENUM_HINT.search(name))
 
         def check(name: str) -> bool:
@@ -2216,7 +2223,9 @@ class PcapService:
 
     def _warm_catalog(self) -> None:
         try:
-            self._catalog(RequestContext())
+            self._catalog(RequestContext(token=self._background))
+        except CancelledError:
+            pass  # shutdown
         except (RpcError, ToolError, OSError) as exc:  # a real request reports it
             print(f"pcap-viewer: field catalogue not loaded: {exc}", file=sys.stderr)  # noqa: T201
         finally:
