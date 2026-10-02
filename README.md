@@ -228,9 +228,10 @@ configure:
 1. Get the plugin built for your Wireshark's version: Wireshark 4.6.x (see
    `tshark --version`) only loads plugins built for 4.6.
 2. Run _PCAP: Show TShark Plugins_ and choose _Open Personal Plugin Folder_
-   (`~/.local/lib/wireshark/plugins/4.6/epan` on Linux and macOS,
-   `%APPDATA%\Wireshark\plugins\4.6\epan` on Windows; it is created if
-   missing). Copy the plugin there.
+   (`~/.local/lib/wireshark/plugins/4.6/epan` on Linux,
+   `~/.local/lib/wireshark/plugins/4-6/epan` on macOS, where Wireshark writes
+   the version with a dash, `%APPDATA%\Wireshark\plugins\4.6\epan` on
+   Windows; it is created if missing). Copy the plugin there.
 3. Reopen the capture or run _PCAP: Reload Capture_. _PCAP: Show TShark
    Plugins_ now lists it under _Your plugins_; its fields work in filters,
    columns and autocomplete, and saved indexes are rebuilt with it.

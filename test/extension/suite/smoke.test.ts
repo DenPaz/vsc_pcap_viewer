@@ -576,10 +576,11 @@ suite("PCAP Viewer smoke test", () => {
       assert.ok(p.name && p.type, JSON.stringify(p));
     }
     assert.ok(result.folders.globalPlugins, "tshark names its global plugin folder");
-    // Where a dissector plugin goes: <personal plugins>/<major.minor>/epan.
+    // Where a dissector plugin goes: <personal plugins>/<major.minor>/epan, the
+    // version as 4.6, or 4-6 on macOS (code signing takes dotted folders for bundles).
     assert.ok(result.install, "tshark names a personal plugin folder");
     assert.equal(path.basename(result.install), "epan");
-    assert.match(path.basename(path.dirname(result.install)), /^\d+\.\d+$/);
+    assert.match(path.basename(path.dirname(result.install)), /^\d+[.-]\d+$/);
   });
 
   test("file types: capture files open in the viewer, generic extensions only on request", async () => {

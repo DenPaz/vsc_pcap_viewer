@@ -3,7 +3,8 @@ for "Show TShark Plugins": which plugins tshark loads and where a new one goes.
 
 Binary dissector plugins (``.so``/``.dll``, built for one Wireshark
 major.minor) are loaded from ``<Personal Plugins>/epan``, which ``-G folders``
-names with the version already in it (``~/.local/lib/wireshark/plugins/4.6``).
+names with the version already in it (``~/.local/lib/wireshark/plugins/4.6``;
+``4-6`` on macOS, where Wireshark avoids dots in plugin folder names).
 """
 
 from pathlib import Path
