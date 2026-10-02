@@ -133,6 +133,7 @@ suite("PCAP Viewer smoke test", () => {
       "pcapViewer.exportDissections",
       "pcapViewer.mergeCaptures",
       "pcapViewer.exportObjects",
+      "pcapViewer.showPlugins",
       "pcapViewer.nameResolution",
       "pcapViewer.editPacketComment",
       "pcapViewer.deletePacketComment",
@@ -533,7 +534,6 @@ suite("PCAP Viewer smoke test", () => {
     const open = (name: string) =>
       vscode.commands.executeCommand<boolean>(
         "pcapViewer.openFile",
-        "pcapViewer.showPlugins",
         vscode.Uri.file(path.join(dir, name)),
       );
     try {
