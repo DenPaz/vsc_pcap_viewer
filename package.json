@@ -323,6 +323,11 @@
         "category": "PCAP"
       },
       {
+        "command": "pcapViewer.showPlugins",
+        "title": "Show TShark Plugins",
+        "category": "PCAP"
+      },
+      {
         "command": "pcapViewer.followStream",
         "title": "Follow Stream…",
         "category": "PCAP"

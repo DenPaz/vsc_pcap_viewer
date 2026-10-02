@@ -76,7 +76,7 @@ wireshark`, `C:\Program Files\Wireshark` added to PATH): lint, backend and
   JSON-RPC client (no `vscode` import: unit-testable). `src/settingsModel.ts`
   pure settings helpers. `src/commands/` command implementations
   (`export.ts`, `coloring.ts`, `dissectors.ts`, `tls.ts`, `merge.ts`,
-  `filterButtons.ts`, `importHexDump.ts`, `openFile.ts`, …).
+  `filterButtons.ts`, `importHexDump.ts`, `openFile.ts`, `plugins.ts`, …).
   `src/luaChoice.ts` per-capture Lua choices. `src/hexDump.ts` guesses a hex
   dump's layout (pure).
   `src/rotation.ts` recognises rotated capture pieces (pure).
@@ -93,6 +93,7 @@ wireshark`, `C:\Program Files\Wireshark` added to PATH): lint, backend and
   walkthrough's commands and context keys. `src/remote.ts` remote-window
   helpers (pure); `src/commands/reveal.ts` shows saved files.
   `src/commandMenu.ts` the viewer's ☰ command list from package.json (pure).
+  `src/plugins.ts` the TShark plugins picker's rows (pure).
 - `src/webview/` plain JS/CSS/HTML (no build step). `lib.js` = pure helpers
   shared with Node tests; `main.js` = UI. Type-checked via JSDoc +
   `tsconfig.webview.json`.
@@ -113,7 +114,8 @@ wireshark`, `C:\Program Files\Wireshark` added to PATH): lint, backend and
   comments, editcap options, packet counts), `capture.py` (live capture:
   dumpcap interfaces, filters, the pcapng tee), `editing.py` (editcap options
   of capture editing), `hexdump.py` (text2pcap options of Import from Hex
-  Dump), `ber.py` (counting back-to-back BER records), `voip.py` (RTP
+  Dump), `ber.py` (counting back-to-back BER records), `plugins.py` (`tshark -G
+plugins` and the plugin folders), `voip.py` (RTP
   stream report, SIP calls, RTP stream
   analysis, G.711 decoding and WAV), `protocol.py` (error codes,
   request context), `cancellation.py`, `index_cache.py` (saved indexes),
@@ -560,6 +562,22 @@ matchCount, fraction}`; the end sends `done`, `stopped` (`stop_filter
   several BER values back to back (definite lengths, high tag numbers,
   trailing 0x00/0xFF block padding; up to MAX_RECORDS) so the message says
   so (`berRecords`). Splitting such files into packets isn't done yet.
+- **TShark plugins** (`tshark_plugins`, `plugins.py`, `commands/plugins.ts`,
+  `pcapViewer.showPlugins`): Wireshark plugins (C dissectors as `.so`/`.dll`
+  built for one major.minor, Lua scripts in the plugin folders) need no
+  support from the viewer: tshark loads them from the personal folder, `-G
+fields` brings their fields to autocomplete, and the saved-index key
+  fingerprints the plugin folders. The command only shows them: `tshark -G
+plugins` (never cached, so a plugin just installed shows up) through
+  `withBackend`, `personal` = inside `-G folders`' Personal (Lua) Plugins
+  folder, listed first, `install` = `<Personal Plugins>/epan`. As root
+  Wireshark ignores personal plugins and `WIRESHARK_PLUGIN_DIR`
+  (`started_with_special_privs` counts uid 0), so the result carries a
+  warning; `test_plugins.py` installs a personal Lua script under a temporary
+  HOME/APPDATA (skipped as root). The QuickPick (`pluginRows`): open the
+  install folder (created if missing, `revealFile`) or copy its path, then
+  your plugins and Wireshark's; picking one reveals its file. `{quiet: true}`
+  returns the result (smoke test). README: _Wireshark plugins_.
 - **Decode As choices** come from tshark itself: an invalid `-d` rule makes it
   print "Valid layer types are:" or "Valid protocols for layer type X are:"
   lists (parsed by `parse_decode_as_choices`, cached). An unknown layer gets
@@ -1151,3 +1169,4 @@ with a progress bar, VoIP analysis (SIP calls, RTP streams, audio), the ☰
 commands menu, HTTP/DNS/packet length/service response time statistics,
 filter buttons, and Import from Hex Dump. Then foldable ☰ menu groups,
 per-capture Lua dissectors, and Open File in PCAP Viewer for files of any name.
+Then Show TShark Plugins and README instructions for Wireshark plugins.

@@ -44,6 +44,7 @@ from . import (
     navigation,
     objects,
     pdml,
+    plugins,
     procs,
     stats,
     voip,
@@ -3042,6 +3043,24 @@ class PcapService:
             "message": f"{path.name} isn't a capture file in a format tshark can read",
         }
 
+    # ------------------------------------------------------------------ plugins
+
+    def tshark_plugins(self, _params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
+        """The plugins tshark loads (``tshark -G plugins``, never cached: the
+        point is to see one just installed) and its plugin folders
+        (plugins.describe): ``{plugins: [{name, version, type, path,
+        personal}], folders, install, warnings, version}``. Needs no open
+        capture."""
+        tshark = self._require_tshark()
+        res = run([str(tshark.path), "-G", "plugins"], ctx.token)
+        if res.returncode != 0:
+            raise tshark.error(res.stderr.strip(), res.returncode, "tshark -G plugins failed")
+        as_root = hasattr(os, "geteuid") and os.geteuid() == 0
+        out = plugins.describe(
+            res.stdout.decode("utf-8", "replace"), tshark.folders(ctx.token), as_root
+        )
+        return {**out, "version": tshark.version()}
+
     # ------------------------------------------------------------------ editing
 
     def edit_capture(self, params: dict[str, Any], ctx: RequestContext) -> dict[str, Any]:
@@ -4056,6 +4075,7 @@ def rpc_methods(service: PcapService) -> dict[str, Callable[[dict[str, Any], Req
         "merge": service.merge,
         "import_hexdump": service.import_hexdump,
         "probe_file": service.probe_file,
+        "tshark_plugins": service.tshark_plugins,
         "edit_capture": service.edit_capture,
         "flow_graph": service.flow_graph,
         "tcp_graph": service.tcp_graph,

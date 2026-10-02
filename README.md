@@ -144,6 +144,8 @@ and never overwrite the open capture.
   remembered per file. A Lua dissector registered on `wtap_encap` 90 decodes
   whole BER files: `DissectorTable.get("wtap_encap"):add(90, proto)`.
 - **Decode As** rules and tshark **preference overrides**, per workspace folder.
+- **Wireshark plugins** (dissectors in C): installed once for tshark, used by
+  the viewer too; see [Wireshark plugins](#wireshark-plugins).
 
 ### AI help (optional)
 
@@ -217,6 +219,28 @@ Capturing runs Wireshark's `dumpcap`, which needs permission:
 Unsaved captures live in the extension's storage and are removed after 7 days
 if left behind.
 
+## Wireshark plugins
+
+Dissectors written in C can be built as Wireshark plugins (a `.so` file, `.dll`
+on Windows). tshark loads them, so the viewer does too, with nothing to
+configure:
+
+1. Get the plugin built for your Wireshark's version: Wireshark 4.6.x (see
+   `tshark --version`) only loads plugins built for 4.6.
+2. Run _PCAP: Show TShark Plugins_ and choose _Open Personal Plugin Folder_
+   (`~/.local/lib/wireshark/plugins/4.6/epan` on Linux and macOS,
+   `%APPDATA%\Wireshark\plugins\4.6\epan` on Windows; it is created if
+   missing). Copy the plugin there.
+3. Reopen the capture or run _PCAP: Reload Capture_. _PCAP: Show TShark
+   Plugins_ now lists it under _Your plugins_; its fields work in filters,
+   columns and autocomplete, and saved indexes are rebuilt with it.
+
+A plugin's port preferences go into `pcapViewer.prefs`, and _PCAP: Decode As…_
+moves its dissectors to other ports. Wireshark ignores personal plugins when it
+runs as root. In a remote window, install the plugin on the remote machine,
+where tshark runs. Lua dissectors need none of this (see
+[Dissection](#dissection)).
+
 ## Remote windows
 
 In a remote window (WSL, SSH, Dev Containers, Codespaces) the extension, Python,
@@ -248,6 +272,7 @@ only, so an untrusted repository can't run its own programs.
 | "You don't have permission to read the file" (yours)            | Ubuntu's AppArmor profile for tshark allows only `/tmp`. Add `owner @{HOME}/** rw,` to `/etc/apparmor.d/local/tshark`, then `sudo apparmor_parser -r /etc/apparmor.d/tshark`. Snap tshark: use the distribution's package. |
 | Stopping a filter is slow; the log says "could not stop tshark" | The same profile blocks signals. Add `signal (receive) peer=unconfined,` and `signal (receive) peer=vscode,` to the same file and reload it.                                                                               |
 | A Lua dissector isn't applied                                   | Check _PCAP: Show Log_. tshark disables Lua as root. _PCAP: Reload Dissectors_ after editing.                                                                                                                              |
+| A Wireshark plugin's protocols are missing                      | _PCAP: Show TShark Plugins_: a plugin that isn't listed was built for another Wireshark version or is in the wrong folder (_Open Personal Plugin Folder_). Not as root.                                                    |
 | TLS stays encrypted                                             | The key log must contain the capture's sessions: set `SSLKEYLOGFILE` before capturing and don't clear the file.                                                                                                            |
 | Opening a huge file is slow                                     | That is tshark's speed. `"pcapViewer.prefs": { "tcp.analyze_sequence_numbers": false }` makes it cheaper.                                                                                                                  |
 | The first capture after installing Wireshark takes long to open | macOS checks Wireshark.app the first time tshark runs, which can take a minute; later opens are fast. _PCAP: Show Log_ shows how long each step took.                                                                      |

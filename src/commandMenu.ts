@@ -104,6 +104,7 @@ const GROUP_OF: Readonly<Record<string, CommandGroup>> = {
   "pcapViewer.decodeAs": "Dissectors",
   "pcapViewer.manageDecodeAs": "Dissectors",
   "pcapViewer.setTlsKeyLogFile": "Dissectors",
+  "pcapViewer.showPlugins": "Dissectors",
   "pcapViewer.suggestFilter": "AI",
   "pcapViewer.askAboutPackets": "AI",
   "pcapViewer.summarizeCapture": "AI",

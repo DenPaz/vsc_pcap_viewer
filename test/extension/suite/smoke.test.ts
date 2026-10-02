@@ -15,6 +15,7 @@ import { ObjectsPanel } from "../../../src/panels/objectsPanel";
 import { StatsPanel } from "../../../src/panels/statsPanel";
 import { TcpGraphPanel } from "../../../src/panels/tcpGraphPanel";
 import { VoipPanel } from "../../../src/panels/voipPanel";
+import type { PluginsResult } from "../../../src/plugins";
 
 const FIXTURES = path.resolve(__dirname, "../../../../test/fixtures");
 
@@ -532,6 +533,7 @@ suite("PCAP Viewer smoke test", () => {
     const open = (name: string) =>
       vscode.commands.executeCommand<boolean>(
         "pcapViewer.openFile",
+        "pcapViewer.showPlugins",
         vscode.Uri.file(path.join(dir, name)),
       );
     try {
@@ -559,6 +561,25 @@ suite("PCAP Viewer smoke test", () => {
       await waitFor(() => (api.provider.allSessions.length ? undefined : true), 10_000);
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  test("Show TShark Plugins lists tshark's plugins and the personal plugin folder", async () => {
+    const ext = vscode.extensions.all.find((e) => e.packageJSON.name === "pcap-viewer");
+    await ext!.activate();
+    const result = await vscode.commands.executeCommand<PluginsResult | undefined>(
+      "pcapViewer.showPlugins",
+      { quiet: true },
+    );
+    assert.ok(result, "tshark answered");
+    assert.ok(Array.isArray(result.plugins));
+    for (const p of result.plugins) {
+      assert.ok(p.name && p.type, JSON.stringify(p));
+    }
+    assert.ok(result.folders.globalPlugins, "tshark names its global plugin folder");
+    // Where a dissector plugin goes: <personal plugins>/<major.minor>/epan.
+    assert.ok(result.install, "tshark names a personal plugin folder");
+    assert.equal(path.basename(result.install), "epan");
+    assert.match(path.basename(path.dirname(result.install)), /^\d+\.\d+$/);
   });
 
   test("file types: capture files open in the viewer, generic extensions only on request", async () => {
