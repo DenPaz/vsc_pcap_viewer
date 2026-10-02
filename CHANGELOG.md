@@ -6,6 +6,8 @@ versions are plain `major.minor.patch`.
 
 ## Unreleased
 
+## 0.3.0 — 2026-10-02
+
 ### Added
 
 - The ☰ menu's groups fold: it opens as a short list of headings with their
