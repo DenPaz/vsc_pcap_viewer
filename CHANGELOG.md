@@ -19,6 +19,9 @@ versions are plain `major.minor.patch`.
   back). [#34]
 - The log says why each capture (re)loads and how long starting tshark, the
   first rows and the whole index took. [#35]
+- _PCAP: Show TShark Plugins_ lists the Wireshark plugins tshark loads (yours
+  first) and opens the folder a new dissector plugin goes into; the README
+  explains how to install one. [#36]
 
 ### Fixed
 
@@ -29,6 +32,7 @@ versions are plain `major.minor.patch`.
 
 [#34]: https://github.com/DenPaz/vsc_pcap_viewer/pull/34
 [#35]: https://github.com/DenPaz/vsc_pcap_viewer/pull/35
+[#36]: https://github.com/DenPaz/vsc_pcap_viewer/pull/36
 
 ## 0.2.0 — 2026-09-28
 
